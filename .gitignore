@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+desktop.ini
+
+# Local app cache and logs
+cache/
+*.log
+*.err
+
+# Parser outputs and downloaded diagnostics
+output/
+exploration_results/
+exploration_results_guest/
+
+# Temporary/debug files
+debug_*.py
+sniff_*.py
+find_token.py
+*.tmp
+*.bak
