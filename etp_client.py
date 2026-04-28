@@ -296,6 +296,7 @@ class EtpClient:
         start: int = 0,
         limit: int = HARD_SERVER_LIMIT,
         date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
         query: Optional[str] = None,
         tag_id: Optional[int] = None,
         sort: str = "id",
@@ -319,6 +320,8 @@ class EtpClient:
         }
         if date_from:
             payload["date_published_from"] = date_from
+        if date_to:
+            payload["date_published_to"] = date_to
 
         try:
             res = self.driver.execute_async_script(
@@ -333,6 +336,7 @@ class EtpClient:
                         start=start,
                         limit=limit,
                         date_from=date_from,
+                        date_to=date_to,
                         query=query,
                         tag_id=tag_id,
                         sort=sort,
@@ -361,6 +365,7 @@ class EtpClient:
                     start=start,
                     limit=limit,
                     date_from=date_from,
+                    date_to=date_to,
                     query=query,
                     tag_id=tag_id,
                     sort=sort,
