@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etp_client import STEP_ID_LABELS, TREND_PUR_LABELS
+from etp_client import PROCEDURE_TYPE_LABELS, STATUS_LABELS
 
-from .keywords import load_keywords
+from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
@@ -251,15 +251,11 @@ class Sidebar(QWidget):
         self.sb_guarantee_max = self._make_money()
         self.ed_responsible = self._make_line()
         self.cb_trend = self._make_combo(
-            [(lbl, code) for code, lbl in TREND_PUR_LABELS.items()]
+            [(label, label) for label in PROCEDURE_TYPE_LABELS]
         )
         self.cb_step = self._make_combo()
-        added_labels: set[str] = set()
-        for code, lbl in STEP_ID_LABELS.items():
-            if lbl in added_labels:
-                continue
-            added_labels.add(lbl)
-            self.cb_step.addItem(lbl, code)
+        for label in STATUS_LABELS:
+            self.cb_step.addItem(label, label)
         self.cb_purchase_form = self._make_combo(
             [("Любая", ""), ("Электронная", "электрон"), ("Бумажная", "бумаж")]
         )
@@ -565,5 +561,6 @@ class Sidebar(QWidget):
         self.btn_search.setEnabled(enabled)
 
     def refresh_keywords_count(self) -> None:
-        count = len(load_keywords())
-        self.lbl_keywords_count.setText(f"Слов в списке: {count}")
+        items = load_keyword_items()
+        active = sum(1 for enabled, _ in items if enabled)
+        self.lbl_keywords_count.setText(f"Активных слов: {active}/{len(items)}")

@@ -4,8 +4,9 @@ from pathlib import Path
 
 APP_TITLE = "ЭТП ГПБ — поиск тендеров"
 CACHE_FILE = Path(__file__).resolve().parent.parent / "cache" / "desktop_search_cache.json"
+DOCUMENTS_DIR = Path(__file__).resolve().parent.parent / "output" / "documents"
 KEYWORDS_FILE = Path(__file__).resolve().parent.parent / "data" / "keywords.txt"
-VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/id/{pid}"
+VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 
 COLUMNS: list[tuple[str, str]] = [
     ("registry_number", "Реестровый №"),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from pathlib import Path
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
@@ -268,5 +269,65 @@ def make_search_task(
         if last_emitted_start != last_next_start:
             w.batch.emit([], last_next_start, total or 0)
         w.session.emit(True, "Готово.")
+
+    return _run
+
+
+def make_download_documents_task(
+    client: EtpClient,
+    procedures: list[dict],
+    output_dir: Path,
+) -> Callable[[Worker], None]:
+    """Задача: скачать документы по выбранным процедурам."""
+
+    def _run(w: Worker) -> None:
+        if not procedures:
+            w.error.emit("Не выбраны процедуры для скачивания документов.")
+            return
+
+        if not client.is_chrome_running():
+            w.progress.emit("Запускаю Chrome с DevTools…")
+            try:
+                client.ensure_chrome(timeout=45)
+            except Exception as e:
+                w.error.emit(f"Не удалось запустить Chrome: {e}")
+                return
+
+        if client.driver is None:
+            w.progress.emit("Подключаюсь к Chrome DevTools…")
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        results: list[dict] = []
+        for index, proc in enumerate(procedures, start=1):
+            if w.is_stop_requested():
+                return
+            registry = proc.get("registry_number") or proc.get("procedure_number") or proc.get("id")
+            w.progress.emit(f"Скачиваю документы {index}/{len(procedures)}: {registry}")
+            try:
+                result = client.download_procedure_documents(
+                    proc,
+                    output_dir,
+                    progress=w.progress.emit,
+                )
+                results.append(result)
+                w.progress.emit(
+                    f"{registry}: скачано {len(result.get('saved') or [])} "
+                    f"из {result.get('found') or 0} файлов"
+                )
+            except Exception as e:
+                results.append({"procedure": registry, "saved": [], "errors": [str(e)]})
+                w.progress.emit(f"{registry}: ошибка скачивания: {e}")
+
+        saved_count = sum(len(r.get("saved") or []) for r in results)
+        error_count = sum(len(r.get("errors") or []) for r in results)
+        w.session.emit(
+            True,
+            f"Скачивание завершено. Файлов: {saved_count}, ошибок: {error_count}. "
+            f"Папка: {output_dir}",
+        )
 
     return _run

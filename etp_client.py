@@ -10,18 +10,20 @@
 """
 from __future__ import annotations
 
+import base64
+import re
 import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
 DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
-HARD_SERVER_LIMIT = 25  # сколько фактически отдаёт сервер за один вызов
+HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт сервер за один вызов
 
 _INDEX_INDEX_JS = r"""
 const callback = arguments[arguments.length - 1];
@@ -99,6 +101,58 @@ const explicitToken = arguments[1] || '';
   } catch (e) {
     clearTimeout(to);
     callback({ error: String(e) });
+  }
+})();
+"""
+
+_COLLECT_DOCUMENT_LINKS_JS = r"""
+const callback = arguments[arguments.length - 1];
+(() => {
+  const exts = /\.(docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const links = [];
+  const seen = new Set();
+  function push(href, text) {
+    if (!href || seen.has(href)) return;
+    seen.add(href);
+    links.push({ href, text: (text || '').trim() });
+  }
+  for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+    const href = a.href;
+    const text = (a.innerText || a.textContent || '').trim();
+    if (exts.test(href) || exts.test(text) || /download|file|attach|document/i.test(href)) {
+      push(href, text);
+    }
+  }
+  callback(links);
+})();
+"""
+
+_DOWNLOAD_URL_JS = r"""
+const callback = arguments[arguments.length - 1];
+const url = arguments[0];
+(async () => {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 120000);
+  try {
+    const resp = await fetch(url, { credentials: 'include', signal: ctrl.signal });
+    clearTimeout(to);
+    if (!resp.ok) {
+      callback({ ok: false, status: resp.status, statusText: resp.statusText });
+      return;
+    }
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onloadend = () => callback({
+      ok: true,
+      dataUrl: reader.result,
+      contentType: blob.type || resp.headers.get('content-type') || '',
+      disposition: resp.headers.get('content-disposition') || '',
+    });
+    reader.onerror = () => callback({ ok: false, error: 'FileReader error' });
+    reader.readAsDataURL(blob);
+  } catch (e) {
+    clearTimeout(to);
+    callback({ ok: false, error: String(e) });
   }
 })();
 """
@@ -242,6 +296,89 @@ class EtpClient:
             return True
         return self._switch_to_etp_tab()
 
+    def _detail_url(self, proc_id: Any) -> str:
+        return f"https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{proc_id}"
+
+    def _safe_filename(self, name: str, default: str = "document") -> str:
+        clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
+        return clean[:180] or default
+
+    def _filename_from_link(self, link: dict[str, Any], index: int) -> str:
+        text = str(link.get("text") or "").strip()
+        href = str(link.get("href") or "")
+        for source in (text, href.rsplit("/", 1)[-1]):
+            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
+            if m:
+                return self._safe_filename(m.group(1), f"document_{index}")
+        return self._safe_filename(text or f"document_{index}", f"document_{index}")
+
+    def download_procedure_documents(
+        self,
+        proc: dict[str, Any],
+        output_root: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        """Открывает карточку процедуры в Chrome и скачивает найденные документы."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        proc_id = proc.get("id") or proc.get("procedure_id")
+        if not proc_id:
+            raise RuntimeError("У процедуры нет id для открытия подробной страницы.")
+
+        registry = str(proc.get("registry_number") or proc.get("procedure_number") or proc_id)
+        title = str(proc.get("title") or "")
+        folder_name = self._safe_filename(f"{registry}_{title[:80]}", str(proc_id))
+        out_dir = output_root / folder_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        url = self._detail_url(proc_id)
+        if progress:
+            progress(f"Открываю подробную страницу {registry}: {url}")
+        self.driver.get(url)
+        links: list[dict[str, Any]] = []
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            found = self.driver.execute_async_script(_COLLECT_DOCUMENT_LINKS_JS)
+            if isinstance(found, list) and found:
+                links = found
+                break
+            time.sleep(1)
+
+        saved: list[str] = []
+        errors: list[str] = []
+        for index, link in enumerate(links, start=1):
+            href = str((link or {}).get("href") or "")
+            if not href:
+                continue
+            name = self._filename_from_link(link, index)
+            target = out_dir / name
+            stem, suffix = target.stem, target.suffix
+            n = 2
+            while target.exists():
+                target = out_dir / f"{stem}_{n}{suffix}"
+                n += 1
+            if progress:
+                progress(f"Скачиваю {registry}: {name}")
+            res = self.driver.execute_async_script(_DOWNLOAD_URL_JS, href)
+            if not isinstance(res, dict) or not res.get("ok"):
+                errors.append(f"{name}: {res}")
+                continue
+            data_url = str(res.get("dataUrl") or "")
+            if "," not in data_url:
+                errors.append(f"{name}: пустой ответ")
+                continue
+            raw = base64.b64decode(data_url.split(",", 1)[1])
+            target.write_bytes(raw)
+            saved.append(str(target))
+
+        return {
+            "procedure": registry,
+            "url": url,
+            "folder": str(out_dir),
+            "found": len(links),
+            "saved": saved,
+            "errors": errors,
+        }
+
     def pull_token(self) -> str:
         """Достаёт CSRF-токен из SPA или Index.index."""
         if not self.driver:
@@ -384,24 +521,49 @@ class EtpClient:
             self.driver = None
 
 
+PROCEDURE_TYPE_LABELS = [
+    "Запрос предложений",
+    "Конкурентный отбор",
+    "Маркетинговые исследования",
+    "Обсуждение с участниками (первый этап)",
+    "Запрос цен",
+    "Конкурентный отбор с повышением стартовой цены",
+    "Анализ рынка и сбор ценовой информации",
+]
+
 TREND_PUR_LABELS = {
-    "001": "Открытый конкурс",
-    "002": "Открытый аукцион / редукцион",
+    "001": "Конкурентный отбор",
+    "002": "Конкурентный отбор",
     "003": "Запрос предложений",
-    "004": "Запрос котировок",
-    "005": "Закупка у единственного поставщика",
-    "006": "Иное",
+    "004": "Запрос цен",
+    "005": "Запрос цен",
+    "006": "Маркетинговые исследования",
 }
 
+STATUS_LABELS = [
+    "Активные",
+    "Прием заявок",
+    "Ожидает начала регистрации",
+    "Ожидает начала процедуры",
+    "Ожидает открытия доступа",
+    "Регистрация для участия",
+    "Повышение стартовой цены",
+    "Вскрытие заявок",
+    "Прием ценовой информации",
+    "Завершение процедуры",
+    "Рассмотрение заявок",
+    "Подведение итогов",
+]
+
 STEP_ID_LABELS = {
-    "registration": "Приём заявок",
-    "applic_access": "Открытие заявок",
-    "second_parts": "Рассмотрение вторых частей",
-    "second_parts_review": "Рассмотрение вторых частей",
-    "receiving_price_info": "Получение ценовой информации",
+    "registration": "Ожидает открытия доступа",
+    "applic_access": "Прием заявок",
+    "second_parts": "Рассмотрение заявок",
+    "second_parts_review": "Рассмотрение заявок",
+    "receiving_price_info": "Прием ценовой информации",
     "finalizing_procedure": "Завершение процедуры",
-    "auction": "Проведение аукциона",
-    "archive": "В архиве",
+    "auction": "Повышение стартовой цены",
+    "archive": "Архив",
 }
 
 

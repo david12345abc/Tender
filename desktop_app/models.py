@@ -73,8 +73,27 @@ class ProcedureTableModel(QAbstractTableModel):
 
     def _display(self, proc: dict[str, Any], key: str) -> Any:
         if key == "trend_pur_label":
+            for type_key in (
+                "trend_pur_name",
+                "trend_pur_label",
+                "procedure_type_name",
+                "type_name",
+                "procedure_type",
+            ):
+                if proc.get(type_key) and not str(proc[type_key]).isdigit():
+                    return str(proc[type_key])
             return trend_pur_label(proc.get("trend_pur"))
         if key == "step_label":
+            for status_key in (
+                "step_name",
+                "step_label",
+                "status_name",
+                "status_label",
+                "state_name",
+                "stage_name",
+            ):
+                if proc.get(status_key):
+                    return str(proc[status_key])
             return step_id_label(proc.get("step_id"))
         if key == "organizer":
             return proc.get("short_name") or proc.get("full_name") or ""
@@ -355,6 +374,22 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             return False
         f = self._flt
 
+        def selected_matches(
+            selected: str,
+            code_keys: tuple[str, ...],
+            text_keys: tuple[str, ...],
+        ) -> bool:
+            needle = selected.casefold()
+            for key in code_keys:
+                value = str(proc.get(key) or "")
+                if value and value.casefold() == needle:
+                    return True
+            for key in text_keys:
+                value = str(proc.get(key) or "")
+                if value and needle in value.casefold():
+                    return True
+            return needle in self._all_text({key: proc.get(key) for key in code_keys + text_keys})
+
         if f.quick_search:
             needle = f.quick_search.casefold()
             if needle not in self._all_text(proc):
@@ -444,9 +479,17 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ):
                 return False
 
-        if f.trend_pur and str(proc.get("trend_pur") or "") != f.trend_pur:
+        if f.trend_pur and not selected_matches(
+            f.trend_pur,
+            ("trend_pur", "procedure_type", "type"),
+            ("trend_pur_name", "trend_pur_label", "procedure_type_name", "type_name"),
+        ):
             return False
-        if f.step_id and str(proc.get("step_id") or "") != f.step_id:
+        if f.step_id and not selected_matches(
+            f.step_id,
+            ("step_id", "status", "stage"),
+            ("step_name", "step_label", "status_name", "status_label", "state_name", "stage_name"),
+        ) and f.step_id.casefold() != step_id_label(proc.get("step_id")).casefold():
             return False
         if f.purchase_form:
             if not self._contains(

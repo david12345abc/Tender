@@ -17,7 +17,10 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -26,20 +29,19 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStatusBar,
     QTableView,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from etp_client import EtpClient, step_id_label, trend_pur_label
 
-from .constants import APP_TITLE, CACHE_FILE, COLUMNS, VIEW_URL
-from .keywords import keywords_as_text, parse_keywords, save_keywords
+from .constants import APP_TITLE, CACHE_FILE, COLUMNS, DOCUMENTS_DIR, VIEW_URL
+from .keywords import load_keyword_items, parse_keywords, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
 from .utils import fmt_date, parse_dt, parse_price
-from .worker import TaskRunner, make_search_task
+from .worker import TaskRunner, make_download_documents_task, make_search_task
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -172,6 +174,12 @@ class MainWindow(QMainWindow):
         self.btn_load_all.setEnabled(False)
         bottom_layout.addWidget(self.btn_load_all)
 
+        self.btn_download_docs = QPushButton("Скачать документы")
+        self.btn_download_docs.setToolTip("Скачать документацию выбранных процедур")
+        self.btn_download_docs.clicked.connect(self._on_download_documents)
+        self.btn_download_docs.setEnabled(False)
+        bottom_layout.addWidget(self.btn_download_docs)
+
         self.btn_stop = QPushButton("Стоп")
         self.btn_stop.setObjectName("Danger")
         self.btn_stop.clicked.connect(self._on_stop)
@@ -260,15 +268,74 @@ class MainWindow(QMainWindow):
 
         layout = QVBoxLayout(dialog)
         hint = QLabel(
-            "Введите ключевые слова или фразы: по одному на строку. "
-            "Поиск найдёт процедуры, где встречается хотя бы одна строка из списка."
+            "Отметьте галочками ключевые слова, по которым нужно искать. "
+            "Поиск найдёт процедуры, где встречается хотя бы одно активное слово."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        editor = QTextEdit()
-        editor.setPlainText(keywords_as_text())
-        layout.addWidget(editor, 1)
+        keyword_list = QListWidget()
+        keyword_list.setAlternatingRowColors(True)
+        keyword_list.setSelectionMode(QListWidget.ExtendedSelection)
+        for enabled, keyword in load_keyword_items():
+            item = QListWidgetItem(keyword)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+                | Qt.ItemIsEditable
+                | Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+            )
+            item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
+            keyword_list.addItem(item)
+        layout.addWidget(keyword_list, 1)
+
+        actions = QHBoxLayout()
+        btn_all = QPushButton("Все")
+        btn_none = QPushButton("Снять все")
+        btn_add = QPushButton("Добавить")
+        btn_remove = QPushButton("Удалить выбранные")
+        actions.addWidget(btn_all)
+        actions.addWidget(btn_none)
+        actions.addStretch(1)
+        actions.addWidget(btn_add)
+        actions.addWidget(btn_remove)
+        layout.addLayout(actions)
+
+        def set_all(state: Qt.CheckState) -> None:
+            for i in range(keyword_list.count()):
+                keyword_list.item(i).setCheckState(state)
+
+        def add_keyword() -> None:
+            text, ok = QInputDialog.getText(
+                dialog,
+                "Добавить ключевое слово",
+                "Ключевое слово или фраза:",
+            )
+            if not ok:
+                return
+            parsed = parse_keywords(text)
+            if not parsed:
+                return
+            item = QListWidgetItem(parsed[0])
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+                | Qt.ItemIsEditable
+                | Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+            )
+            item.setCheckState(Qt.Checked)
+            keyword_list.addItem(item)
+
+        def remove_selected() -> None:
+            for item in keyword_list.selectedItems():
+                keyword_list.takeItem(keyword_list.row(item))
+
+        btn_all.clicked.connect(lambda: set_all(Qt.Checked))
+        btn_none.clicked.connect(lambda: set_all(Qt.Unchecked))
+        btn_add.clicked.connect(add_keyword)
+        btn_remove.clicked.connect(remove_selected)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
@@ -281,15 +348,22 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        keywords = parse_keywords(editor.toPlainText())
-        save_keywords(keywords)
-        self.model.set_keywords(tuple(keywords))
+        items: list[tuple[bool, str]] = []
+        for i in range(keyword_list.count()):
+            item = keyword_list.item(i)
+            parsed = parse_keywords(item.text())
+            if not parsed:
+                continue
+            items.append((item.checkState() == Qt.Checked, parsed[0]))
+        save_keyword_items(items)
+        active_keywords = tuple(keyword for enabled, keyword in items if enabled)
+        self.model.set_keywords(active_keywords)
         self.sidebar.refresh_keywords_count()
         self._on_filters_changed()
         QMessageBox.information(
             self,
             "Список сохранён",
-            f"Сохранено ключевых слов/фраз: {len(keywords)}.",
+            f"Активных ключевых слов/фраз: {len(active_keywords)} из {len(items)}.",
         )
 
     def _ask_cache_choice(self) -> str:
@@ -388,6 +462,60 @@ class MainWindow(QMainWindow):
             return
         self._start_task(self.sidebar.search_params(), start=self._current_start, batches=10_000)
 
+    def _selected_procedures(self) -> list[dict[str, Any]]:
+        rows = sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
+        if not rows and self.table.currentIndex().isValid():
+            rows = [self.table.currentIndex().row()]
+        selected: list[dict[str, Any]] = []
+        for row in rows:
+            src = self.proxy.mapToSource(self.proxy.index(row, 0))
+            proc = self.model.row_at(src.row())
+            if proc is not None:
+                selected.append(proc)
+        return selected
+
+    def _on_download_documents(self) -> None:
+        if self.runner.is_running():
+            return
+        procedures = self._selected_procedures()
+        if not procedures:
+            QMessageBox.information(
+                self,
+                "Ничего не выбрано",
+                "Выберите одну или несколько строк в таблице.",
+            )
+            return
+        DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        output_dir_str = QFileDialog.getExistingDirectory(
+            self,
+            "Выберите папку для загрузки документов",
+            str(DOCUMENTS_DIR),
+        )
+        if not output_dir_str:
+            return
+        output_dir = Path(output_dir_str)
+
+        self.progress.show()
+        self.btn_stop.setEnabled(True)
+        self.sidebar.set_controls_enabled(False)
+        self.btn_load_more.setEnabled(False)
+        self.btn_load_all.setEnabled(False)
+        self.btn_download_docs.setEnabled(False)
+        self._set_badge("idle", "● Скачиваю документы…")
+
+        fn = make_download_documents_task(self.client, procedures, output_dir)
+        try:
+            self.runner.start(
+                fn,
+                on_progress=self._on_progress,
+                on_session=self._on_documents_status,
+                on_error=self._on_error,
+                on_done=self._on_task_done,
+            )
+        except Exception as e:
+            self._on_error(f"Не удалось запустить скачивание: {e}")
+            self._on_task_done()
+
     def _search_batches(self, filters: ClientFilters) -> int:
         return 10_000 if filters.keyword_search_enabled else 1
 
@@ -397,6 +525,7 @@ class MainWindow(QMainWindow):
         self.sidebar.set_controls_enabled(False)
         self.btn_load_more.setEnabled(False)
         self.btn_load_all.setEnabled(False)
+        self.btn_download_docs.setEnabled(False)
         self._set_badge("idle", "● Работаю…")
 
         fn = make_search_task(
@@ -449,6 +578,12 @@ class MainWindow(QMainWindow):
             box.exec()
             if box.clickedButton() is btn_retry:
                 QTimer.singleShot(200, self._on_search)
+
+    @Slot(bool, str)
+    def _on_documents_status(self, ok: bool, message: str) -> None:
+        self._set_badge("true" if ok else "false", "● Документы скачаны" if ok else "⚠ Ошибка")
+        self.status_msg.setText(message)
+        QMessageBox.information(self, "Скачивание документов", message)
 
     @Slot(list, int, int)
     def _on_batch_loaded(self, procs: list, start: int, total: int) -> None:
@@ -647,6 +782,7 @@ class MainWindow(QMainWindow):
         has_more = total > 0 and self._current_start < total
         self.btn_load_more.setEnabled(not running and has_more)
         self.btn_load_all.setEnabled(not running and has_more)
+        self.btn_download_docs.setEnabled(not running and loaded > 0)
         self.btn_export.setEnabled(loaded > 0)
         self.sidebar.set_controls_enabled(not running)
 
