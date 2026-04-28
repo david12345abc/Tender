@@ -143,7 +143,7 @@ def make_search_task(
             return
 
         if not client.is_chrome_running():
-            w.progress.emit("Запускаю Chrome с DevTools…")
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
             try:
                 client.ensure_chrome(timeout=45)
             except Exception as e:
@@ -153,7 +153,7 @@ def make_search_task(
             return
 
         if client.driver is None:
-            w.progress.emit("Подключаюсь к Chrome DevTools…")
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
             try:
                 client.connect()
             except Exception as e:
@@ -204,6 +204,8 @@ def make_search_task(
                 sort=params.sort,
                 direction=params.direction,
             )
+            if w.is_stop_requested():
+                return
             if res.get("error"):
                 err_text = str(res["error"])
                 err_low = err_text.lower()
@@ -286,7 +288,7 @@ def make_download_documents_task(
             return
 
         if not client.is_chrome_running():
-            w.progress.emit("Запускаю Chrome с DevTools…")
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
             try:
                 client.ensure_chrome(timeout=45)
             except Exception as e:
@@ -294,7 +296,7 @@ def make_download_documents_task(
                 return
 
         if client.driver is None:
-            w.progress.emit("Подключаюсь к Chrome DevTools…")
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
             try:
                 client.connect()
             except Exception as e:
@@ -313,6 +315,8 @@ def make_download_documents_task(
                     output_dir,
                     progress=w.progress.emit,
                 )
+                if w.is_stop_requested():
+                    return
                 results.append(result)
                 w.progress.emit(
                     f"{registry}: скачано {len(result.get('saved') or [])} "

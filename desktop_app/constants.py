@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 APP_TITLE = "ЭТП ГПБ — поиск тендеров"
-CACHE_FILE = Path(__file__).resolve().parent.parent / "cache" / "desktop_search_cache.json"
-DOCUMENTS_DIR = Path(__file__).resolve().parent.parent / "output" / "documents"
-KEYWORDS_FILE = Path(__file__).resolve().parent.parent / "data" / "keywords.txt"
+
+if getattr(sys, "frozen", False):
+    APP_ROOT = Path(sys.executable).resolve().parent
+else:
+    APP_ROOT = Path(__file__).resolve().parent.parent
+
+CACHE_FILE = APP_ROOT / "cache" / "desktop_search_cache.json"
+DOCUMENTS_DIR = APP_ROOT / "output" / "documents"
+KEYWORDS_FILE = APP_ROOT / "data" / "keywords.txt"
 VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 
 COLUMNS: list[tuple[str, str]] = [

@@ -11,9 +11,12 @@
 from __future__ import annotations
 
 import base64
+from dataclasses import dataclass
+import os
 import re
 import socket
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -24,6 +27,20 @@ from selenium.webdriver.chrome.options import Options
 DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
 HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт сервер за один вызов
+
+
+@dataclass(frozen=True)
+class BrowserLaunchConfig:
+    label: str
+    exe_path: Path
+    user_data_dir: Path
+    profile_dir: str = "Default"
+    port: int = DEVTOOLS_PORT
+
+
+def _resource_path(name: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / name
 
 _INDEX_INDEX_JS = r"""
 const callback = arguments[arguments.length - 1];
@@ -176,6 +193,37 @@ class EtpClient:
         self.port = port
         self.driver: Optional[webdriver.Chrome] = None
         self._token: str = ""
+        self.browser = BrowserLaunchConfig(
+            label="Google Chrome",
+            exe_path=Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+            user_data_dir=Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data",
+            port=port,
+        )
+
+    def configure_browser(
+        self,
+        label: str,
+        exe_path: Path,
+        user_data_dir: Path,
+        profile_dir: str = "Default",
+        port: int = DEVTOOLS_PORT,
+    ) -> None:
+        if (
+            self.browser.exe_path == exe_path
+            and self.browser.user_data_dir == user_data_dir
+            and self.browser.profile_dir == profile_dir
+            and self.port == port
+        ):
+            return
+        self.close()
+        self.port = port
+        self.browser = BrowserLaunchConfig(
+            label=label,
+            exe_path=exe_path,
+            user_data_dir=user_data_dir,
+            profile_dir=profile_dir,
+            port=port,
+        )
 
     def is_chrome_running(self) -> bool:
         try:
@@ -185,26 +233,59 @@ class EtpClient:
             return False
 
     def ensure_chrome(self, timeout: int = 40) -> None:
-        """Стартует Chrome через start_chrome.ps1, если он ещё не слушает DevTools."""
+        """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
             return
-        script = Path(__file__).parent / "start_chrome.ps1"
-        if not script.exists():
-            raise FileNotFoundError(f"Не найден {script}")
-        subprocess.Popen(
-            [
-                "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", str(script),
-            ],
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-        )
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.is_chrome_running():
-                return
-            time.sleep(1)
+        browser = self.browser
+        if not browser.exe_path.exists():
+            raise FileNotFoundError(f"Не найден браузер: {browser.exe_path}")
+
+        def launch(user_data_dir: Path, profile_dir: str = "Default") -> None:
+            user_data_dir.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen([
+                str(browser.exe_path),
+                f"--remote-debugging-port={self.port}",
+                "--remote-allow-origins=*",
+                f"--user-data-dir={user_data_dir}",
+                f"--profile-directory={profile_dir}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--start-maximized",
+                "https://etpgaz.gazprombank.ru/#com/procedure/index",
+            ], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+
+        def wait_for_port(seconds: int) -> bool:
+            deadline = time.time() + seconds
+            while time.time() < deadline:
+                if self.is_chrome_running():
+                    return True
+                time.sleep(1)
+            return False
+
+        launch(browser.user_data_dir, browser.profile_dir)
+        primary_timeout = min(15, timeout)
+        if wait_for_port(primary_timeout):
+            return
+
+        # Если браузер уже был запущен обычным способом, Chromium часто просто
+        # открывает новое окно старого процесса и игнорирует remote debugging.
+        # В этом случае запускаем отдельный управляемый профиль приложения.
+        local = Path(os.environ.get("LOCALAPPDATA") or Path.home())
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", browser.label).strip("_")
+        fallback_dir = local / "ETP_GPB_Search" / "browser_profiles" / safe_label
+        launch(fallback_dir)
+        if wait_for_port(max(5, timeout - primary_timeout)):
+            self.browser = BrowserLaunchConfig(
+                label=f"{browser.label} (управляемый профиль)",
+                exe_path=browser.exe_path,
+                user_data_dir=fallback_dir,
+                profile_dir="Default",
+                port=self.port,
+            )
+            return
         raise RuntimeError(
-            f"Chrome с DevTools не стартовал за {timeout} сек."
+            f"{browser.label} открылся, но DevTools-порт {self.port} не поднялся. "
+            "Закройте все окна этого браузера и попробуйте снова либо выберите другой браузер."
         )
 
     def connect(self) -> None:
@@ -213,8 +294,7 @@ class EtpClient:
             return
         if not self.is_chrome_running():
             raise RuntimeError(
-                f"Chrome с DevTools на порту {self.port} не запущен. "
-                "Запусти его сначала через start_chrome.ps1."
+                f"{self.browser.label} с DevTools на порту {self.port} не запущен."
             )
         opts = Options()
         opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
@@ -346,6 +426,8 @@ class EtpClient:
         saved: list[str] = []
         errors: list[str] = []
         for index, link in enumerate(links, start=1):
+            if progress:
+                progress(f"Проверяю файл {index}/{len(links)}")
             href = str((link or {}).get("href") or "")
             if not href:
                 continue

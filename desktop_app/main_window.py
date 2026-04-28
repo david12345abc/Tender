@@ -93,7 +93,7 @@ class MainWindow(QMainWindow):
         self.user_label.setStyleSheet("color: #4a515a;")
         top_layout.addWidget(self.user_label)
 
-        self.session_badge = QLabel("○  Chrome не запущен")
+        self.session_badge = QLabel("○  Браузер не запущен")
         self.session_badge.setObjectName("SessionBadge")
         self.session_badge.setProperty("ok", "idle")
         top_layout.addWidget(self.session_badge)
@@ -226,10 +226,21 @@ class MainWindow(QMainWindow):
         self.addAction(act_focus_query)
 
     # ------------------------------------------------------------------ задачи
+    def _apply_selected_browser(self) -> None:
+        browser = self.sidebar.selected_browser()
+        self.client.configure_browser(
+            label=browser.label,
+            exe_path=browser.exe_path,
+            user_data_dir=browser.user_data_dir,
+            profile_dir=browser.profile_dir,
+            port=browser.port,
+        )
+
     def _on_search(self) -> None:
         if self.runner.is_running():
             return
 
+        self._apply_selected_browser()
         filters = self.sidebar.client_filters()
         if filters.keyword_search_enabled and not filters.keywords:
             QMessageBox.information(
@@ -494,6 +505,7 @@ class MainWindow(QMainWindow):
         if not output_dir_str:
             return
         output_dir = Path(output_dir_str)
+        self._apply_selected_browser()
 
         self.progress.show()
         self.btn_stop.setEnabled(True)
@@ -521,7 +533,7 @@ class MainWindow(QMainWindow):
 
     def _start_task(self, params: SearchParams, start: int, batches: int) -> None:
         self.progress.show()
-        self.btn_stop.setEnabled(batches > 1)
+        self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
         self.btn_load_more.setEnabled(False)
         self.btn_load_all.setEnabled(False)
@@ -621,7 +633,12 @@ class MainWindow(QMainWindow):
 
     def _on_stop(self) -> None:
         self.runner.request_stop()
+        self.btn_stop.setEnabled(False)
         self.status_msg.setText("Останавливаю…")
+        try:
+            self.client.close()
+        except Exception:
+            traceback.print_exc()
 
     # --------------- клиентские фильтры
     def _on_filters_changed(self) -> None:

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from etp_client import PROCEDURE_TYPE_LABELS, STATUS_LABELS
 
+from .browsers import BrowserConfig, available_browsers
 from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
@@ -183,6 +184,13 @@ class Sidebar(QWidget):
         self.ed_quick_search.setMinimumWidth(520)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
+        quick_row.addWidget(QLabel("Браузер:"))
+        self.cb_browser = QComboBox()
+        self.cb_browser.setMinimumWidth(180)
+        self._browsers = available_browsers()
+        for browser in self._browsers:
+            self.cb_browser.addItem(browser.label, browser)
+        quick_row.addWidget(self.cb_browser)
         self.btn_search = QPushButton("Искать")
         self.btn_search.setObjectName("Primary")
         self.btn_search.setMinimumWidth(110)
@@ -564,3 +572,9 @@ class Sidebar(QWidget):
         items = load_keyword_items()
         active = sum(1 for enabled, _ in items if enabled)
         self.lbl_keywords_count.setText(f"Активных слов: {active}/{len(items)}")
+
+    def selected_browser(self) -> BrowserConfig:
+        browser = self.cb_browser.currentData()
+        if isinstance(browser, BrowserConfig):
+            return browser
+        return self._browsers[0]
