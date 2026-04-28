@@ -10,7 +10,7 @@ class SearchParams:
     date_to: str = ""
     query: str = ""
     tag_id: Optional[int] = None
-    limit: int = 100
+    limit: int = 500
     sort: str = "id"
     direction: str = "DESC"
 
@@ -18,6 +18,8 @@ class SearchParams:
 @dataclass
 class ClientFilters:
     quick_search: str = ""
+    keyword_search_enabled: bool = False
+    keywords: tuple[str, ...] = ()
     registry_contains: str = ""
     unique_number_contains: str = ""
     organizer_contains: str = ""

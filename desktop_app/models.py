@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor
 from etp_client import step_id_label, trend_pur_label
 
 from .constants import COLUMNS
+from .keywords import load_keywords
 from .params import ClientFilters
 from .utils import fmt_date, fmt_money, parse_dt, parse_price
 
@@ -19,6 +20,43 @@ class ProcedureTableModel(QAbstractTableModel):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._rows: list[dict[str, Any]] = []
+        self._keywords: tuple[str, ...] = ()
+
+    def set_keywords(self, keywords: tuple[str, ...]) -> None:
+        self._keywords = keywords
+        if self._rows:
+            self.dataChanged.emit(
+                self.index(0, 0),
+                self.index(len(self._rows) - 1, len(self.COL_KEYS) - 1),
+            )
+
+    def _all_text(self, value: Any) -> str:
+        values: list[str] = []
+
+        def walk(v: Any) -> None:
+            if isinstance(v, dict):
+                for nested in v.values():
+                    walk(nested)
+            elif isinstance(v, (list, tuple, set)):
+                for nested in v:
+                    walk(nested)
+            elif v is not None:
+                values.append(str(v))
+
+        walk(value)
+        return " ".join(values).casefold()
+
+    def _keyword_matches(self, proc: dict[str, Any]) -> list[str]:
+        haystack = self._all_text(proc)
+        keywords = self._keywords or tuple(load_keywords())
+        return [keyword for keyword in keywords if keyword.casefold() in haystack]
+
+    def _first_date(self, proc: dict[str, Any], keys: tuple[str, ...]) -> Optional[datetime]:
+        for key in keys:
+            dt = parse_dt(proc.get(key))
+            if dt is not None:
+                return dt
+        return None
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -43,6 +81,20 @@ class ProcedureTableModel(QAbstractTableModel):
         if key == "tags_label":
             tags = proc.get("tags") or []
             return ", ".join(str(t) for t in tags) if tags else ""
+        if key == "date_start_registration":
+            return fmt_date(
+                self._first_date(
+                    proc,
+                    (
+                        "date_start_registration",
+                        "date_begin_registration",
+                        "date_registration_start",
+                        "date_start_applic",
+                        "date_begin_applic",
+                        "date_published",
+                    ),
+                )
+            )
         if key == "date_end_registration":
             return fmt_date(parse_dt(proc.get("date_end_registration")))
         if key == "total_price":
@@ -54,6 +106,8 @@ class ProcedureTableModel(QAbstractTableModel):
             return proc.get("title") or ""
         if key == "registry_number":
             return proc.get("registry_number") or proc.get("procedure_number") or ""
+        if key == "keyword_matches":
+            return ", ".join(self._keyword_matches(proc))
         return proc.get(key, "")
 
     def _sort_value(self, proc: dict[str, Any], key: str) -> Any:
@@ -61,6 +115,18 @@ class ProcedureTableModel(QAbstractTableModel):
             return parse_price(proc.get("total_price")) or 0.0
         if key == "applics_count":
             return int(proc.get("applics_count") or 0)
+        if key == "date_start_registration":
+            return self._first_date(
+                proc,
+                (
+                    "date_start_registration",
+                    "date_begin_registration",
+                    "date_registration_start",
+                    "date_start_applic",
+                    "date_begin_applic",
+                    "date_published",
+                ),
+            ) or datetime.min
         if key == "date_end_registration":
             return parse_dt(proc.get("date_end_registration")) or datetime.min
         if key == "trend_pur_label":
@@ -73,6 +139,8 @@ class ProcedureTableModel(QAbstractTableModel):
             return str(proc.get("title") or "").lower()
         if key == "registry_number":
             return str(proc.get("registry_number") or proc.get("procedure_number") or "")
+        if key == "keyword_matches":
+            return self._display(proc, key)
         return str(proc.get(key) or "")
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
@@ -104,6 +172,23 @@ class ProcedureTableModel(QAbstractTableModel):
                 return "\n".join(parts) or None
             if col_key == "title":
                 return str(proc.get("title") or "")
+            if col_key == "keyword_matches":
+                matches = self._keyword_matches(proc)
+                return "\n".join(matches) if matches else "Совпадений по ключевым словам нет"
+            if col_key == "date_start_registration":
+                info = []
+                for k in (
+                    "date_start_registration",
+                    "date_begin_registration",
+                    "date_registration_start",
+                    "date_start_applic",
+                    "date_begin_applic",
+                    "date_published",
+                ):
+                    v = proc.get(k)
+                    if v:
+                        info.append(f"{k}: {v}")
+                return "\n".join(info) or None
             if col_key == "date_end_registration":
                 return str(proc.get("date_end_registration") or "")
             if col_key == "registry_number":
@@ -163,6 +248,22 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
     def set_filters(self, flt: ClientFilters) -> None:
         self._flt = flt
         self.invalidateFilter()
+
+    def _all_text(self, value: Any) -> str:
+        values: list[str] = []
+
+        def walk(v: Any) -> None:
+            if isinstance(v, dict):
+                for nested in v.values():
+                    walk(nested)
+            elif isinstance(v, (list, tuple, set)):
+                for nested in v:
+                    walk(nested)
+            elif v is not None:
+                values.append(str(v))
+
+        walk(value)
+        return " ".join(values).casefold()
 
     def _blob(
         self,
@@ -255,16 +356,14 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         f = self._flt
 
         if f.quick_search:
-            needle = f.quick_search.lower()
-            values: list[str] = []
-            for value in proc.values():
-                if isinstance(value, dict):
-                    values.extend(str(v) for v in value.values())
-                elif isinstance(value, (list, tuple, set)):
-                    values.extend(str(v) for v in value)
-                elif value is not None:
-                    values.append(str(value))
-            if needle not in " ".join(values).lower():
+            needle = f.quick_search.casefold()
+            if needle not in self._all_text(proc):
+                return False
+
+        if f.keyword_search_enabled:
+            haystack = self._all_text(proc)
+            keywords = tuple(k.casefold() for k in f.keywords if k.strip())
+            if not keywords or not any(keyword in haystack for keyword in keywords):
                 return False
 
         if f.registry_contains:

@@ -11,6 +11,8 @@ from PySide6.QtCore import QModelIndex, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QStatusBar,
     QTableView,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -31,6 +34,7 @@ from PySide6.QtWidgets import (
 from etp_client import EtpClient, step_id_label, trend_pur_label
 
 from .constants import APP_TITLE, CACHE_FILE, COLUMNS, VIEW_URL
+from .keywords import keywords_as_text, parse_keywords, save_keywords
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
@@ -97,6 +101,7 @@ class MainWindow(QMainWindow):
         self.sidebar.searchRequested.connect(self._on_search)
         self.sidebar.resetRequested.connect(self._on_reset_filters)
         self.sidebar.clientFiltersChanged.connect(self._on_filters_changed)
+        self.sidebar.editKeywordsRequested.connect(self._on_edit_keywords)
 
         main_area = QWidget()
         main_area.setMinimumHeight(360)
@@ -125,7 +130,7 @@ class MainWindow(QMainWindow):
         self.table = QTableView()
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
-        self.table.sortByColumn(6, Qt.AscendingOrder)
+        self.table.sortByColumn(8, Qt.AscendingOrder)
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
@@ -136,11 +141,13 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(0, 170)
         self.table.setColumnWidth(1, 180)
         self.table.setColumnWidth(2, 230)
-        self.table.setColumnWidth(4, 80)
-        self.table.setColumnWidth(5, 95)
-        self.table.setColumnWidth(6, 145)
-        self.table.setColumnWidth(7, 170)
-        self.table.setColumnWidth(8, 200)
+        self.table.setColumnWidth(4, 220)
+        self.table.setColumnWidth(5, 80)
+        self.table.setColumnWidth(6, 95)
+        self.table.setColumnWidth(7, 145)
+        self.table.setColumnWidth(8, 145)
+        self.table.setColumnWidth(9, 170)
+        self.table.setColumnWidth(10, 200)
         self.table.setWordWrap(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
@@ -154,7 +161,7 @@ class MainWindow(QMainWindow):
         bottom_layout.setSpacing(8)
 
         self.btn_load_more = QPushButton("Следующий батч")
-        self.btn_load_more.setToolTip("Загрузить следующий батч по выбранному лимиту")
+        self.btn_load_more.setToolTip("Загрузить следующий пакет данных")
         self.btn_load_more.clicked.connect(self._on_load_more)
         self.btn_load_more.setEnabled(False)
         bottom_layout.addWidget(self.btn_load_more)
@@ -215,6 +222,17 @@ class MainWindow(QMainWindow):
         if self.runner.is_running():
             return
 
+        filters = self.sidebar.client_filters()
+        if filters.keyword_search_enabled and not filters.keywords:
+            QMessageBox.information(
+                self,
+                "Нет ключевых слов",
+                "Список ключевых слов пуст. Добавьте слова через «Редактировать список».",
+            )
+            return
+        self.proxy.set_filters(filters)
+        self.model.set_keywords(filters.keywords)
+
         if CACHE_FILE.exists():
             choice = self._ask_cache_choice()
             if choice == "cancel":
@@ -229,7 +247,50 @@ class MainWindow(QMainWindow):
         self._current_start = 0
         self._last_total = 0
         self._refresh_counter()
-        self._start_task(self.sidebar.search_params(), start=0, batches=1)
+        self._start_task(
+            self.sidebar.search_params(),
+            start=0,
+            batches=self._search_batches(filters),
+        )
+
+    def _on_edit_keywords(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Ключевые слова")
+        dialog.resize(720, 560)
+
+        layout = QVBoxLayout(dialog)
+        hint = QLabel(
+            "Введите ключевые слова или фразы: по одному на строку. "
+            "Поиск найдёт процедуры, где встречается хотя бы одна строка из списка."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        editor = QTextEdit()
+        editor.setPlainText(keywords_as_text())
+        layout.addWidget(editor, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        keywords = parse_keywords(editor.toPlainText())
+        save_keywords(keywords)
+        self.model.set_keywords(tuple(keywords))
+        self.sidebar.refresh_keywords_count()
+        self._on_filters_changed()
+        QMessageBox.information(
+            self,
+            "Список сохранён",
+            f"Сохранено ключевых слов/фраз: {len(keywords)}.",
+        )
 
     def _ask_cache_choice(self) -> str:
         """Диалог «Показать из кэша / Загрузить заново / Отмена».
@@ -292,7 +353,11 @@ class MainWindow(QMainWindow):
             self.model.clear()
             self._current_start = 0
             self._last_total = 0
-            self._start_task(self.sidebar.search_params(), start=0, batches=1)
+            self._start_task(
+                self.sidebar.search_params(),
+                start=0,
+                batches=self._search_batches(self.sidebar.client_filters()),
+            )
             return
         procs = data.get("procedures") or []
         self.model.set_rows(procs)
@@ -322,6 +387,9 @@ class MainWindow(QMainWindow):
         if self.runner.is_running():
             return
         self._start_task(self.sidebar.search_params(), start=self._current_start, batches=10_000)
+
+    def _search_batches(self, filters: ClientFilters) -> int:
+        return 10_000 if filters.keyword_search_enabled else 1
 
     def _start_task(self, params: SearchParams, start: int, batches: int) -> None:
         self.progress.show()
@@ -422,12 +490,15 @@ class MainWindow(QMainWindow):
 
     # --------------- клиентские фильтры
     def _on_filters_changed(self) -> None:
-        self.proxy.set_filters(self.sidebar.client_filters())
+        filters = self.sidebar.client_filters()
+        self.proxy.set_filters(filters)
+        self.model.set_keywords(filters.keywords)
         self._refresh_counter()
 
     def _on_reset_filters(self) -> None:
         self.sidebar.reset_client_filters()
         self.proxy.set_filters(ClientFilters())
+        self.model.set_keywords(())
         self._refresh_counter()
 
     # --------------- таблица
@@ -518,8 +589,22 @@ class MainWindow(QMainWindow):
                     trend_pur_label(p.get("trend_pur")),
                     p.get("short_name") or p.get("full_name") or "",
                     p.get("title") or "",
+                    ", ".join(self.model._keyword_matches(p)),
                     ", ".join(str(t) for t in (p.get("tags") or [])),
                     p.get("applics_count") or 0,
+                    fmt_date(
+                        self.model._first_date(
+                            p,
+                            (
+                                "date_start_registration",
+                                "date_begin_registration",
+                                "date_registration_start",
+                                "date_start_applic",
+                                "date_begin_applic",
+                                "date_published",
+                            ),
+                        )
+                    ),
                     fmt_date(parse_dt(p.get("date_end_registration"))),
                     parse_price(p.get("total_price")) or "",
                     step_id_label(p.get("step_id")),
@@ -527,7 +612,7 @@ class MainWindow(QMainWindow):
                     fmt_date(parse_dt(p.get("date_published"))),
                 ]
             )
-        widths = [18, 28, 28, 80, 12, 12, 20, 18, 28, 10, 20]
+        widths = [18, 28, 28, 80, 30, 12, 12, 20, 20, 18, 28, 10, 20]
         for i, w in enumerate(widths, start=1):
             col_letter = ws.cell(row=1, column=i).column_letter
             ws.column_dimensions[col_letter].width = w
@@ -559,7 +644,7 @@ class MainWindow(QMainWindow):
         running = self.runner.is_running()
         loaded = self.model.rowCount()
         total = self._last_total
-        has_more = total > 0 and loaded < total
+        has_more = total > 0 and self._current_start < total
         self.btn_load_more.setEnabled(not running and has_more)
         self.btn_load_all.setEnabled(not running and has_more)
         self.btn_export.setEnabled(loaded > 0)

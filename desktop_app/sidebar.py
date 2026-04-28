@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTableView,
     QToolButton,
@@ -24,7 +25,10 @@ from PySide6.QtWidgets import (
 
 from etp_client import STEP_ID_LABELS, TREND_PUR_LABELS
 
+from .keywords import load_keywords
 from .params import ClientFilters, SearchParams
+
+DEFAULT_REQUEST_LIMIT = 500
 
 class Sidebar(QWidget):
     """Подробная форма фильтров, похожая на форму на сайте ЭТП."""
@@ -35,6 +39,7 @@ class Sidebar(QWidget):
     loadMoreRequested = Signal()
     loadAllRequested = Signal()
     stopRequested = Signal()
+    editKeywordsRequested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -46,6 +51,7 @@ class Sidebar(QWidget):
         edit = QLineEdit()
         edit.setPlaceholderText(placeholder)
         edit.setMinimumWidth(190)
+        edit.setMinimumHeight(30)
         return edit
 
     def _make_money(self) -> QDoubleSpinBox:
@@ -55,6 +61,7 @@ class Sidebar(QWidget):
         spin.setGroupSeparatorShown(True)
         spin.setSpecialValueText("—")
         spin.setMinimumWidth(115)
+        spin.setMinimumHeight(30)
         return spin
 
     def _make_int(self) -> QSpinBox:
@@ -62,11 +69,13 @@ class Sidebar(QWidget):
         spin.setRange(0, 1_000_000)
         spin.setSpecialValueText("—")
         spin.setMinimumWidth(90)
+        spin.setMinimumHeight(30)
         return spin
 
     def _make_combo(self, items: Optional[list[tuple[str, str]]] = None) -> QComboBox:
         combo = QComboBox()
         combo.setMinimumWidth(190)
+        combo.setMinimumHeight(30)
         combo.addItem("Все", "")
         for label, value in items or []:
             combo.addItem(label, value)
@@ -135,24 +144,28 @@ class Sidebar(QWidget):
         edit.setDisplayFormat("dd.MM.yyyy")
         edit.setDate(date or QDate.currentDate())
         edit.setMinimumWidth(112)
+        edit.setMinimumHeight(30)
         edit.setCalendarWidget(self._make_calendar())
         return edit
 
     def _range_row(self, left: QWidget, right: QWidget, left_text: str = "с", right_text: str = "по") -> QWidget:
         row = QWidget()
         lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(8)
         lay.addWidget(QLabel(left_text))
         lay.addWidget(left)
         lay.addWidget(QLabel(right_text))
         lay.addWidget(right)
+        row.setMinimumHeight(34)
         return row
 
     def _add_row(self, grid: QGridLayout, row: int, col: int, label: str, widget: QWidget) -> None:
         lbl = QLabel(label)
         lbl.setObjectName("FilterLabel")
         lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lbl.setMinimumHeight(30)
+        widget.setMinimumHeight(max(widget.minimumHeight(), 30))
         grid.addWidget(lbl, row, col * 2)
         grid.addWidget(widget, row, col * 2 + 1)
 
@@ -170,13 +183,6 @@ class Sidebar(QWidget):
         self.ed_quick_search.setMinimumWidth(520)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
-        quick_row.addWidget(QLabel("Лимит в батче:"))
-        self.sb_batch_limit = QSpinBox()
-        self.sb_batch_limit.setRange(25, 1000)
-        self.sb_batch_limit.setSingleStep(25)
-        self.sb_batch_limit.setValue(100)
-        self.sb_batch_limit.setMinimumWidth(90)
-        quick_row.addWidget(self.sb_batch_limit)
         self.btn_search = QPushButton("Искать")
         self.btn_search.setObjectName("Primary")
         self.btn_search.setMinimumWidth(110)
@@ -184,6 +190,22 @@ class Sidebar(QWidget):
         self.btn_reset = QPushButton("Сбросить")
         quick_row.addWidget(self.btn_reset)
         body_layout.addLayout(quick_row)
+
+        keyword_row = QHBoxLayout()
+        keyword_row.setContentsMargins(0, 0, 0, 0)
+        keyword_row.setSpacing(8)
+        self.cb_keyword_search = QCheckBox("Поиск по ключевым словам")
+        self.cb_keyword_search.setToolTip(
+            "Искать процедуры, где встречается хотя бы одно слово из списка"
+        )
+        keyword_row.addWidget(self.cb_keyword_search)
+        self.btn_edit_keywords = QPushButton("Редактировать список")
+        keyword_row.addWidget(self.btn_edit_keywords)
+        self.lbl_keywords_count = QLabel()
+        keyword_row.addWidget(self.lbl_keywords_count)
+        keyword_row.addStretch(1)
+        body_layout.addLayout(keyword_row)
+        self.refresh_keywords_count()
 
         self.btn_toggle_extra = QToolButton()
         self.btn_toggle_extra.setText("Дополнительные фильтры")
@@ -193,19 +215,27 @@ class Sidebar(QWidget):
         self.btn_toggle_extra.setArrowType(Qt.RightArrow)
         body_layout.addWidget(self.btn_toggle_extra)
 
+        self.extra_scroll = QScrollArea()
+        self.extra_scroll.setVisible(False)
+        self.extra_scroll.setWidgetResizable(True)
+        self.extra_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.extra_scroll.setMinimumHeight(260)
+        self.extra_scroll.setMaximumHeight(360)
+
         self.extra_filters = QWidget()
-        self.extra_filters.setVisible(False)
-        self.extra_filters.setMinimumHeight(300)
+        self.extra_filters.setMinimumHeight(520)
         extra_layout = QVBoxLayout(self.extra_filters)
-        extra_layout.setContentsMargins(0, 0, 0, 0)
-        extra_layout.setSpacing(6)
+        extra_layout.setContentsMargins(0, 10, 0, 0)
+        extra_layout.setSpacing(12)
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(5)
-        for c in (1, 3, 5):
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(14)
+        for c in (1, 3):
             grid.setColumnStretch(c, 1)
+        for r in range(12):
+            grid.setRowMinimumHeight(r, 36)
 
         self.ed_registry = self._make_line()
         self.ed_unique_number = self._make_line()
@@ -240,6 +270,10 @@ class Sidebar(QWidget):
         self.ed_date_to = self._make_date(QDate.currentDate())
         self.de_end_from = self._make_date(QDate.currentDate())
         self.de_end_to = self._make_date(QDate.currentDate().addMonths(3))
+        self.cb_published_enabled = QCheckBox()
+        self.cb_published_enabled.setToolTip("Включить фильтр по дате публикации")
+        self.cb_end_enabled = QCheckBox()
+        self.cb_end_enabled.setToolTip("Включить фильтр по окончанию приёма заявок")
         self.de_results_from = self._make_date(QDate.currentDate())
         self.de_results_to = self._make_date(QDate.currentDate().addMonths(3))
         self.cb_results_enabled = QCheckBox()
@@ -296,20 +330,29 @@ class Sidebar(QWidget):
         )
         self._add_row(grid, 7, 1, "Тег:", self.ed_tag_id)
 
-        self._add_row(
-            grid,
-            0,
-            2,
-            "Дата публикации:",
-            self._range_row(self.ed_date_from, self.ed_date_to),
-        )
-        self._add_row(
-            grid,
-            1,
-            2,
-            "Окончание приема заявок:",
-            self._range_row(self.de_end_from, self.de_end_to),
-        )
+        published_row = QWidget()
+        published_lay = QHBoxLayout(published_row)
+        published_lay.setContentsMargins(0, 2, 0, 2)
+        published_lay.setSpacing(8)
+        published_lay.addWidget(self.cb_published_enabled)
+        published_lay.addWidget(QLabel("с"))
+        published_lay.addWidget(self.ed_date_from)
+        published_lay.addWidget(QLabel("по"))
+        published_lay.addWidget(self.ed_date_to)
+        published_row.setMinimumHeight(34)
+        self._add_row(grid, 9, 0, "Дата публикации:", published_row)
+
+        end_row = QWidget()
+        end_lay = QHBoxLayout(end_row)
+        end_lay.setContentsMargins(0, 2, 0, 2)
+        end_lay.setSpacing(8)
+        end_lay.addWidget(self.cb_end_enabled)
+        end_lay.addWidget(QLabel("с"))
+        end_lay.addWidget(self.de_end_from)
+        end_lay.addWidget(QLabel("по"))
+        end_lay.addWidget(self.de_end_to)
+        end_row.setMinimumHeight(34)
+        self._add_row(grid, 10, 0, "Окончание приема заявок:", end_row)
         results_row = QWidget()
         results_lay = QHBoxLayout(results_row)
         results_lay.setContentsMargins(0, 0, 0, 0)
@@ -319,20 +362,21 @@ class Sidebar(QWidget):
         results_lay.addWidget(self.de_results_from)
         results_lay.addWidget(QLabel("по"))
         results_lay.addWidget(self.de_results_to)
-        self._add_row(grid, 2, 2, "Дата подведения итогов:", results_row)
+        self._add_row(grid, 8, 1, "Дата подведения итогов:", results_row)
         self._add_row(
             grid,
-            3,
-            2,
+            9,
+            1,
             "Начальная цена (с НДС):",
             self._range_row(self.sb_price_min, self.sb_price_max, "от", "до"),
         )
-        self._add_row(grid, 4, 2, "Специальные признаки:", self.ed_special_features)
-        self._add_row(grid, 5, 2, "Наименование позиции:", self.ed_position_name)
-        self._add_row(grid, 6, 2, "Национальный режим закупок:", self.ed_national_regime)
+        self._add_row(grid, 10, 1, "Специальные признаки:", self.ed_special_features)
+        self._add_row(grid, 11, 0, "Наименование позиции:", self.ed_position_name)
+        self._add_row(grid, 11, 1, "Национальный режим закупок:", self.ed_national_regime)
 
         extra_layout.addLayout(grid)
-        body_layout.addWidget(self.extra_filters)
+        self.extra_scroll.setWidget(self.extra_filters)
+        body_layout.addWidget(self.extra_scroll)
 
         self.btn_toggle_extra.toggled.connect(self._set_extra_visible)
 
@@ -370,8 +414,8 @@ class Sidebar(QWidget):
         )
         for w in spin_widgets:
             w.editingFinished.connect(self.clientFiltersChanged)
-        self.cb_results_enabled.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
-        self.sb_batch_limit.editingFinished.connect(self.clientFiltersChanged)
+        for w in (self.cb_published_enabled, self.cb_end_enabled, self.cb_results_enabled):
+            w.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         for w in (
             self.ed_date_from,
             self.ed_date_to,
@@ -384,10 +428,12 @@ class Sidebar(QWidget):
 
         self.btn_search.clicked.connect(self.searchRequested)
         self.btn_reset.clicked.connect(self.resetRequested)
+        self.cb_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.btn_edit_keywords.clicked.connect(self.editKeywordsRequested)
 
     def _set_extra_visible(self, visible: bool) -> None:
-        self.extra_filters.setVisible(visible)
-        self.setMinimumHeight(390 if visible else 88)
+        self.extra_scroll.setVisible(visible)
+        self.setMinimumHeight(430 if visible else 88)
         self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
         self.updateGeometry()
         parent = self.parentWidget()
@@ -400,20 +446,33 @@ class Sidebar(QWidget):
         return lbl
 
     def search_params(self) -> SearchParams:
-        use_extra = self.extra_filters.isVisible()
+        use_extra = self.extra_scroll.isVisible()
         return SearchParams(
-            date_from=self.ed_date_from.date().toString("dd.MM.yyyy") if use_extra else "",
-            date_to=self.ed_date_to.date().toString("dd.MM.yyyy") if use_extra else "",
+            date_from=(
+                self.ed_date_from.date().toString("dd.MM.yyyy")
+                if use_extra and self.cb_published_enabled.isChecked() else ""
+            ),
+            date_to=(
+                self.ed_date_to.date().toString("dd.MM.yyyy")
+                if use_extra and self.cb_published_enabled.isChecked() else ""
+            ),
             query="",
             tag_id=(self.ed_tag_id.value() or None) if use_extra else None,
-            limit=self.sb_batch_limit.value(),
+            limit=DEFAULT_REQUEST_LIMIT,
         )
 
     def client_filters(self) -> ClientFilters:
-        if not self.extra_filters.isVisible():
-            return ClientFilters(quick_search=self.ed_quick_search.text().strip())
+        keywords = tuple(load_keywords()) if self.cb_keyword_search.isChecked() else ()
+        if not self.extra_scroll.isVisible():
+            return ClientFilters(
+                quick_search=self.ed_quick_search.text().strip(),
+                keyword_search_enabled=self.cb_keyword_search.isChecked(),
+                keywords=keywords,
+            )
         return ClientFilters(
             quick_search=self.ed_quick_search.text().strip(),
+            keyword_search_enabled=self.cb_keyword_search.isChecked(),
+            keywords=keywords,
             registry_contains=self.ed_registry.text().strip(),
             unique_number_contains=self.ed_unique_number.text().strip(),
             organizer_contains=self.ed_organizer.text().strip(),
@@ -437,15 +496,19 @@ class Sidebar(QWidget):
             price_max=(self.sb_price_max.value() or None),
             published_from=(
                 datetime.combine(self.ed_date_from.date().toPython(), datetime.min.time())
+                if self.cb_published_enabled.isChecked() else None
             ),
             published_to=(
                 datetime.combine(self.ed_date_to.date().toPython(), datetime.max.time())
+                if self.cb_published_enabled.isChecked() else None
             ),
             end_from=(
                 datetime.combine(self.de_end_from.date().toPython(), datetime.min.time())
+                if self.cb_end_enabled.isChecked() else None
             ),
             end_to=(
                 datetime.combine(self.de_end_to.date().toPython(), datetime.max.time())
+                if self.cb_end_enabled.isChecked() else None
             ),
             results_from=(
                 datetime.combine(self.de_results_from.date().toPython(), datetime.min.time())
@@ -462,7 +525,7 @@ class Sidebar(QWidget):
 
     def reset_client_filters(self) -> None:
         self.ed_quick_search.clear()
-        self.sb_batch_limit.setValue(100)
+        self.cb_keyword_search.setChecked(False)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
         self.ed_organizer.clear()
@@ -488,6 +551,8 @@ class Sidebar(QWidget):
         self.sb_price_min.setValue(0.0)
         self.sb_price_max.setValue(0.0)
         self.ed_tag_id.setValue(0)
+        self.cb_published_enabled.setChecked(False)
+        self.cb_end_enabled.setChecked(False)
         self.ed_date_from.setDate(QDate.currentDate().addYears(-1))
         self.ed_date_to.setDate(QDate.currentDate())
         self.de_end_from.setDate(QDate.currentDate())
@@ -498,3 +563,7 @@ class Sidebar(QWidget):
 
     def set_controls_enabled(self, enabled: bool) -> None:
         self.btn_search.setEnabled(enabled)
+
+    def refresh_keywords_count(self) -> None:
+        count = len(load_keywords())
+        self.lbl_keywords_count.setText(f"Слов в списке: {count}")

@@ -11,7 +11,7 @@ def parse_dt(value: Any) -> Optional[datetime]:
     s = str(value).strip()
     if not s:
         return None
-    if len(s) >= 25 and (s[-6] in "+-") and s[-3] == ":":
+    if len(s) >= 500 and (s[-6] in "+-") and s[-3] == ":":
         s = s[:-3] + s[-2:]
     for fmt in (
         "%Y-%m-%dT%H:%M:%S%z",

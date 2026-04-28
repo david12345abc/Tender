@@ -176,6 +176,9 @@ def make_search_task(
         accepted_this_task = 0
         total: Optional[int] = None
         pages_done = 0
+        viewed_in_user_batch = 0
+        last_next_start = cur_start
+        last_emitted_start = cur_start
         probe_model = ProcedureTableModel()
         probe_proxy = ProcedureFilterProxy()
         probe_proxy.setSourceModel(probe_model)
@@ -239,23 +242,31 @@ def make_search_task(
                     if row is not None:
                         accepted.append(row)
             next_start = cur_start + len(procs)
+            last_next_start = next_start
             if accepted:
                 w.batch.emit(accepted, next_start, total or 0)
+                last_emitted_start = next_start
                 accepted_this_task += len(accepted)
             loaded_this_task += len(procs)
+            viewed_in_user_batch += len(procs)
             pages_done += 1
+            reached_user_batch = viewed_in_user_batch >= request_limit
             if not procs:
                 break
             if total and next_start >= total:
                 break
-            if batches_left == 1 and accepted:
-                # Один пользовательский батч = один непустой серверный пакет.
-                # Пустые пакеты пропускаем, чтобы таблица не показывала пустые страницы.
+            if batches_left == 1 and accepted_this_task > 0 and reached_user_batch:
+                # Один пользовательский батч = примерно request_limit просмотренных записей.
+                # Найденные строки отдаём сразу, но продолжаем просмотр до границы батча.
                 break
+            if batches_left != 1 and reached_user_batch:
+                viewed_in_user_batch = 0
             if batches_left != 1 and pages_done >= batches_left:
                 break
             cur_start = next_start
 
+        if last_emitted_start != last_next_start:
+            w.batch.emit([], last_next_start, total or 0)
         w.session.emit(True, "Готово.")
 
     return _run
