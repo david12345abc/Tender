@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
     def _apply_selected_browser(self) -> None:
         browser = self.sidebar.selected_browser()
         self.client.configure_browser(
+            key=browser.key,
             label=browser.label,
             exe_path=browser.exe_path,
             user_data_dir=browser.user_data_dir,

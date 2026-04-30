@@ -21,8 +21,10 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
 
 DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
@@ -31,6 +33,7 @@ HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт се
 
 @dataclass(frozen=True)
 class BrowserLaunchConfig:
+    key: str
     label: str
     exe_path: Path
     user_data_dir: Path
@@ -191,9 +194,10 @@ class EtpClient:
 
     def __init__(self, port: int = DEVTOOLS_PORT) -> None:
         self.port = port
-        self.driver: Optional[webdriver.Chrome] = None
+        self.driver: Optional[ChromeWebDriver | EdgeWebDriver] = None
         self._token: str = ""
         self.browser = BrowserLaunchConfig(
+            key="chrome",
             label="Google Chrome",
             exe_path=Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
             user_data_dir=Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data",
@@ -202,6 +206,7 @@ class EtpClient:
 
     def configure_browser(
         self,
+        key: str,
         label: str,
         exe_path: Path,
         user_data_dir: Path,
@@ -209,7 +214,8 @@ class EtpClient:
         port: int = DEVTOOLS_PORT,
     ) -> None:
         if (
-            self.browser.exe_path == exe_path
+            self.browser.key == key
+            and self.browser.exe_path == exe_path
             and self.browser.user_data_dir == user_data_dir
             and self.browser.profile_dir == profile_dir
             and self.port == port
@@ -218,6 +224,7 @@ class EtpClient:
         self.close()
         self.port = port
         self.browser = BrowserLaunchConfig(
+            key=key,
             label=label,
             exe_path=exe_path,
             user_data_dir=user_data_dir,
@@ -276,6 +283,7 @@ class EtpClient:
         launch(fallback_dir)
         if wait_for_port(max(5, timeout - primary_timeout)):
             self.browser = BrowserLaunchConfig(
+                key=browser.key,
                 label=f"{browser.label} (управляемый профиль)",
                 exe_path=browser.exe_path,
                 user_data_dir=fallback_dir,
@@ -296,9 +304,14 @@ class EtpClient:
             raise RuntimeError(
                 f"{self.browser.label} с DevTools на порту {self.port} не запущен."
             )
-        opts = Options()
-        opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
-        self.driver = webdriver.Chrome(options=opts)
+        if self.browser.key == "edge":
+            edge_opts = EdgeOptions()
+            edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
+            self.driver = EdgeWebDriver(options=edge_opts)
+        else:
+            opts = Options()
+            opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
+            self.driver = ChromeWebDriver(options=opts)
         self.driver.set_script_timeout(30)
         self._switch_to_etp_tab()
 
