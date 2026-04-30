@@ -1,12 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
 
 a = Analysis(
     ['desktop_search.py'],
     pathex=[],
     binaries=[],
     datas=[('start_chrome.ps1', '.'), ('data', 'data')],
-    hiddenimports=['selenium.webdriver.chrome.webdriver', 'selenium.webdriver.edge.webdriver', 'selenium.webdriver.common.driver_finder', 'selenium.webdriver.common.selenium_manager'],
+    hiddenimports=[
+        'selenium.webdriver.chrome.webdriver',
+        'selenium.webdriver.edge.webdriver',
+        'selenium.webdriver.common.driver_finder',
+        'selenium.webdriver.common.selenium_manager',
+        *collect_submodules('webdriver_manager'),
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

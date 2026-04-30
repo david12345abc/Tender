@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import json
 import os
 import re
 import socket
@@ -20,8 +21,12 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
+from selenium.common.exceptions import SessionNotCreatedException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
@@ -29,6 +34,7 @@ from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
 DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
 HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт сервер за один вызов
+ETP_URL = "https://etpgaz.gazprombank.ru/#com/procedure/index"
 
 
 @dataclass(frozen=True)
@@ -239,6 +245,83 @@ class EtpClient:
         except Exception:
             return False
 
+    def _devtools_json(self, endpoint: str) -> Any:
+        with urlopen(f"http://127.0.0.1:{self.port}{endpoint}", timeout=2) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    def _running_browser_version(self) -> str:
+        try:
+            payload = self._devtools_json("/json/version")
+        except Exception:
+            return ""
+        browser = str(payload.get("Browser") or "")
+        match = re.search(r"(\d+\.\d+\.\d+\.\d+)", browser)
+        return match.group(1) if match else ""
+
+    def _has_devtools_page(self) -> bool:
+        try:
+            targets = self._devtools_json("/json/list")
+        except Exception:
+            return False
+        if not isinstance(targets, list):
+            return False
+        return any(target.get("type") == "page" for target in targets if isinstance(target, dict))
+
+    def _open_devtools_page(self, url: str) -> bool:
+        endpoint = f"/json/new?{quote(url, safe=':/?=&')}"
+        request = Request(f"http://127.0.0.1:{self.port}{endpoint}", method="PUT")
+        try:
+            with urlopen(request, timeout=3):
+                return True
+        except Exception:
+            return False
+
+    def _ensure_devtools_page(self, timeout: int = 8) -> None:
+        deadline = time.time() + timeout
+        opened = False
+        while time.time() < deadline:
+            if self._has_devtools_page():
+                return
+            if not opened:
+                opened = self._open_devtools_page(ETP_URL) or self._open_devtools_page("about:blank")
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"{self.browser.label} слушает DevTools на порту {self.port}, но не отдаёт открытые вкладки. "
+            "Закройте все окна выбранного браузера и запустите поиск снова."
+        )
+
+    def _matching_chromedriver_service(self) -> Optional[ChromeService]:
+        version = self._running_browser_version()
+        major = version.split(".", 1)[0] if version else ""
+        if not major:
+            return None
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            return ChromeService(ChromeDriverManager(driver_version=major).install())
+        except Exception:
+            return None
+
+    def _driver_version_hint(self, exc: Exception) -> str:
+        text = str(exc)
+        if "unable to discover open pages" in text:
+            return (
+                f"{self.browser.label} слушает DevTools на порту {self.port}, "
+                "но ChromeDriver не видит открытые вкладки. Закройте все окна выбранного "
+                "браузера и запустите поиск снова. Исходная ошибка Selenium: "
+                f"{text}"
+            )
+        if "This version of ChromeDriver only supports Chrome version" not in text:
+            return text
+        version = self._running_browser_version()
+        version_part = f" версии {version}" if version else ""
+        return (
+            f"Не удалось подобрать ChromeDriver для {self.browser.label}{version_part}. "
+            "Обновите выбранный браузер или проверьте интернет-доступ, чтобы приложение "
+            "смогло скачать совместимый драйвер. Исходная ошибка Selenium: "
+            f"{text}"
+        )
+
     def ensure_chrome(self, timeout: int = 40) -> None:
         """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
@@ -258,7 +341,7 @@ class EtpClient:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--start-maximized",
-                "https://etpgaz.gazprombank.ru/#com/procedure/index",
+                ETP_URL,
             ], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
         def wait_for_port(seconds: int) -> bool:
@@ -304,14 +387,23 @@ class EtpClient:
             raise RuntimeError(
                 f"{self.browser.label} с DevTools на порту {self.port} не запущен."
             )
+        self._ensure_devtools_page()
         if self.browser.key == "edge":
             edge_opts = EdgeOptions()
             edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
             self.driver = EdgeWebDriver(options=edge_opts)
         else:
             opts = Options()
+            opts.binary_location = str(self.browser.exe_path)
             opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
-            self.driver = ChromeWebDriver(options=opts)
+            service = self._matching_chromedriver_service()
+            try:
+                if service is not None:
+                    self.driver = ChromeWebDriver(service=service, options=opts)
+                else:
+                    self.driver = ChromeWebDriver(options=opts)
+            except SessionNotCreatedException as e:
+                raise RuntimeError(self._driver_version_hint(e)) from e
         self.driver.set_script_timeout(30)
         self._switch_to_etp_tab()
 
