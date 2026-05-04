@@ -749,7 +749,7 @@ def _save_state(driver, results_dir: Path, suffix: str) -> dict[str, Any]:
 RPC_PROBE_CASES: list[dict[str, Any]] = [
     {"action": "Api", "method": "publicProcedures", "data": None},
     {"action": "Api", "method": "publicProcedures", "data": []},
-    {"action": "Api", "method": "publicProcedures", "data": [{"page": 1, "start": 0, "limit": 25}]},
+    {"action": "Api", "method": "publicProcedures", "data": [{"page": 1, "start": 0, "limit": 500}]},
     {"action": "Api", "method": "procedures", "data": None},
     {"action": "Api", "method": "procedures", "data": [{"page": 1, "start": 0, "limit": 5}]},
     {"action": "Api", "method": "privateProcedures", "data": None},
