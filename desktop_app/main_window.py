@@ -11,6 +11,7 @@ from PySide6.QtCore import QModelIndex, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self._current_start: int = 0
         self._last_user: Optional[str] = None
         self._cache_dirty: bool = False
+        self._platform_key: str = "gpb"
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -77,6 +79,28 @@ class MainWindow(QMainWindow):
         top_layout = QHBoxLayout(top)
         top_layout.setContentsMargins(16, 8, 16, 8)
         top_layout.setSpacing(12)
+
+        platform_switcher = QFrame()
+        platform_switcher.setObjectName("PlatformSwitcher")
+        platform_layout = QHBoxLayout(platform_switcher)
+        platform_layout.setContentsMargins(2, 2, 2, 2)
+        platform_layout.setSpacing(2)
+        self.platform_group = QButtonGroup(self)
+        self.platform_group.setExclusive(True)
+        self.btn_platform_gpb = QPushButton("ЭТП ГПБ")
+        self.btn_platform_gpb.setObjectName("PlatformButton")
+        self.btn_platform_gpb.setCheckable(True)
+        self.btn_platform_gpb.setChecked(True)
+        self.btn_platform_roseltorg = QPushButton("Росэлторг")
+        self.btn_platform_roseltorg.setObjectName("PlatformButton")
+        self.btn_platform_roseltorg.setCheckable(True)
+        self.platform_group.addButton(self.btn_platform_gpb)
+        self.platform_group.addButton(self.btn_platform_roseltorg)
+        platform_layout.addWidget(self.btn_platform_gpb)
+        platform_layout.addWidget(self.btn_platform_roseltorg)
+        self.btn_platform_gpb.clicked.connect(lambda: self._select_platform("gpb"))
+        self.btn_platform_roseltorg.clicked.connect(lambda: self._select_platform("roseltorg"))
+        top_layout.addWidget(platform_switcher)
 
         t_title_box = QVBoxLayout()
         t_title_box.setSpacing(0)
@@ -226,6 +250,78 @@ class MainWindow(QMainWindow):
         self.addAction(act_focus_query)
 
     # ------------------------------------------------------------------ задачи
+    def _is_platform_ready(self) -> bool:
+        return self._platform_key == "gpb"
+
+    def _platform_title(self) -> str:
+        return "Росэлторг" if self._platform_key == "roseltorg" else "ЭТП ГПБ"
+
+    def _set_platform_buttons(self) -> None:
+        self.btn_platform_gpb.setChecked(self._platform_key == "gpb")
+        self.btn_platform_roseltorg.setChecked(self._platform_key == "roseltorg")
+
+    def _apply_platform_ui(self) -> None:
+        if self._platform_key == "roseltorg":
+            self.title_label.setText("Росэлторг — Актуальные процедуры")
+            self.subtitle_label.setText("Модуль площадки в разработке")
+            self.lbl_counter.setText("Росэлторг пока не реализован. Переключитесь на ЭТП ГПБ для поиска.")
+            self.user_label.setText("Пользователь: —")
+            self._set_badge("idle", "○  Росэлторг в разработке")
+            self.status_msg.setText("Выбрана площадка Росэлторг. Поиск будет доступен после реализации модуля.")
+        else:
+            self.title_label.setText("ЭТП ГПБ — Актуальные процедуры")
+            self.subtitle_label.setText("Поиск, фильтры и экспорт")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
+
+    def _select_platform(self, key: str) -> None:
+        if key not in {"gpb", "roseltorg"}:
+            return
+        if self.runner.is_running():
+            self._set_platform_buttons()
+            QMessageBox.information(
+                self,
+                "Идёт операция",
+                "Дождитесь завершения текущей операции перед сменой площадки.",
+            )
+            return
+        if key == self._platform_key:
+            self._apply_platform_ui()
+            self._update_controls()
+            return
+
+        if self._cache_dirty:
+            self._save_cache_now()
+        self._cache_save_timer.stop()
+        self._cache_dirty = False
+        try:
+            self.client.close()
+        except Exception:
+            traceback.print_exc()
+
+        self._platform_key = key
+        self._set_platform_buttons()
+        self.model.clear()
+        self._last_total = 0
+        self._current_start = 0
+        self._last_user = None
+        self._refresh_counter()
+        self._apply_platform_ui()
+        self._update_controls()
+
+    def _ensure_platform_ready(self) -> bool:
+        if self._is_platform_ready():
+            return True
+        QMessageBox.information(
+            self,
+            "Площадка в разработке",
+            f"{self._platform_title()} пока добавлена только как переключатель. "
+            "Поиск и загрузка документов будут подключены следующим этапом.",
+        )
+        return False
+
     def _apply_selected_browser(self) -> None:
         browser = self.sidebar.selected_browser()
         self.client.configure_browser(
@@ -239,6 +335,8 @@ class MainWindow(QMainWindow):
 
     def _on_search(self) -> None:
         if self.runner.is_running():
+            return
+        if not self._ensure_platform_ready():
             return
 
         self._apply_selected_browser()
@@ -467,10 +565,14 @@ class MainWindow(QMainWindow):
     def _on_load_more(self) -> None:
         if self.runner.is_running():
             return
+        if not self._ensure_platform_ready():
+            return
         self._start_task(self.sidebar.search_params(), start=self._current_start, batches=1)
 
     def _on_load_all(self) -> None:
         if self.runner.is_running():
+            return
+        if not self._ensure_platform_ready():
             return
         self._start_task(self.sidebar.search_params(), start=self._current_start, batches=10_000)
 
@@ -488,6 +590,8 @@ class MainWindow(QMainWindow):
 
     def _on_download_documents(self) -> None:
         if self.runner.is_running():
+            return
+        if not self._ensure_platform_ready():
             return
         procedures = self._selected_procedures()
         if not procedures:
@@ -795,14 +899,17 @@ class MainWindow(QMainWindow):
 
     def _update_controls(self) -> None:
         running = self.runner.is_running()
+        platform_ready = self._is_platform_ready()
         loaded = self.model.rowCount()
         total = self._last_total
         has_more = total > 0 and self._current_start < total
-        self.btn_load_more.setEnabled(not running and has_more)
-        self.btn_load_all.setEnabled(not running and has_more)
-        self.btn_download_docs.setEnabled(not running and loaded > 0)
-        self.btn_export.setEnabled(loaded > 0)
-        self.sidebar.set_controls_enabled(not running)
+        self.btn_platform_gpb.setEnabled(not running)
+        self.btn_platform_roseltorg.setEnabled(not running)
+        self.btn_load_more.setEnabled(platform_ready and not running and has_more)
+        self.btn_load_all.setEnabled(platform_ready and not running and has_more)
+        self.btn_download_docs.setEnabled(platform_ready and not running and loaded > 0)
+        self.btn_export.setEnabled(platform_ready and loaded > 0)
+        self.sidebar.set_controls_enabled(platform_ready and not running)
 
     # --------------- кэш
     def _schedule_cache_save(self) -> None:

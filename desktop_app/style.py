@@ -16,6 +16,29 @@ QMainWindow { background-color: #f7f8fa; }
     font-size: 11px;
     color: #6a717a;
 }
+#PlatformSwitcher {
+    background-color: #eef0f4;
+    border: 1px solid #d9dde3;
+    border-radius: 8px;
+}
+QPushButton#PlatformButton {
+    padding: 6px 12px;
+    border: 0;
+    border-radius: 6px;
+    background-color: transparent;
+    color: #4a515a;
+    font-weight: 600;
+}
+QPushButton#PlatformButton:hover {
+    background-color: #e2e6ec;
+}
+QPushButton#PlatformButton:checked {
+    background-color: #3572e0;
+    color: #ffffff;
+}
+QPushButton#PlatformButton:disabled {
+    color: #9aa1aa;
+}
 #SessionBadge {
     padding: 4px 10px;
     border-radius: 10px;
