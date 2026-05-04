@@ -7,9 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QModelIndex, QTimer, Qt, Slot
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QButtonGroup,
     QDialog,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStatusBar,
     QTableView,
     QVBoxLayout,
@@ -158,27 +160,29 @@ class MainWindow(QMainWindow):
         self.table.setModel(self.proxy)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(8, Qt.AscendingOrder)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        # Иначе layout раздувает окно по широкому sizeHint таблицы; скролл — только внутри QTableView.
+        self.table.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Expanding,
+        )
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setDefaultSectionSize(26)
         hh = self.table.horizontalHeader()
-        hh.setSectionResizeMode(QHeaderView.Interactive)
-        hh.setSectionResizeMode(3, QHeaderView.Stretch)
-        self.table.setColumnWidth(0, 170)
-        self.table.setColumnWidth(1, 180)
-        self.table.setColumnWidth(2, 230)
-        self.table.setColumnWidth(4, 220)
-        self.table.setColumnWidth(5, 80)
-        self.table.setColumnWidth(6, 95)
-        self.table.setColumnWidth(7, 145)
-        self.table.setColumnWidth(8, 145)
-        self.table.setColumnWidth(9, 170)
-        self.table.setColumnWidth(10, 200)
+        hh.setStretchLastSection(False)
+        hh.setCascadingSectionResizes(False)
         self.table.setWordWrap(False)
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.doubleClicked.connect(self._on_row_double_clicked)
+        self.proxy.modelReset.connect(self._apply_table_column_widths)
+        self.table.viewport().installEventFilter(self)
+        self._apply_table_column_widths()
         main_area_layout.addWidget(self.table, 1)
 
         bottom_bar = QFrame()
@@ -225,6 +229,8 @@ class MainWindow(QMainWindow):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setWidget(page)
         self.setCentralWidget(scroll)
 
@@ -249,6 +255,30 @@ class MainWindow(QMainWindow):
         act_focus_query.setShortcut(QKeySequence("Ctrl+F"))
         act_focus_query.triggered.connect(lambda: self.sidebar.ed_query.setFocus())
         self.addAction(act_focus_query)
+
+        QTimer.singleShot(0, self._apply_table_column_widths)
+
+    def _apply_table_column_widths(self) -> None:
+        """Фиксированные ширины колонок — иначе заголовок сжимает их под вьюпорт и скролл не появляется."""
+        hh = self.table.horizontalHeader()
+        widths = [170, 180, 230, 280, 220, 80, 95, 145, 145, 170, 200]
+        n = min(len(widths), self.proxy.columnCount())
+        for i in range(n):
+            hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
+            hh.resizeSection(i, widths[i])
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
+            wheel = event
+            if wheel.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                bar = self.table.horizontalScrollBar()
+                dy = wheel.angleDelta().y()
+                dx = wheel.angleDelta().x()
+                step = dx if dx != 0 else dy
+                if step != 0:
+                    bar.setValue(bar.value() - step)
+                    return True
+        return super().eventFilter(watched, event)
 
     # ------------------------------------------------------------------ задачи
     def _is_platform_ready(self) -> bool:
