@@ -202,6 +202,8 @@ class EtpClient:
         self.port = port
         self.driver: Optional[ChromeWebDriver | EdgeWebDriver] = None
         self._token: str = ""
+        self.target_url = ETP_URL
+        self.target_host = "etpgaz.gazprombank.ru"
         self.browser = BrowserLaunchConfig(
             key="chrome",
             label="Google Chrome",
@@ -283,7 +285,7 @@ class EtpClient:
             if self._has_devtools_page():
                 return
             if not opened:
-                opened = self._open_devtools_page(ETP_URL) or self._open_devtools_page("about:blank")
+                opened = self._open_devtools_page(self.target_url) or self._open_devtools_page("about:blank")
             time.sleep(0.5)
         raise RuntimeError(
             f"{self.browser.label} слушает DevTools на порту {self.port}, но не отдаёт открытые вкладки. "
@@ -341,7 +343,7 @@ class EtpClient:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--start-maximized",
-                ETP_URL,
+                self.target_url,
             ], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
         def wait_for_port(seconds: int) -> bool:
@@ -418,7 +420,7 @@ class EtpClient:
         for h in handles:
             try:
                 self.driver.switch_to.window(h)
-                if "etpgaz.gazprombank.ru" in (self.driver.current_url or ""):
+                if self.target_host in (self.driver.current_url or ""):
                     return True
             except Exception:
                 continue
@@ -432,19 +434,19 @@ class EtpClient:
                 continue
         try:
             self.driver.execute_script(
-                "window.open('https://etpgaz.gazprombank.ru/#com/procedure/index', '_blank');"
+                f"window.open('{self.target_url}', '_blank');"
             )
         except Exception:
             pass
         try:
             for h in self.driver.window_handles:
                 self.driver.switch_to.window(h)
-                if "etpgaz.gazprombank.ru" in (self.driver.current_url or ""):
+                if self.target_host in (self.driver.current_url or ""):
                     return True
         except Exception:
             pass
         try:
-            self.driver.get("https://etpgaz.gazprombank.ru/#com/procedure/index")
+            self.driver.get(self.target_url)
             return True
         except Exception:
             return False
@@ -729,6 +731,10 @@ TREND_PUR_LABELS = {
 
 STATUS_LABELS = [
     "Активные",
+    "Приём предложений",
+    "Прием предложений",
+    "Прием заявок на допуск",
+    "Проверка заявок на допуск",
     "Прием заявок",
     "Ожидает начала регистрации",
     "Ожидает начала процедуры",
@@ -740,6 +746,8 @@ STATUS_LABELS = [
     "Завершение процедуры",
     "Рассмотрение заявок",
     "Подведение итогов",
+    "В архиве",
+    "Процедура отменена",
 ]
 
 STEP_ID_LABELS = {

@@ -1038,7 +1038,7 @@ def setup_driver(
     if fresh_profile:
         import tempfile
 
-        user_data_dir = Path(tempfile.gettempdir()) / "chrome_etp_explore_profile"
+        user_data_dir = Path(tempfile.gettempdir()) / f"chrome_etp_explore_profile_{int(time.time())}"
         user_data_dir.mkdir(exist_ok=True)
         profile_name = "Default"
         log(f"Используется временный профиль: {user_data_dir}", level="INFO")

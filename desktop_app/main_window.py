@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from etp_client import EtpClient, step_id_label, trend_pur_label
+from roseltorg_client import RoseltorgClient
 
 from .constants import APP_TITLE, CACHE_FILE, COLUMNS, DOCUMENTS_DIR, VIEW_URL
 from .keywords import load_keyword_items, parse_keywords, save_keyword_items
@@ -251,7 +252,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ задачи
     def _is_platform_ready(self) -> bool:
-        return self._platform_key == "gpb"
+        return self._platform_key in {"gpb", "roseltorg"}
 
     def _platform_title(self) -> str:
         return "Росэлторг" if self._platform_key == "roseltorg" else "ЭТП ГПБ"
@@ -263,11 +264,11 @@ class MainWindow(QMainWindow):
     def _apply_platform_ui(self) -> None:
         if self._platform_key == "roseltorg":
             self.title_label.setText("Росэлторг — Актуальные процедуры")
-            self.subtitle_label.setText("Модуль площадки в разработке")
-            self.lbl_counter.setText("Росэлторг пока не реализован. Переключитесь на ЭТП ГПБ для поиска.")
+            self.subtitle_label.setText("Поиск, фильтры и ключевые слова")
+            self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
             self.user_label.setText("Пользователь: —")
-            self._set_badge("idle", "○  Росэлторг в разработке")
-            self.status_msg.setText("Выбрана площадка Росэлторг. Поиск будет доступен после реализации модуля.")
+            self._set_badge("idle", "○  Росэлторг")
+            self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
         else:
             self.title_label.setText("ЭТП ГПБ — Актуальные процедуры")
             self.subtitle_label.setText("Поиск, фильтры и экспорт")
@@ -302,6 +303,7 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
         self._platform_key = key
+        self.client = RoseltorgClient() if key == "roseltorg" else EtpClient()
         self._set_platform_buttons()
         self.model.clear()
         self._last_total = 0
@@ -351,7 +353,7 @@ class MainWindow(QMainWindow):
         self.proxy.set_filters(filters)
         self.model.set_keywords(filters.keywords)
 
-        if CACHE_FILE.exists():
+        if self._platform_key == "gpb" and CACHE_FILE.exists():
             choice = self._ask_cache_choice()
             if choice == "cancel":
                 return
@@ -593,6 +595,14 @@ class MainWindow(QMainWindow):
             return
         if not self._ensure_platform_ready():
             return
+        if self._platform_key == "roseltorg":
+            QMessageBox.information(
+                self,
+                "Скачивание документов",
+                "Для Росэлторга сейчас реализован поиск процедур. "
+                "Скачивание документов подключим отдельным этапом.",
+            )
+            return
         procedures = self._selected_procedures()
         if not procedures:
             QMessageBox.information(
@@ -798,6 +808,9 @@ class MainWindow(QMainWindow):
         pid = proc.get("id")
         if not pid:
             return
+        if proc.get("url"):
+            webbrowser.open(str(proc["url"]))
+            return
         webbrowser.open(VIEW_URL.format(pid=pid))
 
     # --------------- экспорт
@@ -907,7 +920,7 @@ class MainWindow(QMainWindow):
         self.btn_platform_roseltorg.setEnabled(not running)
         self.btn_load_more.setEnabled(platform_ready and not running and has_more)
         self.btn_load_all.setEnabled(platform_ready and not running and has_more)
-        self.btn_download_docs.setEnabled(platform_ready and not running and loaded > 0)
+        self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and loaded > 0)
         self.btn_export.setEnabled(platform_ready and loaded > 0)
         self.sidebar.set_controls_enabled(platform_ready and not running)
 

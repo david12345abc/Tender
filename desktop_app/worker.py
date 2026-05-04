@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -183,8 +184,17 @@ def make_search_task(
         probe_model = ProcedureTableModel()
         probe_proxy = ProcedureFilterProxy()
         probe_proxy.setSourceModel(probe_model)
+        probe_filters = client_filters
+        is_roseltorg = "roseltorg" in str(getattr(client, "target_host", ""))
         if client_filters is not None:
-            probe_proxy.set_filters(client_filters)
+            # Для Росэлторга быстрый поиск выполняет сервер. Повторная локальная
+            # фильтрация по подстроке ломает выдачу и счётчики.
+            if is_roseltorg and getattr(client_filters, "quick_search", ""):
+                probe_filters = replace(client_filters, quick_search="")
+            probe_proxy.set_filters(probe_filters)
+            set_client_filters = getattr(client, "set_client_filters", None)
+            if callable(set_client_filters):
+                set_client_filters(client_filters)
 
         while True:
             if w.is_stop_requested():
@@ -199,7 +209,15 @@ def make_search_task(
                 limit=request_limit,
                 date_from=params.date_from or None,
                 date_to=params.date_to or None,
-                query=params.query or None,
+                query=(
+                    params.query
+                    or (
+                        getattr(client_filters, "quick_search", "")
+                        if is_roseltorg and client_filters is not None
+                        else ""
+                    )
+                    or None
+                ),
                 tag_id=params.tag_id,
                 sort=params.sort,
                 direction=params.direction,
@@ -226,17 +244,24 @@ def make_search_task(
                 return
             if res.get("no_access") or res.get("no_session"):
                 msg = res.get("message") or "Нет доступа / сессия не активна."
+                host = str(getattr(client, "target_host", ""))
+                login_hint = (
+                    "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
+                    "затем снова нажмите «Поиск»."
+                    if "roseltorg" in host
+                    else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                    "затем снова нажмите «Поиск»."
+                )
                 w.session.emit(
                     False,
-                    f"{msg}\n\nВ Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
-                    "затем снова нажмите «Поиск».",
+                    f"{msg}\n\n{login_hint}",
                 )
                 return
             procs = res.get("procedures") or []
             if total is None:
                 total = int(res.get("totalCount") or 0)
             accepted = procs
-            if client_filters is not None:
+            if probe_filters is not None:
                 probe_model.set_rows(procs)
                 accepted = []
                 for i in range(probe_proxy.rowCount()):
