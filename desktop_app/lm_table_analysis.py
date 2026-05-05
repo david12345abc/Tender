@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -123,7 +124,7 @@ def call_lm_studio_chat(
     model: str,
     system_prompt: str,
     user_prompt: str,
-    timeout_sec: int = 300,
+    timeout_sec: int = 900,
 ) -> str:
     url = base_url.rstrip("/") + "/v1/chat/completions"
     payload: dict[str, Any] = {
@@ -153,6 +154,8 @@ def call_lm_studio_chat(
         except Exception:
             pass
         raise RuntimeError(f"LM Studio HTTP {e.code}: {e.reason}. {detail}") from e
+    except (TimeoutError, socket.timeout) as e:
+        raise RuntimeError(f"LM Studio не ответил за {timeout_sec} сек. (таймаут).") from e
     except URLError as e:
         raise RuntimeError(f"Не удалось подключиться к LM Studio: {e}") from e
 
@@ -177,8 +180,6 @@ def build_result_row(
     """Строка для QTableWidget в порядке ANALYSIS_TABLE_HEADERS_RU."""
     if parsed is None:
         parsed = {k: "—" for k in ANALYSIS_JSON_KEYS}
-        if error:
-            parsed["customer_name"] = error
     return [
         registry,
         detail_url,

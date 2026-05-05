@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Iterable
 
 MAX_DOCUMENT_FILES = 80
-MAX_TEXT_PER_FILE = 20_000
-MAX_DOCUMENT_TEXT = 120_000
+MAX_TEXT_PER_FILE = 12_000
+MAX_DOCUMENT_TEXT = 60_000
 
 ARCHIVE_SUFFIXES = {
     ".zip",
@@ -23,7 +23,22 @@ ARCHIVE_SUFFIXES = {
     ".bz2",
     ".xz",
 }
-TEXT_SUFFIXES = {".txt", ".csv", ".xml", ".json", ".html", ".htm", ".log"}
+TEXT_SUFFIXES = {
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".xml",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".html",
+    ".htm",
+    ".log",
+}
 
 
 def _is_archive(path: Path) -> bool:
@@ -131,20 +146,98 @@ def _read_xlsx(path: Path) -> str:
     return "\n".join(parts)
 
 
+def _read_xls_via_excel(path: Path) -> str:
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    excel = None
+    try:
+        excel = win32com.client.DispatchEx("Excel.Application")
+        excel.Visible = False
+        excel.DisplayAlerts = False
+        wb = excel.Workbooks.Open(str(path), ReadOnly=True)
+        try:
+            parts: list[str] = []
+            for sheet in list(wb.Worksheets)[:10]:
+                parts.append(f"Лист: {sheet.Name}")
+                used = sheet.UsedRange
+                values = used.Value
+                if values is None:
+                    continue
+                if not isinstance(values, tuple):
+                    values = ((values,),)
+                elif values and not isinstance(values[0], tuple):
+                    values = (values,)
+                for row_index, row in enumerate(values, start=1):
+                    row_values = [str(v).strip() for v in row if v is not None and str(v).strip()]
+                    if row_values:
+                        parts.append(" | ".join(row_values))
+                    if row_index >= 300:
+                        parts.append("[лист обрезан]")
+                        break
+            return "\n".join(parts)
+        finally:
+            wb.Close(False)
+    finally:
+        if excel is not None:
+            excel.Quit()
+        pythoncom.CoUninitialize()
+
+
 def _read_pdf(path: Path) -> str:
+    parts: list[str] = []
     try:
         from pypdf import PdfReader
-    except Exception:
-        from PyPDF2 import PdfReader  # type: ignore
 
-    reader = PdfReader(str(path))
-    parts: list[str] = []
-    for page in list(reader.pages)[:30]:
-        try:
-            parts.append(page.extract_text() or "")
-        except Exception:
-            parts.append("")
+        reader = PdfReader(str(path))
+        for page in list(reader.pages)[:30]:
+            try:
+                parts.append(page.extract_text() or "")
+            except Exception:
+                parts.append("")
+    except Exception:
+        pass
     return "\n".join(p for p in parts if p.strip())
+
+
+def _read_pptx(path: Path) -> str:
+    from pptx import Presentation
+
+    prs = Presentation(str(path))
+    parts: list[str] = []
+    for idx, slide in enumerate(prs.slides, start=1):
+        parts.append(f"Слайд {idx}")
+        for shape in slide.shapes:
+            if hasattr(shape, "text"):
+                text = str(shape.text or "").strip()
+                if text:
+                    parts.append(text)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        parts.append(" | ".join(cells))
+    return "\n".join(parts)
+
+
+def _read_odf(path: Path) -> str:
+    from odf import teletype
+    from odf.opendocument import load
+    from odf.text import P
+    from odf.table import TableCell
+
+    doc = load(str(path))
+    parts: list[str] = []
+    for node in doc.getElementsByType(P):
+        text = teletype.extractText(node).strip()
+        if text:
+            parts.append(text)
+    for cell in doc.getElementsByType(TableCell):
+        text = teletype.extractText(cell).strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
 
 
 def _read_rtf(path: Path) -> str:
@@ -182,8 +275,14 @@ def _extract_text_from_file(path: Path) -> str:
         return _read_docx(path)
     if suffix in {".xlsx", ".xlsm"}:
         return _read_xlsx(path)
+    if suffix == ".xls":
+        return _read_xls_via_excel(path)
     if suffix == ".pdf":
         return _read_pdf(path)
+    if suffix == ".pptx":
+        return _read_pptx(path)
+    if suffix in {".odt", ".ods", ".odp"}:
+        return _read_odf(path)
     if suffix == ".rtf":
         return _read_rtf(path)
     if suffix == ".doc":
@@ -215,7 +314,12 @@ def _unique_path(path: Path) -> Path:
         n += 1
 
 
-def _read_documents_text_from_files(files: list[Path], progress=None) -> str:
+def _read_documents_text_from_files(
+    files: list[Path],
+    progress=None,
+    issues: list[dict] | None = None,
+    registry: str = "",
+) -> str:
     sections: list[str] = []
     for index, path in enumerate(files[:MAX_DOCUMENT_FILES], start=1):
         if progress:
@@ -227,9 +331,27 @@ def _read_documents_text_from_files(files: list[Path], progress=None) -> str:
             text = _extract_text_from_file(path).strip()
         except Exception as e:
             sections.append(f"--- Файл: {path.name} ---\n[не удалось извлечь текст: {e}]")
+            if issues is not None:
+                issues.append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": path.name,
+                        "message": f"Не удалось извлечь текст из файла: {e}",
+                    }
+                )
             continue
         if not text:
             sections.append(f"--- Файл: {path.name} ---\n[текст не извлечён или файл не поддерживается]")
+            if issues is not None:
+                issues.append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": path.name,
+                        "message": "Текст не извлечён или формат файла не поддерживается.",
+                    }
+                )
             continue
         if len(text) > MAX_TEXT_PER_FILE:
             text = text[:MAX_TEXT_PER_FILE] + "\n[текст файла обрезан]"
@@ -241,7 +363,13 @@ def _read_documents_text_from_files(files: list[Path], progress=None) -> str:
     return result
 
 
-def prepare_documents_for_analysis(files: list[Path], output_dir: Path, progress=None) -> tuple[str, Path]:
+def prepare_documents_for_analysis(
+    files: list[Path],
+    output_dir: Path,
+    progress=None,
+    issues: list[dict] | None = None,
+    registry: str = "",
+) -> tuple[str, Path]:
     """Сохраняет разархивированные документы в output_dir и читает все файлы рекурсивно."""
     if output_dir.exists():
         shutil.rmtree(output_dir, ignore_errors=True)
@@ -275,6 +403,15 @@ def prepare_documents_for_analysis(files: list[Path], output_dir: Path, progress
                 marker = extract_dir / "ОШИБКА_РАСПАКОВКИ.txt"
                 extract_dir.mkdir(parents=True, exist_ok=True)
                 marker.write_text(f"Не удалось распаковать {source.name}: {e}", encoding="utf-8")
+                if issues is not None:
+                    issues.append(
+                        {
+                            "severity": "critical",
+                            "registry": registry,
+                            "file": source.name,
+                            "message": f"Не удалось распаковать архив: {e}",
+                        }
+                    )
             continue
 
         if not is_inside_output:
@@ -286,9 +423,23 @@ def prepare_documents_for_analysis(files: list[Path], output_dir: Path, progress
         (p for p in output_dir.rglob("*") if p.is_file()),
         key=lambda p: str(p).lower(),
     )
-    text = _read_documents_text_from_files(readable_files, progress=progress)
+    text = _read_documents_text_from_files(
+        readable_files,
+        progress=progress,
+        issues=issues,
+        registry=registry,
+    )
     if not readable_files and archive_count == 0:
         text = "[документы не найдены]"
+        if issues is not None:
+            issues.append(
+                {
+                    "severity": "important",
+                    "registry": registry,
+                    "file": "",
+                    "message": "Документы не найдены.",
+                }
+            )
     return text, output_dir
 
 

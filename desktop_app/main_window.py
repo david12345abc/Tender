@@ -906,6 +906,47 @@ class MainWindow(QMainWindow):
         table.cellDoubleClicked.connect(open_analysis_file)
         layout.addWidget(table, 1)
 
+        issues = self._analysis_sink.get("document_issues") or []
+        issues_label = QLabel("Ошибки обработки документов")
+        issues_label.setStyleSheet("font-weight: 600; margin-top: 6px;")
+        layout.addWidget(issues_label)
+
+        if issues:
+            issue_table = QTableWidget(len(issues), 4)
+            issue_table.setHorizontalHeaderLabels(["!", "Важность", "Реестровый номер", "Описание"])
+            issue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            issue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            issue_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+            issue_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            issue_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            issue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+            issue_table.setColumnWidth(0, 28)
+            issue_table.setMaximumHeight(150)
+            for r, issue in enumerate(issues):
+                severity = str(issue.get("severity") or "important")
+                is_critical = severity == "critical"
+                color = QColor("#c00000" if is_critical else "#b8860b")
+                level_text = "Критичная" if is_critical else "Важная"
+                file_text = str(issue.get("file") or "").strip()
+                message = str(issue.get("message") or "").strip()
+                if file_text:
+                    message = f"{file_text}: {message}"
+                values = ["!", level_text, str(issue.get("registry") or ""), message]
+                for c, val in enumerate(values):
+                    item = QTableWidgetItem(val)
+                    item.setToolTip(val)
+                    if c in {0, 1}:
+                        font = QFont(item.font())
+                        font.setBold(True)
+                        item.setFont(font)
+                        item.setForeground(color)
+                    issue_table.setItem(r, c, item)
+            layout.addWidget(issue_table)
+        else:
+            no_issues = QLabel("Ошибок обработки документов нет.")
+            no_issues.setStyleSheet("color: #4a515a;")
+            layout.addWidget(no_issues)
+
         raw_map = self._analysis_sink.get("raw_by_registry") or {}
         if raw_map:
 

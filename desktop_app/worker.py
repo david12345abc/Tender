@@ -28,6 +28,12 @@ def _safe_folder_name(name: str, default: str = "procedure") -> str:
     clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
     return clean[:120] or default
 
+
+def _trim_for_llm(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n\n[текст обрезан для повторного запроса к модели]"
+
 class Worker(QObject):
     """Универсальный работник: выполняет одну задачу за жизнь.
 
@@ -393,6 +399,7 @@ def make_analyze_procedure_task(
         sink["raw_by_registry"] = {}
         sink["title_by_registry"] = {}
         sink["unpacked_docs_by_registry"] = {}
+        sink["document_issues"] = []
 
         if not procedures:
             w.error.emit("Не выбраны процедуры для анализа.")
@@ -446,7 +453,22 @@ def make_analyze_procedure_task(
             )[:4000]
             downloaded_docs: list[Path] = []
             documents_text = ""
-            if isinstance(doc_list, list) and doc_list:
+            unpacked_dir = ANALYSIS_DIR / "разархивированные_документы" / _safe_folder_name(registry)
+            unpacked_dir.mkdir(parents=True, exist_ok=True)
+            sink["unpacked_docs_by_registry"][registry] = str(unpacked_dir)
+            if not isinstance(doc_list, list) or not doc_list:
+                note = "На странице карточки не найдены ссылки на документы для скачивания."
+                (unpacked_dir / "Документы_не_найдены.txt").write_text(note, encoding="utf-8")
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "",
+                        "message": note,
+                    }
+                )
+                documents_text += f"\n--- Документы ---\n[{note}]\n"
+            else:
                 docs_dir = ANALYSIS_DIR / "_downloaded_docs" / _safe_folder_name(registry)
                 for doc_index, link in enumerate(doc_list, start=1):
                     if w.is_stop_requested():
@@ -461,19 +483,47 @@ def make_analyze_procedure_task(
                             client.download_document_link(link, docs_dir, index=doc_index)
                         )
                     except Exception as e:
+                        err_note = (
+                            f"Документ {doc_index}: {(link or {}).get('text') or (link or {}).get('href')}\n"
+                            f"Не удалось скачать: {e}\n"
+                        )
+                        (unpacked_dir / f"Ошибка_скачивания_{doc_index}.txt").write_text(
+                            err_note,
+                            encoding="utf-8",
+                        )
+                        sink["document_issues"].append(
+                            {
+                                "severity": "critical",
+                                "registry": registry,
+                                "file": str((link or {}).get("text") or (link or {}).get("href") or ""),
+                                "message": f"Не удалось скачать документ: {e}",
+                            }
+                        )
                         documents_text += (
                             f"\n--- Документ {doc_index}: {(link or {}).get('text') or (link or {}).get('href')} ---\n"
                             f"[не удалось скачать: {e}]\n"
                         )
                 if downloaded_docs:
-                    unpacked_dir = ANALYSIS_DIR / "разархивированные_документы" / _safe_folder_name(registry)
                     extracted_text, extracted_folder = prepare_documents_for_analysis(
                         downloaded_docs,
                         unpacked_dir,
                         progress=w.progress.emit,
+                        issues=sink["document_issues"],
+                        registry=registry,
                     )
                     documents_text += "\n" + extracted_text
                     sink["unpacked_docs_by_registry"][registry] = str(extracted_folder)
+                else:
+                    note = "Ссылки на документы были найдены, но скачать документы не удалось."
+                    (unpacked_dir / "Документы_не_скачаны.txt").write_text(note, encoding="utf-8")
+                    sink["document_issues"].append(
+                        {
+                            "severity": "critical",
+                            "registry": registry,
+                            "file": "",
+                            "message": note,
+                        }
+                    )
 
             w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
             parsed = None
@@ -484,13 +534,53 @@ def make_analyze_procedure_task(
                     registry, detail_url, doc_summary, page_text, documents_text
                 )
                 raw_llm = call_lm_studio_chat(
-                    lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=300
+                    lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=900
                 )
                 sink["raw_by_registry"][registry] = raw_llm
                 parsed = parse_llm_table_json(raw_llm)
             except Exception as e:
-                err_msg = str(e)
-                sink["raw_by_registry"][registry] = raw_llm + ("\n---\n" if raw_llm else "") + err_msg
+                first_err = str(e)
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "LM Studio",
+                        "message": f"Первый запрос к модели не выполнен: {first_err}. Пробую укороченный контекст.",
+                    }
+                )
+                try:
+                    w.progress.emit(f"Повторный запрос к LM Studio с укороченным контекстом: {registry}…")
+                    short_prompt = build_analysis_user_prompt(
+                        registry,
+                        detail_url,
+                        doc_summary,
+                        _trim_for_llm(page_text, 60_000),
+                        _trim_for_llm(documents_text, 20_000),
+                    )
+                    raw_llm = call_lm_studio_chat(
+                        lm_base_url,
+                        lm_model,
+                        system_prompt,
+                        short_prompt,
+                        timeout_sec=900,
+                    )
+                    sink["raw_by_registry"][registry] = raw_llm
+                    parsed = parse_llm_table_json(raw_llm)
+                except Exception as retry_error:
+                    err_msg = str(retry_error)
+                    sink["document_issues"].append(
+                        {
+                            "severity": "critical",
+                            "registry": registry,
+                            "file": "LM Studio",
+                            "message": f"Повторный запрос к модели не выполнен: {err_msg}",
+                        }
+                    )
+                    sink["raw_by_registry"][registry] = (
+                        raw_llm
+                        + ("\n---\n" if raw_llm else "")
+                        + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
+                    )
 
             rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
 

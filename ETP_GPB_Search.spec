@@ -18,6 +18,8 @@ a = Analysis(
         *collect_submodules('pypdf'),
         *collect_submodules('py7zr'),
         *collect_submodules('rarfile'),
+        *collect_submodules('pptx'),
+        *collect_submodules('odf'),
     ],
     hookspath=[],
     hooksconfig={},
