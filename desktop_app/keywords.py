@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Iterable
 
-from .constants import KEYWORDS_FILE
+from .constants import KEYWORDS_FILE, bundled_keywords_template_path
 
 
 def normalize_keyword(text: str) -> str:
@@ -53,19 +54,28 @@ def parse_keyword_items(text: str) -> list[tuple[bool, str]]:
     return items
 
 
+def _ensure_keywords_file(path: Path = KEYWORDS_FILE) -> None:
+    """Создаёт файл при отсутствии: в exe копирует шаблон из сборки, иначе пустой список."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    template = bundled_keywords_template_path()
+    if template is not None and template.resolve() != path.resolve():
+        try:
+            shutil.copy2(template, path)
+            return
+        except OSError:
+            pass
+    path.write_text("", encoding="utf-8")
+
+
 def load_keywords(path: Path = KEYWORDS_FILE) -> list[str]:
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-        return []
+    _ensure_keywords_file(path)
     return parse_keywords(path.read_text(encoding="utf-8"))
 
 
 def load_keyword_items(path: Path = KEYWORDS_FILE) -> list[tuple[bool, str]]:
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("", encoding="utf-8")
-        return []
+    _ensure_keywords_file(path)
     return parse_keyword_items(path.read_text(encoding="utf-8"))
 
 
@@ -87,4 +97,5 @@ def save_keyword_items(
 
 
 def keywords_as_text(path: Path = KEYWORDS_FILE) -> str:
-    return "\n".join(load_keywords(path))
+    _ensure_keywords_file(path)
+    return path.read_text(encoding="utf-8")

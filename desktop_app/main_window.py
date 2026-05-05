@@ -39,8 +39,8 @@ from PySide6.QtWidgets import (
 from etp_client import EtpClient, step_id_label, trend_pur_label
 from roseltorg_client import RoseltorgClient
 
-from .constants import APP_TITLE, CACHE_FILE, COLUMNS, DOCUMENTS_DIR, VIEW_URL
-from .keywords import load_keyword_items, parse_keywords, save_keyword_items
+from .constants import APP_TITLE, CACHE_FILE, COLUMNS, DOCUMENTS_DIR, KEYWORDS_FILE, VIEW_URL
+from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
@@ -456,10 +456,19 @@ class MainWindow(QMainWindow):
             )
             if not ok:
                 return
-            parsed = parse_keywords(text)
-            if not parsed:
+            # parse_keywords() отбрасывает строки с [ ] (выключено) — для «Добавить»
+            # нужна любая распознанная фраза; активность задаётся галочкой в списке.
+            rows = parse_keyword_items(text.strip())
+            if not rows:
+                QMessageBox.information(
+                    dialog,
+                    "Не добавлено",
+                    "Текст не принят: пустая строка, служебный фрагмент или слишком короткая фраза "
+                    "(до 2 символов, если это не аббревиатура заглавными буквами).",
+                )
                 return
-            item = QListWidgetItem(parsed[0])
+            _, keyword = rows[0]
+            item = QListWidgetItem(keyword)
             item.setFlags(
                 item.flags()
                 | Qt.ItemIsUserCheckable
@@ -493,11 +502,22 @@ class MainWindow(QMainWindow):
         items: list[tuple[bool, str]] = []
         for i in range(keyword_list.count()):
             item = keyword_list.item(i)
-            parsed = parse_keywords(item.text())
-            if not parsed:
+            rows = parse_keyword_items(item.text())
+            if not rows:
                 continue
-            items.append((item.checkState() == Qt.Checked, parsed[0]))
-        save_keyword_items(items)
+            _, keyword = rows[0]
+            items.append((item.checkState() == Qt.Checked, keyword))
+        try:
+            save_keyword_items(items)
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить",
+                "Не удалось записать файл ключевых слов (нет прав или диск недоступен).\n\n"
+                f"Путь: {KEYWORDS_FILE}\n\n"
+                f"Подробности: {e}",
+            )
+            return
         active_keywords = tuple(keyword for enabled, keyword in items if enabled)
         self.model.set_keywords(active_keywords)
         self.sidebar.refresh_keywords_count()
