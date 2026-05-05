@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import traceback
 import webbrowser
 from datetime import datetime
@@ -43,6 +44,7 @@ from etp_client import EtpClient, step_id_label, trend_pur_label
 from roseltorg_client import RoseltorgClient
 
 from .constants import (
+    ANALYSIS_DIR,
     APP_TITLE,
     CACHE_FILE,
     COLUMNS,
@@ -786,23 +788,87 @@ class MainWindow(QMainWindow):
         rows = self._analysis_sink.get("rows") or []
         self._on_task_done()
         if rows:
-            self._show_analysis_table_dialog(rows)
+            try:
+                summary_rows = self._save_analysis_tables(rows)
+            except Exception as e:
+                self._on_error(f"Не удалось сохранить файлы анализа: {e}")
+                return
+            self._show_analysis_table_dialog(summary_rows)
+
+    def _safe_analysis_filename(self, name: str, default: str = "analysis") -> str:
+        clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
+        return (clean[:160] or default) + ".xlsx"
+
+    def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+
+        ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+        title_by_registry = self._analysis_sink.get("title_by_registry") or {}
+        summary_rows: list[list[str]] = []
+
+        for row in rows:
+            registry = str(row[0] if len(row) > 0 else "").strip() or "unknown"
+            parsed_title = str(row[4] if len(row) > 4 else "").strip()
+            source_title = str(title_by_registry.get(registry) or "").strip()
+            title = parsed_title if parsed_title and parsed_title not in {"—", "не указано"} else source_title
+            filename = self._safe_analysis_filename(f"{registry}_{title[:80]}", registry)
+            path = ANALYSIS_DIR / filename
+            n = 2
+            while path.exists():
+                path = ANALYSIS_DIR / self._safe_analysis_filename(f"{registry}_{title[:70]}_{n}", registry)
+                n += 1
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Таблица"
+            ws.append(ANALYSIS_TABLE_HEADERS_RU)
+            ws.append(row)
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+            for col in range(1, len(ANALYSIS_TABLE_HEADERS_RU) + 1):
+                ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 24
+            for col in (2, 3):
+                value = str(ws.cell(row=2, column=col).value or "")
+                if value.startswith(("http://", "https://")):
+                    ws.cell(row=2, column=col).hyperlink = value
+                    ws.cell(row=2, column=col).style = "Hyperlink"
+
+            ws_fields = wb.create_sheet("Поля")
+            ws_fields.append(["№", "Поле", "Значение"])
+            for cell in ws_fields[1]:
+                cell.font = Font(bold=True)
+            for idx, (header, value) in enumerate(zip(ANALYSIS_TABLE_HEADERS_RU, row), start=1):
+                ws_fields.append([idx, header, value])
+                if str(value).startswith(("http://", "https://")):
+                    ws_fields.cell(row=idx + 1, column=3).hyperlink = str(value)
+                    ws_fields.cell(row=idx + 1, column=3).style = "Hyperlink"
+            ws_fields.column_dimensions["A"].width = 8
+            ws_fields.column_dimensions["B"].width = 55
+            ws_fields.column_dimensions["C"].width = 90
+
+            wb.save(path)
+            summary_rows.append([registry, title or "—", str(path)])
+
+        self._analysis_sink["summary_rows"] = summary_rows
+        return summary_rows
 
     def _show_analysis_table_dialog(self, rows: list[list[str]]) -> None:
         dlg = QDialog(self)
         n = len(rows)
         dlg.setWindowTitle("Результат анализа карточки ЭТП ГПБ" + (f" ({n} процедур)" if n != 1 else ""))
-        dlg.resize(min(1480, self.width() + 80), min(620, self.height()))
+        dlg.resize(min(1100, self.width() + 80), min(520, self.height()))
         layout = QVBoxLayout(dlg)
         hint = QLabel(
-            "Текст собран со страницы извещения (сведения о процедуре, организатор, лоты, документация). "
-            "Таблицу заполняет локальная модель — проверьте юридически значимые поля вручную."
+            "Полная таблица анализа сохранена в Excel-файлы. "
+            "Нажмите на ссылку в третьей колонке, чтобы открыть файл с заполненной таблицей."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        table = QTableWidget(len(rows), len(ANALYSIS_TABLE_HEADERS_RU))
-        table.setHorizontalHeaderLabels(ANALYSIS_TABLE_HEADERS_RU)
+        headers = ["Реестровый номер", "Наименование", "Файл с таблицей"]
+        table = QTableWidget(len(rows), len(headers))
+        table.setHorizontalHeaderLabels(headers)
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(True)
@@ -813,7 +879,25 @@ class MainWindow(QMainWindow):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val[:2000] if val else "")
+                if c == 2:
+                    item.setText("ссылка")
+                    item.setToolTip(val)
                 table.setItem(r, c, item)
+
+        def open_analysis_file(row: int, col: int) -> None:
+            if col != 2:
+                return
+            source = rows[row][2] if 0 <= row < len(rows) and len(rows[row]) > 2 else ""
+            if source:
+                try:
+                    import subprocess
+
+                    subprocess.Popen(["explorer", "/select,", str(Path(source).resolve())])
+                except Exception:
+                    webbrowser.open(Path(source).resolve().as_uri())
+
+        table.cellClicked.connect(open_analysis_file)
+        table.cellDoubleClicked.connect(open_analysis_file)
         layout.addWidget(table, 1)
 
         raw_map = self._analysis_sink.get("raw_by_registry") or {}

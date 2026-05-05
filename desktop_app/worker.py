@@ -383,6 +383,7 @@ def make_analyze_procedure_task(
         sink.clear()
         sink["rows"] = []
         sink["raw_by_registry"] = {}
+        sink["title_by_registry"] = {}
 
         if not procedures:
             w.error.emit("Не выбраны процедуры для анализа.")
@@ -413,6 +414,8 @@ def make_analyze_procedure_task(
             registry = str(
                 proc.get("registry_number") or proc.get("procedure_number") or proc.get("id") or ""
             )
+            proc_title = str(proc.get("title") or proc.get("name") or "").strip()
+            sink["title_by_registry"][registry] = proc_title
             w.progress.emit(f"Сбор текста карточки {index}/{len(procedures)}: {registry}")
             try:
                 snap = client.extract_procedure_card_text(proc, progress=w.progress.emit)
