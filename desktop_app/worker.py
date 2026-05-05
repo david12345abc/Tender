@@ -9,7 +9,8 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
-from .constants import VIEW_URL
+from .constants import ANALYSIS_DIR, VIEW_URL
+from .document_text import prepare_documents_for_analysis
 from .lm_table_analysis import (
     build_analysis_system_prompt,
     build_analysis_user_prompt,
@@ -19,6 +20,13 @@ from .lm_table_analysis import (
 )
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import SearchParams
+
+
+def _safe_folder_name(name: str, default: str = "procedure") -> str:
+    import re
+
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
+    return clean[:120] or default
 
 class Worker(QObject):
     """Универсальный работник: выполняет одну задачу за жизнь.
@@ -384,6 +392,7 @@ def make_analyze_procedure_task(
         sink["rows"] = []
         sink["raw_by_registry"] = {}
         sink["title_by_registry"] = {}
+        sink["unpacked_docs_by_registry"] = {}
 
         if not procedures:
             w.error.emit("Не выбраны процедуры для анализа.")
@@ -435,6 +444,36 @@ def make_analyze_procedure_task(
                 for d in (doc_list if isinstance(doc_list, list) else [])
                 if isinstance(d, dict) and (d.get("href"))
             )[:4000]
+            downloaded_docs: list[Path] = []
+            documents_text = ""
+            if isinstance(doc_list, list) and doc_list:
+                docs_dir = ANALYSIS_DIR / "_downloaded_docs" / _safe_folder_name(registry)
+                for doc_index, link in enumerate(doc_list, start=1):
+                    if w.is_stop_requested():
+                        return
+                    if not isinstance(link, dict) or not link.get("href"):
+                        continue
+                    try:
+                        w.progress.emit(
+                            f"Скачиваю документ {doc_index}/{len(doc_list)} для анализа: {registry}"
+                        )
+                        downloaded_docs.append(
+                            client.download_document_link(link, docs_dir, index=doc_index)
+                        )
+                    except Exception as e:
+                        documents_text += (
+                            f"\n--- Документ {doc_index}: {(link or {}).get('text') or (link or {}).get('href')} ---\n"
+                            f"[не удалось скачать: {e}]\n"
+                        )
+                if downloaded_docs:
+                    unpacked_dir = ANALYSIS_DIR / "разархивированные_документы" / _safe_folder_name(registry)
+                    extracted_text, extracted_folder = prepare_documents_for_analysis(
+                        downloaded_docs,
+                        unpacked_dir,
+                        progress=w.progress.emit,
+                    )
+                    documents_text += "\n" + extracted_text
+                    sink["unpacked_docs_by_registry"][registry] = str(extracted_folder)
 
             w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
             parsed = None
@@ -442,7 +481,7 @@ def make_analyze_procedure_task(
             err_msg: str | None = None
             try:
                 user_prompt = build_analysis_user_prompt(
-                    registry, detail_url, doc_summary, page_text
+                    registry, detail_url, doc_summary, page_text, documents_text
                 )
                 raw_llm = call_lm_studio_chat(
                     lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=300

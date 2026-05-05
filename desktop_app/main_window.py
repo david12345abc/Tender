@@ -804,6 +804,7 @@ class MainWindow(QMainWindow):
 
         ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
+        unpacked_by_registry = self._analysis_sink.get("unpacked_docs_by_registry") or {}
         summary_rows: list[list[str]] = []
 
         for row in rows:
@@ -837,7 +838,7 @@ class MainWindow(QMainWindow):
                 cells[1].text = str(value or "—")
 
             doc.save(path)
-            summary_rows.append([registry, title or "—", str(path)])
+            summary_rows.append([registry, title or "—", str(path), str(unpacked_by_registry.get(registry) or "")])
 
         self._analysis_sink["summary_rows"] = summary_rows
         return summary_rows
@@ -850,12 +851,13 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(dlg)
         hint = QLabel(
             "Полная таблица анализа сохранена в Word-файлы. "
-            "Нажмите «ссылка» в третьей колонке, чтобы открыть файл в Проводнике и выделить его."
+            "Нажмите «ссылка» в третьей колонке, чтобы выделить Word-файл, "
+            "или в четвёртой колонке, чтобы открыть папку с разархивированными документами."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        headers = ["Реестровый номер", "Наименование", "Файл с таблицей"]
+        headers = ["Реестровый номер", "Наименование", "Файл с таблицей", "Разархивированные документы"]
         table = QTableWidget(len(rows), len(headers))
         table.setHorizontalHeaderLabels(headers)
         hh = table.horizontalHeader()
@@ -864,7 +866,9 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         table.setColumnWidth(2, 80)
+        table.setColumnWidth(3, 120)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -872,24 +876,29 @@ class MainWindow(QMainWindow):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val[:2000] if val else "")
-                if c == 2:
-                    item.setText("ссылка")
+                if c in {2, 3}:
+                    item.setText("ссылка" if val else "—")
                     item.setToolTip(val)
-                    font = QFont(item.font())
-                    font.setUnderline(True)
-                    item.setFont(font)
-                    item.setForeground(QColor("#0645ad"))
+                    if val:
+                        font = QFont(item.font())
+                        font.setUnderline(True)
+                        item.setFont(font)
+                        item.setForeground(QColor("#0645ad"))
                 table.setItem(r, c, item)
 
         def open_analysis_file(row: int, col: int) -> None:
-            if col != 2:
+            if col not in {2, 3}:
                 return
-            source = rows[row][2] if 0 <= row < len(rows) and len(rows[row]) > 2 else ""
+            source = rows[row][col] if 0 <= row < len(rows) and len(rows[row]) > col else ""
             if source:
                 try:
                     import subprocess
 
-                    subprocess.Popen(["explorer", "/select,", str(Path(source).resolve())])
+                    resolved = Path(source).resolve()
+                    if col == 2:
+                        subprocess.Popen(["explorer", "/select,", str(resolved)])
+                    else:
+                        subprocess.Popen(["explorer", str(resolved)])
                 except Exception:
                     webbrowser.open(Path(source).resolve().as_uri())
 

@@ -134,7 +134,7 @@ const explicitToken = arguments[1] || '';
 _COLLECT_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
 (() => {
-  const exts = /\.(docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const links = [];
   const seen = new Set();
   function push(href, text) {
@@ -206,7 +206,7 @@ const callback = arguments[arguments.length - 1];
   const root = pickContainer();
   const pageText = String(root.innerText || root.textContent || "").trim();
 
-  const exts = /\.(docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml)(?:[?#]|$)/i;
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const docLinks = [];
   const seen = new Set();
   for (const a of Array.from(document.querySelectorAll("a[href]"))) {
@@ -570,7 +570,7 @@ class EtpClient:
         text = str(link.get("text") or "").strip()
         href = str(link.get("href") or "")
         for source in (text, href.rsplit("/", 1)[-1]):
-            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
+            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
             if m:
                 return self._safe_filename(m.group(1), f"document_{index}")
         return self._safe_filename(text or f"document_{index}", f"document_{index}")
@@ -643,6 +643,35 @@ class EtpClient:
             "saved": saved,
             "errors": errors,
         }
+
+    def download_document_link(
+        self,
+        link: dict[str, Any],
+        output_dir: Path,
+        index: int = 1,
+    ) -> Path:
+        """Скачивает одну ссылку документации из текущей авторизованной вкладки."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        href = str((link or {}).get("href") or "")
+        if not href:
+            raise RuntimeError("Пустая ссылка на документ.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        name = self._filename_from_link(link, index)
+        target = output_dir / name
+        stem, suffix = target.stem, target.suffix
+        n = 2
+        while target.exists():
+            target = output_dir / f"{stem}_{n}{suffix}"
+            n += 1
+        res = self.driver.execute_async_script(_DOWNLOAD_URL_JS, href)
+        if not isinstance(res, dict) or not res.get("ok"):
+            raise RuntimeError(f"Ошибка скачивания {name}: {res}")
+        data_url = str(res.get("dataUrl") or "")
+        if "," not in data_url:
+            raise RuntimeError(f"Пустой ответ при скачивании {name}")
+        raw = base64.b64decode(data_url.split(",", 1)[1])
+        target.write_bytes(raw)
+        return target
 
     def extract_procedure_card_text(
         self,
