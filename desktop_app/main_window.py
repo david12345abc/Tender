@@ -32,6 +32,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStatusBar,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -39,13 +42,28 @@ from PySide6.QtWidgets import (
 from etp_client import EtpClient, step_id_label, trend_pur_label
 from roseltorg_client import RoseltorgClient
 
-from .constants import APP_TITLE, CACHE_FILE, COLUMNS, DOCUMENTS_DIR, KEYWORDS_FILE, VIEW_URL
+from .constants import (
+    APP_TITLE,
+    CACHE_FILE,
+    COLUMNS,
+    DOCUMENTS_DIR,
+    KEYWORDS_FILE,
+    LM_STUDIO_BASE_URL,
+    LM_STUDIO_MODEL,
+    VIEW_URL,
+)
+from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
 from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
 from .utils import fmt_date, parse_dt, parse_price
-from .worker import TaskRunner, make_download_documents_task, make_search_task
+from .worker import (
+    TaskRunner,
+    make_analyze_procedure_task,
+    make_download_documents_task,
+    make_search_task,
+)
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -68,6 +86,7 @@ class MainWindow(QMainWindow):
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
         self._cache_save_timer.timeout.connect(self._save_cache_now)
+        self._analysis_sink: dict[str, Any] = {}
 
         self._build_ui()
         self._announce_cache_on_start()
@@ -208,6 +227,14 @@ class MainWindow(QMainWindow):
         self.btn_download_docs.clicked.connect(self._on_download_documents)
         self.btn_download_docs.setEnabled(False)
         bottom_layout.addWidget(self.btn_download_docs)
+
+        self.btn_analyze = QPushButton("Проанализировать")
+        self.btn_analyze.setToolTip(
+            "Собрать текст карточки с ЭТП ГПБ и отправить в LM Studio для заполнения таблицы анализа"
+        )
+        self.btn_analyze.clicked.connect(self._on_analyze_procedures)
+        self.btn_analyze.setEnabled(False)
+        bottom_layout.addWidget(self.btn_analyze)
 
         self.btn_stop = QPushButton("Стоп")
         self.btn_stop.setObjectName("Danger")
@@ -678,6 +705,7 @@ class MainWindow(QMainWindow):
         self.btn_load_more.setEnabled(False)
         self.btn_load_all.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
+        self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Скачиваю документы…")
 
         fn = make_download_documents_task(self.client, procedures, output_dir)
@@ -693,6 +721,127 @@ class MainWindow(QMainWindow):
             self._on_error(f"Не удалось запустить скачивание: {e}")
             self._on_task_done()
 
+    def _on_analyze_procedures(self) -> None:
+        if self.runner.is_running():
+            return
+        if not self._ensure_platform_ready():
+            return
+        if self._platform_key == "roseltorg":
+            QMessageBox.information(
+                self,
+                "Анализ",
+                "Анализ карточки через LM Studio сейчас доступен только для ЭТП ГПБ.",
+            )
+            return
+        procedures = self._selected_procedures()
+        if not procedures:
+            QMessageBox.information(
+                self,
+                "Ничего не выбрано",
+                "Выберите одну или несколько строк в таблице.",
+            )
+            return
+        self._apply_selected_browser()
+        self._analysis_sink.clear()
+
+        self.progress.show()
+        self.btn_stop.setEnabled(True)
+        self.sidebar.set_controls_enabled(False)
+        self.btn_load_more.setEnabled(False)
+        self.btn_load_all.setEnabled(False)
+        self.btn_download_docs.setEnabled(False)
+        self.btn_analyze.setEnabled(False)
+        self._set_badge("idle", "● Анализ карточки и LM Studio…")
+
+        fn = make_analyze_procedure_task(
+            self.client,
+            procedures,
+            LM_STUDIO_BASE_URL,
+            LM_STUDIO_MODEL,
+            self._analysis_sink,
+        )
+        try:
+            self.runner.start(
+                fn,
+                on_progress=self._on_progress,
+                on_session=self._on_analyze_session,
+                on_error=self._on_error,
+                on_done=self._on_analyze_task_done,
+            )
+        except Exception as e:
+            self._on_error(f"Не удалось запустить анализ: {e}")
+            self._on_task_done()
+
+    @Slot(bool, str)
+    def _on_analyze_session(self, ok: bool, message: str) -> None:
+        if ok:
+            self._set_badge("true", "● Анализ выполнен")
+            self.status_msg.setText(message)
+        else:
+            self._set_badge("false", "⚠ Ошибка анализа")
+            self.status_msg.setText(message)
+
+    @Slot()
+    def _on_analyze_task_done(self) -> None:
+        rows = self._analysis_sink.get("rows") or []
+        self._on_task_done()
+        if rows:
+            self._show_analysis_table_dialog(rows)
+
+    def _show_analysis_table_dialog(self, rows: list[list[str]]) -> None:
+        dlg = QDialog(self)
+        n = len(rows)
+        dlg.setWindowTitle("Результат анализа карточки ЭТП ГПБ" + (f" ({n} процедур)" if n != 1 else ""))
+        dlg.resize(min(1480, self.width() + 80), min(620, self.height()))
+        layout = QVBoxLayout(dlg)
+        hint = QLabel(
+            "Текст собран со страницы извещения (сведения о процедуре, организатор, лоты, документация). "
+            "Таблицу заполняет локальная модель — проверьте юридически значимые поля вручную."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        table = QTableWidget(len(rows), len(ANALYSIS_TABLE_HEADERS_RU))
+        table.setHorizontalHeaderLabels(ANALYSIS_TABLE_HEADERS_RU)
+        hh = table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hh.setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        for r, row in enumerate(rows):
+            for c, val in enumerate(row):
+                item = QTableWidgetItem(val)
+                item.setToolTip(val[:2000] if val else "")
+                table.setItem(r, c, item)
+        layout.addWidget(table, 1)
+
+        raw_map = self._analysis_sink.get("raw_by_registry") or {}
+        if raw_map:
+
+            def show_raw() -> None:
+                raw_dlg = QDialog(dlg)
+                raw_dlg.setWindowTitle("Сырой ответ модели")
+                raw_dlg.resize(900, 600)
+                rl = QVBoxLayout(raw_dlg)
+                te = QTextEdit()
+                te.setReadOnly(True)
+                te.setPlainText(json.dumps(raw_map, ensure_ascii=False, indent=2))
+                rl.addWidget(te)
+                bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+                bb.rejected.connect(raw_dlg.reject)
+                rl.addWidget(bb)
+                raw_dlg.exec()
+
+            btn_raw = QPushButton("Сырой ответ модели…")
+            btn_raw.clicked.connect(show_raw)
+            layout.addWidget(btn_raw)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        dlg.exec()
+
     def _search_batches(self, filters: ClientFilters) -> int:
         return 10_000 if filters.keyword_search_enabled else 1
 
@@ -703,6 +852,7 @@ class MainWindow(QMainWindow):
         self.btn_load_more.setEnabled(False)
         self.btn_load_all.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
+        self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Работаю…")
 
         fn = make_search_task(
@@ -971,6 +1121,7 @@ class MainWindow(QMainWindow):
         self.btn_load_more.setEnabled(platform_ready and not running and has_more)
         self.btn_load_all.setEnabled(platform_ready and not running and has_more)
         self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and loaded > 0)
+        self.btn_analyze.setEnabled(platform_ready and self._platform_key == "gpb" and not running and loaded > 0)
         self.btn_export.setEnabled(platform_ready and loaded > 0)
         self.sidebar.set_controls_enabled(platform_ready and not running)
 

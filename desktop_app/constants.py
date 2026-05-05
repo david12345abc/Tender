@@ -48,6 +48,10 @@ CACHE_FILE = APP_ROOT / "cache" / "desktop_search_cache.json"
 DOCUMENTS_DIR = APP_ROOT / "output" / "documents"
 VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 
+# LM Studio (OpenAI-совместимый API) для разбора карточки процедуры
+LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://192.168.1.157:1234")
+LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "openai/gpt-oss-120b")
+
 COLUMNS: list[tuple[str, str]] = [
     ("registry_number", "Реестровый №"),
     ("trend_pur_label", "Тип"),

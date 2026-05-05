@@ -153,6 +153,82 @@ const callback = arguments[arguments.length - 1];
 })();
 """
 
+_EXTRACT_PROCEDURE_VIEW_JS = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const bodyLen = () => String(document.body && document.body.innerText || "").length;
+
+  for (let i = 0; i < 60; i++) {
+    const t = String(document.body && document.body.innerText || "");
+    if (
+      /Сведения о процедуре/i.test(t)
+      || /Извещение о проведении/i.test(t)
+      || String(location.href || "").includes("procedure/view")
+    ) {
+      if (bodyLen() > 200) break;
+    }
+    await wait(400);
+  }
+
+  const scrollMax = Math.max(
+    document.body ? document.body.scrollHeight : 0,
+    document.documentElement ? document.documentElement.scrollHeight : 0,
+    1500
+  );
+  for (let y = 0; y <= scrollMax; y += 450) {
+    window.scrollTo(0, y);
+    await wait(100);
+  }
+  window.scrollTo(0, scrollMax);
+  await wait(200);
+  window.scrollTo(0, 0);
+  await wait(150);
+
+  function pickContainer() {
+    const sels = [
+      ".x-region-center",
+      ".x-border-region-center",
+      ".x-panel-body-default",
+      "#procedureview",
+      "#procedure-view",
+      "[id*=procedure][id*=view]",
+    ];
+    for (const sel of sels) {
+      try {
+        const el = document.querySelector(sel);
+        const txt = el && String(el.innerText || el.textContent || "").trim();
+        if (txt && txt.length > 500) return el;
+      } catch (e) {}
+    }
+    return document.body;
+  }
+  const root = pickContainer();
+  const pageText = String(root.innerText || root.textContent || "").trim();
+
+  const exts = /\.(docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml)(?:[?#]|$)/i;
+  const docLinks = [];
+  const seen = new Set();
+  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+    const href = a.href || "";
+    const tx = (a.innerText || a.textContent || "").trim();
+    if (!href || seen.has(href)) continue;
+    if (exts.test(href) || exts.test(tx) || /download|attach|file|document/i.test(href)) {
+      seen.add(href);
+      docLinks.push({ href, text: tx.slice(0, 240) });
+    }
+  }
+
+  callback({
+    ok: true,
+    pageText,
+    docLinks,
+    url: location.href,
+    charCount: pageText.length,
+  });
+})();
+"""
+
 _DOWNLOAD_URL_JS = r"""
 const callback = arguments[arguments.length - 1];
 const url = arguments[0];
@@ -566,6 +642,61 @@ class EtpClient:
             "found": len(links),
             "saved": saved,
             "errors": errors,
+        }
+
+    def extract_procedure_card_text(
+        self,
+        proc: dict[str, Any],
+        progress: Optional[Callable[[str], None]] = None,
+        max_page_chars: int = 120_000,
+    ) -> dict[str, Any]:
+        """Открывает карточку процедуры и собирает текст страницы + ссылки на файлы."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        proc_id = proc.get("id") or proc.get("procedure_id")
+        if not proc_id:
+            raise RuntimeError("У процедуры нет id для открытия подробной страницы.")
+
+        registry = str(proc.get("registry_number") or proc.get("procedure_number") or proc_id)
+        url = self._detail_url(proc_id)
+        if progress:
+            progress(f"Читаю карточку {registry}: {url}")
+        self.driver.get(url)
+        try:
+            self.driver.set_script_timeout(120)
+            raw = self.driver.execute_async_script(_EXTRACT_PROCEDURE_VIEW_JS)
+        finally:
+            self.driver.set_script_timeout(30)
+
+        if not isinstance(raw, dict) or not raw.get("ok"):
+            raise RuntimeError(f"Не удалось прочитать страницу: {raw}")
+
+        page_text = str(raw.get("pageText") or "").strip()
+        if len(page_text) > max_page_chars:
+            page_text = page_text[:max_page_chars] + "\n\n[…текст обрезан…]"
+
+        doc_links = raw.get("docLinks") or []
+        primary_file = ""
+        if isinstance(doc_links, list):
+            for item in doc_links:
+                if not isinstance(item, dict):
+                    continue
+                href = str(item.get("href") or "")
+                if re.search(r"\.(zip|rar|7z)\b", href, re.I):
+                    primary_file = href
+                    break
+            if not primary_file and doc_links:
+                first = doc_links[0]
+                if isinstance(first, dict):
+                    primary_file = str(first.get("href") or "")
+
+        return {
+            "procedure": registry,
+            "procedure_id": proc_id,
+            "url": url,
+            "page_text": page_text,
+            "doc_links": doc_links if isinstance(doc_links, list) else [],
+            "primary_doc_url": primary_file,
+            "char_count": int(raw.get("charCount") or len(page_text)),
         }
 
     def pull_token(self) -> str:

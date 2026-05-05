@@ -9,6 +9,14 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
+from .constants import VIEW_URL
+from .lm_table_analysis import (
+    build_analysis_system_prompt,
+    build_analysis_user_prompt,
+    build_result_row,
+    call_lm_studio_chat,
+    parse_llm_table_json,
+)
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import SearchParams
 
@@ -357,6 +365,97 @@ def make_download_documents_task(
             True,
             f"Скачивание завершено. Файлов: {saved_count}, ошибок: {error_count}. "
             f"Папка: {output_dir}",
+        )
+
+    return _run
+
+
+def make_analyze_procedure_task(
+    client: EtpClient,
+    procedures: list[dict],
+    lm_base_url: str,
+    lm_model: str,
+    sink: dict,
+) -> Callable[[Worker], None]:
+    """Карточка ЭТП ГПБ → текст страницы → LM Studio → строки таблицы в sink['rows']."""
+
+    def _run(w: Worker) -> None:
+        sink.clear()
+        sink["rows"] = []
+        sink["raw_by_registry"] = {}
+
+        if not procedures:
+            w.error.emit("Не выбраны процедуры для анализа.")
+            return
+
+        if not client.is_chrome_running():
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
+            try:
+                client.ensure_chrome(timeout=45)
+            except Exception as e:
+                w.error.emit(f"Не удалось запустить Chrome: {e}")
+                return
+
+        if client.driver is None:
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        system_prompt = build_analysis_system_prompt()
+        rows: list[list[str]] = []
+
+        for index, proc in enumerate(procedures, start=1):
+            if w.is_stop_requested():
+                return
+            registry = str(
+                proc.get("registry_number") or proc.get("procedure_number") or proc.get("id") or ""
+            )
+            w.progress.emit(f"Сбор текста карточки {index}/{len(procedures)}: {registry}")
+            try:
+                snap = client.extract_procedure_card_text(proc, progress=w.progress.emit)
+            except Exception as e:
+                pid = proc.get("id") or proc.get("procedure_id") or ""
+                detail = VIEW_URL.format(pid=pid) if pid else ""
+                rows.append(build_result_row(registry, detail, "", None, str(e)))
+                sink["raw_by_registry"][registry] = f"Ошибка сбора страницы: {e}"
+                continue
+
+            page_text = str(snap.get("page_text") or "")
+            detail_url = str(snap.get("url") or "")
+            doc_primary = str(snap.get("primary_doc_url") or "")
+            doc_list = snap.get("doc_links") or []
+            doc_summary = "; ".join(
+                str((d or {}).get("href") or "")
+                for d in (doc_list if isinstance(doc_list, list) else [])
+                if isinstance(d, dict) and (d.get("href"))
+            )[:4000]
+
+            w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
+            parsed = None
+            raw_llm = ""
+            err_msg: str | None = None
+            try:
+                user_prompt = build_analysis_user_prompt(
+                    registry, detail_url, doc_summary, page_text
+                )
+                raw_llm = call_lm_studio_chat(
+                    lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=300
+                )
+                sink["raw_by_registry"][registry] = raw_llm
+                parsed = parse_llm_table_json(raw_llm)
+            except Exception as e:
+                err_msg = str(e)
+                sink["raw_by_registry"][registry] = raw_llm + ("\n---\n" if raw_llm else "") + err_msg
+
+            rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
+
+        sink["rows"] = rows
+        w.session.emit(
+            True,
+            f"Анализ завершён: {len(rows)} процедур. LM Studio: {lm_base_url}, модель {lm_model}.",
         )
 
     return _run
