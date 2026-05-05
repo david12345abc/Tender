@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -227,11 +229,11 @@ class Sidebar(QWidget):
         self.extra_scroll.setVisible(False)
         self.extra_scroll.setWidgetResizable(True)
         self.extra_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.extra_scroll.setMinimumHeight(260)
-        self.extra_scroll.setMaximumHeight(360)
+        self.extra_scroll.setMinimumHeight(380)
+        self.extra_scroll.setMaximumHeight(560)
 
         self.extra_filters = QWidget()
-        self.extra_filters.setMinimumHeight(520)
+        self.extra_filters.setMinimumHeight(680)
         extra_layout = QVBoxLayout(self.extra_filters)
         extra_layout.setContentsMargins(0, 10, 0, 0)
         extra_layout.setSpacing(12)
@@ -261,9 +263,16 @@ class Sidebar(QWidget):
         self.cb_trend = self._make_combo(
             [(label, label) for label in PROCEDURE_TYPE_LABELS]
         )
-        self.cb_step = self._make_combo()
+        self.lst_steps = QListWidget()
+        self.lst_steps.setMinimumHeight(220)
+        self.lst_steps.setMaximumHeight(360)
+        self.lst_steps.setAlternatingRowColors(True)
         for label in STATUS_LABELS:
-            self.cb_step.addItem(label, label)
+            item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, label)
+            self.lst_steps.addItem(item)
         self.cb_purchase_form = self._make_combo(
             [("Любая", ""), ("Электронная", "электрон"), ("Бумажная", "бумаж")]
         )
@@ -316,7 +325,7 @@ class Sidebar(QWidget):
         )
         self._add_row(grid, 1, 1, "Ответственное лицо:", self.ed_responsible)
         self._add_row(grid, 2, 1, "Тип процедуры:", self.cb_trend)
-        self._add_row(grid, 3, 1, "Статус процедуры:", self.cb_step)
+        self._add_row(grid, 3, 1, "Статус процедуры:", self.lst_steps)
         self._add_row(grid, 4, 1, "Форма закупки:", self.cb_purchase_form)
         self._add_row(
             grid,
@@ -404,8 +413,9 @@ class Sidebar(QWidget):
         for w in text_widgets:
             w.returnPressed.connect(self.clientFiltersChanged)
             w.editingFinished.connect(self.clientFiltersChanged)
-        for w in (self.cb_trend, self.cb_step, self.cb_purchase_form):
+        for w in (self.cb_trend, self.cb_purchase_form):
             w.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.lst_steps.itemChanged.connect(lambda *_: self.clientFiltersChanged.emit())
         spin_widgets = (
             self.sb_apc_min,
             self.sb_apc_max,
@@ -437,7 +447,7 @@ class Sidebar(QWidget):
 
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
-        self.setMinimumHeight(430 if visible else 88)
+        self.setMinimumHeight(560 if visible else 88)
         self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
         self.updateGeometry()
         parent = self.parentWidget()
@@ -490,7 +500,11 @@ class Sidebar(QWidget):
             guarantee_max=(self.sb_guarantee_max.value() or None),
             responsible_contains=self.ed_responsible.text().strip(),
             trend_pur=self.cb_trend.currentData() or "",
-            step_id=self.cb_step.currentData() or "",
+            step_ids=tuple(
+                str(self.lst_steps.item(i).data(Qt.UserRole) or "")
+                for i in range(self.lst_steps.count())
+                if self.lst_steps.item(i).checkState() == Qt.Checked
+            ),
             purchase_form=self.cb_purchase_form.currentData() or "",
             applics_min=(self.sb_apc_min.value() or None),
             applics_max=(self.sb_apc_max.value() or None),
@@ -544,7 +558,8 @@ class Sidebar(QWidget):
         self.ed_position_name.clear()
         self.ed_national_regime.clear()
         self.cb_trend.setCurrentIndex(0)
-        self.cb_step.setCurrentIndex(0)
+        for i in range(self.lst_steps.count()):
+            self.lst_steps.item(i).setCheckState(Qt.Unchecked)
         self.cb_purchase_form.setCurrentIndex(0)
         self.sb_apc_min.setValue(0)
         self.sb_apc_max.setValue(0)

@@ -47,7 +47,10 @@ class ProcedureTableModel(QAbstractTableModel):
         return " ".join(values).casefold()
 
     def _keyword_matches(self, proc: dict[str, Any]) -> list[str]:
-        haystack = self._all_text(proc)
+        haystack = " ".join(
+            str(proc.get(key) or "")
+            for key in ("title", "name", "procedure_name", "lot_name")
+        ).casefold()
         keywords = self._keywords or tuple(load_keywords())
         return [keyword for keyword in keywords if keyword.casefold() in haystack]
 
@@ -57,6 +60,68 @@ class ProcedureTableModel(QAbstractTableModel):
             if dt is not None:
                 return dt
         return None
+
+    def _status_label(self, proc: dict[str, Any]) -> str:
+        for status_key in (
+            "step_name",
+            "step_label",
+            "status_name",
+            "status_label",
+            "state_name",
+            "stage_name",
+        ):
+            if proc.get(status_key):
+                return str(proc[status_key])
+        step = proc.get("step_id")
+        status_blob = " ".join(
+            str(proc.get(key) or "")
+            for key in (
+                "status",
+                "status_name",
+                "status_label",
+                "state",
+                "state_name",
+                "stage",
+                "stage_name",
+                "step_name",
+                "step_label",
+            )
+        ).casefold()
+        if "архив" in status_blob:
+            return "В архиве"
+        # На ЭТП ГПБ у некоторых процедур технический step_id остаётся старым.
+        # Фактическую стадию берём из дат блока «Этапы закупочной процедуры».
+        if step in {"applic_access", "registration"}:
+            results_dt = self._first_date(
+                proc,
+                (
+                    "date_results",
+                    "date_result",
+                    "date_summingup",
+                    "date_end_procedure",
+                    "date_review",
+                    "date_consideration",
+                    "date_end_review",
+                    "date_end_final",
+                    "date_end_second_parts_review",
+                    "date_end_final_offers",
+                ),
+            )
+            if results_dt is not None and results_dt.replace(tzinfo=None) < datetime.now():
+                return "В архиве"
+            end_dt = self._first_date(
+                proc,
+                (
+                    "date_end_registration",
+                    "date_finish_registration",
+                    "date_end_applic",
+                    "date_finish_applic",
+                    "date_end",
+                ),
+            )
+            if end_dt is not None and end_dt.replace(tzinfo=None) < datetime.now():
+                return "Подведение итогов"
+        return step_id_label(step)
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
@@ -84,17 +149,7 @@ class ProcedureTableModel(QAbstractTableModel):
                     return str(proc[type_key])
             return trend_pur_label(proc.get("trend_pur"))
         if key == "step_label":
-            for status_key in (
-                "step_name",
-                "step_label",
-                "status_name",
-                "status_label",
-                "state_name",
-                "stage_name",
-            ):
-                if proc.get(status_key):
-                    return str(proc[status_key])
-            return step_id_label(proc.get("step_id"))
+            return self._status_label(proc)
         if key == "organizer":
             return proc.get("short_name") or proc.get("full_name") or ""
         if key == "tags_label":
@@ -396,7 +451,10 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
                 return False
 
         if f.keyword_search_enabled:
-            haystack = self._all_text(proc)
+            haystack = self._blob(
+                proc,
+                ("title", "name", "procedure_name", "lot_name"),
+            ).casefold()
             keywords = tuple(k.casefold() for k in f.keywords if k.strip())
             if not keywords or not any(keyword in haystack for keyword in keywords):
                 return False
@@ -485,12 +543,18 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ("trend_pur_name", "trend_pur_label", "procedure_type_name", "type_name"),
         ):
             return False
-        if f.step_id and not selected_matches(
-            f.step_id,
-            ("step_id", "status", "stage"),
-            ("step_name", "step_label", "status_name", "status_label", "state_name", "stage_name"),
-        ) and f.step_id.casefold() != step_id_label(proc.get("step_id")).casefold():
-            return False
+        if f.step_ids:
+            computed_status = model._status_label(proc).casefold()
+            if not any(
+                selected_matches(
+                    step_id,
+                    ("step_id", "status", "stage"),
+                    ("step_name", "step_label", "status_name", "status_label", "state_name", "stage_name"),
+                )
+                or step_id.casefold() == computed_status
+                for step_id in f.step_ids
+            ):
+                return False
         if f.purchase_form:
             if not self._contains(
                 proc,

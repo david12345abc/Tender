@@ -448,7 +448,19 @@ class MainWindow(QMainWindow):
         keyword_list = QListWidget()
         keyword_list.setAlternatingRowColors(True)
         keyword_list.setSelectionMode(QListWidget.ExtendedSelection)
-        for enabled, keyword in load_keyword_items():
+        try:
+            keyword_items = load_keyword_items()
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Не удалось открыть список",
+                "Не удалось открыть файл ключевых слов. "
+                "Проверьте доступ к локальной папке приложения.\n\n"
+                f"Путь: {KEYWORDS_FILE}\n\n"
+                f"Подробности: {e}",
+            )
+            return
+        for enabled, keyword in keyword_items:
             item = QListWidgetItem(keyword)
             item.setFlags(
                 item.flags()
@@ -690,11 +702,15 @@ class MainWindow(QMainWindow):
                 "Выберите одну или несколько строк в таблице.",
             )
             return
-        DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+        default_download_dir = DOCUMENTS_DIR
+        try:
+            default_download_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            default_download_dir = Path.home() / "Documents"
         output_dir_str = QFileDialog.getExistingDirectory(
             self,
             "Выберите папку для загрузки документов",
-            str(DOCUMENTS_DIR),
+            str(default_download_dir),
         )
         if not output_dir_str:
             return
@@ -1208,7 +1224,7 @@ class MainWindow(QMainWindow):
                     ),
                     fmt_date(parse_dt(p.get("date_end_registration"))),
                     parse_price(p.get("total_price")) or "",
-                    step_id_label(p.get("step_id")),
+                    self.model._display(p, "step_label"),
                     p.get("id"),
                     fmt_date(parse_dt(p.get("date_published"))),
                 ]

@@ -44,9 +44,14 @@ def bundled_keywords_template_path() -> Path | None:
     return None
 
 
-CACHE_FILE = APP_ROOT / "cache" / "desktop_search_cache.json"
-DOCUMENTS_DIR = APP_ROOT / "output" / "documents"
-ANALYSIS_DIR = APP_ROOT / "output" / "analysis"
+if getattr(sys, "frozen", False):
+    DATA_ROOT = user_writable_root()
+else:
+    DATA_ROOT = APP_ROOT
+
+CACHE_FILE = DATA_ROOT / "cache" / "desktop_search_cache.json"
+DOCUMENTS_DIR = DATA_ROOT / "output" / "documents"
+ANALYSIS_DIR = DATA_ROOT / "output" / "analysis"
 VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 
 # LM Studio (OpenAI-совместимый API) для разбора карточки процедуры
