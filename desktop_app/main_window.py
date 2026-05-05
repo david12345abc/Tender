@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QTimer, Qt, Slot
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QColor, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -797,11 +797,10 @@ class MainWindow(QMainWindow):
 
     def _safe_analysis_filename(self, name: str, default: str = "analysis") -> str:
         clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
-        return (clean[:160] or default) + ".xlsx"
+        return (clean[:160] or default) + ".docx"
 
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
-        from openpyxl import Workbook
-        from openpyxl.styles import Font
+        from docx import Document
 
         ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
@@ -819,35 +818,25 @@ class MainWindow(QMainWindow):
                 path = ANALYSIS_DIR / self._safe_analysis_filename(f"{registry}_{title[:70]}_{n}", registry)
                 n += 1
 
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Таблица"
-            ws.append(ANALYSIS_TABLE_HEADERS_RU)
-            ws.append(row)
-            for cell in ws[1]:
-                cell.font = Font(bold=True)
-            for col in range(1, len(ANALYSIS_TABLE_HEADERS_RU) + 1):
-                ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = 24
-            for col in (2, 3):
-                value = str(ws.cell(row=2, column=col).value or "")
-                if value.startswith(("http://", "https://")):
-                    ws.cell(row=2, column=col).hyperlink = value
-                    ws.cell(row=2, column=col).style = "Hyperlink"
+            doc = Document()
+            doc.add_heading(f"Анализ закупки {registry}", level=1)
+            if title:
+                doc.add_paragraph(title)
+            table = doc.add_table(rows=1, cols=2)
+            table.style = "Table Grid"
+            hdr = table.rows[0].cells
+            hdr[0].text = "Поле"
+            hdr[1].text = "Значение"
+            for cell in hdr:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+            for header, value in zip(ANALYSIS_TABLE_HEADERS_RU, row):
+                cells = table.add_row().cells
+                cells[0].text = str(header)
+                cells[1].text = str(value or "—")
 
-            ws_fields = wb.create_sheet("Поля")
-            ws_fields.append(["№", "Поле", "Значение"])
-            for cell in ws_fields[1]:
-                cell.font = Font(bold=True)
-            for idx, (header, value) in enumerate(zip(ANALYSIS_TABLE_HEADERS_RU, row), start=1):
-                ws_fields.append([idx, header, value])
-                if str(value).startswith(("http://", "https://")):
-                    ws_fields.cell(row=idx + 1, column=3).hyperlink = str(value)
-                    ws_fields.cell(row=idx + 1, column=3).style = "Hyperlink"
-            ws_fields.column_dimensions["A"].width = 8
-            ws_fields.column_dimensions["B"].width = 55
-            ws_fields.column_dimensions["C"].width = 90
-
-            wb.save(path)
+            doc.save(path)
             summary_rows.append([registry, title or "—", str(path)])
 
         self._analysis_sink["summary_rows"] = summary_rows
@@ -860,8 +849,8 @@ class MainWindow(QMainWindow):
         dlg.resize(min(1100, self.width() + 80), min(520, self.height()))
         layout = QVBoxLayout(dlg)
         hint = QLabel(
-            "Полная таблица анализа сохранена в Excel-файлы. "
-            "Нажмите на ссылку в третьей колонке, чтобы открыть файл с заполненной таблицей."
+            "Полная таблица анализа сохранена в Word-файлы. "
+            "Нажмите «ссылка» в третьей колонке, чтобы открыть файл в Проводнике и выделить его."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -872,6 +861,10 @@ class MainWindow(QMainWindow):
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(True)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(2, 80)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -882,6 +875,10 @@ class MainWindow(QMainWindow):
                 if c == 2:
                     item.setText("ссылка")
                     item.setToolTip(val)
+                    font = QFont(item.font())
+                    font.setUnderline(True)
+                    item.setFont(font)
+                    item.setForeground(QColor("#0645ad"))
                 table.setItem(r, c, item)
 
         def open_analysis_file(row: int, col: int) -> None:
