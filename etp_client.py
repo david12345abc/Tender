@@ -178,6 +178,15 @@ def _server_status_value(labels: tuple[str, ...]) -> Optional[int]:
         return None
     return SERVER_STATUS_BY_LABEL.get(labels[0].casefold().replace("ё", "е"))
 
+
+def _purchase_form_value(value: str) -> int:
+    text = str(value or "").casefold()
+    if "электрон" in text:
+        return 0
+    if "бумаж" in text:
+        return 1
+    return -1
+
 _COLLECT_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
 (() => {
@@ -865,7 +874,7 @@ class EtpClient:
             "department_id": -1,
             "contact_person_like": "",
             "procedure_type": "",
-            "status": None,
+            "status": "",
             "private": -1,
             "lot_count_from": "",
             "lot_count_till": "",
@@ -890,6 +899,9 @@ class EtpClient:
         }
         if client_filters is not None:
             registry = str(getattr(client_filters, "registry_contains", "") or "")
+            status_value = _server_status_value(
+                tuple(getattr(client_filters, "step_ids", ()) or ())
+            )
             payload.update(
                 {
                     "procedure_number2_like": str(
@@ -913,8 +925,9 @@ class EtpClient:
                         getattr(client_filters, "responsible_contains", "") or ""
                     ),
                     "procedure_type": str(getattr(client_filters, "trend_pur", "") or ""),
-                    "status": _server_status_value(
-                        tuple(getattr(client_filters, "step_ids", ()) or ())
+                    "status": status_value if status_value is not None else "",
+                    "private": _purchase_form_value(
+                        str(getattr(client_filters, "purchase_form", "") or "")
                     ),
                     "lot_count_from": (
                         str(getattr(client_filters, "lots_min", "") or "")
@@ -1023,15 +1036,17 @@ class EtpClient:
             self.driver = None
 
 
-PROCEDURE_TYPE_LABELS = [
-    "Запрос предложений",
-    "Конкурентный отбор",
-    "Маркетинговые исследования",
-    "Обсуждение с участниками (первый этап)",
-    "Запрос цен",
-    "Конкурентный отбор с повышением стартовой цены",
-    "Анализ рынка и сбор ценовой информации",
+PROCEDURE_TYPE_ID_LABELS = {
+    31: "Маркетинговые исследования",
+    32: "Конкурентный отбор",
+}
+
+PROCEDURE_TYPE_OPTIONS = [
+    ("Конкурентный отбор", "32"),
+    ("Маркетинговые исследования", "31"),
 ]
+
+PROCEDURE_TYPE_LABELS = [label for label, _ in PROCEDURE_TYPE_OPTIONS]
 
 TREND_PUR_LABELS = {
     "001": "Конкурентный отбор",
@@ -1073,6 +1088,16 @@ def trend_pur_label(code: Any) -> str:
     if not code:
         return "—"
     return TREND_PUR_LABELS.get(str(code), str(code))
+
+
+def procedure_type_label(code: Any) -> str:
+    if code in (None, ""):
+        return "—"
+    try:
+        numeric = int(str(code))
+    except (TypeError, ValueError):
+        return str(code)
+    return PROCEDURE_TYPE_ID_LABELS.get(numeric, str(code))
 
 
 def step_id_label(step: Any) -> str:

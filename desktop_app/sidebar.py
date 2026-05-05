@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etp_client import PROCEDURE_TYPE_LABELS, STATUS_LABELS
+from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_LABELS
 
 from .browsers import BrowserConfig, available_browsers
 from .keywords import load_keyword_items, load_keywords
@@ -324,7 +324,7 @@ class Sidebar(QWidget):
         self.sb_guarantee_max = self._make_money()
         self.ed_responsible = self._make_line()
         self.cb_trend = self._make_combo(
-            [(label, label) for label in PROCEDURE_TYPE_LABELS]
+            list(PROCEDURE_TYPE_OPTIONS)
         )
         self.status_selector = StatusMultiSelect(STATUS_LABELS)
         self.lst_steps = self.status_selector.list_widget

@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self._current_start: int = 0
         self._last_user: Optional[str] = None
         self._cache_dirty: bool = False
+        self._cache_save_enabled: bool = True
         self._platform_key: str = "gpb"
 
         self._cache_save_timer = QTimer(self)
@@ -412,7 +413,8 @@ class MainWindow(QMainWindow):
         self.proxy.set_filters(filters)
         self.model.set_keywords(filters.keywords)
 
-        if self._platform_key == "gpb" and CACHE_FILE.exists():
+        has_active_filters = self._has_active_filters(filters)
+        if self._platform_key == "gpb" and CACHE_FILE.exists() and not has_active_filters:
             choice = self._ask_cache_choice()
             if choice == "cancel":
                 return
@@ -430,6 +432,7 @@ class MainWindow(QMainWindow):
             self.sidebar.search_params(),
             start=0,
             batches=self._search_batches(filters),
+            filters=filters,
         )
 
     def _on_edit_keywords(self) -> None:
@@ -634,6 +637,7 @@ class MainWindow(QMainWindow):
                 self.sidebar.search_params(),
                 start=0,
                 batches=self._search_batches(self.sidebar.client_filters()),
+                filters=self.sidebar.client_filters(),
             )
             return
         procs = data.get("procedures") or []
@@ -660,14 +664,26 @@ class MainWindow(QMainWindow):
             return
         if not self._ensure_platform_ready():
             return
-        self._start_task(self.sidebar.search_params(), start=self._current_start, batches=1)
+        filters = self.sidebar.client_filters()
+        self._start_task(
+            self.sidebar.search_params(),
+            start=self._current_start,
+            batches=1,
+            filters=filters,
+        )
 
     def _on_load_all(self) -> None:
         if self.runner.is_running():
             return
         if not self._ensure_platform_ready():
             return
-        self._start_task(self.sidebar.search_params(), start=self._current_start, batches=10_000)
+        filters = self.sidebar.client_filters()
+        self._start_task(
+            self.sidebar.search_params(),
+            start=self._current_start,
+            batches=10_000,
+            filters=filters,
+        )
 
     def _selected_procedures(self) -> list[dict[str, Any]]:
         rows = sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
@@ -990,9 +1006,61 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _search_batches(self, filters: ClientFilters) -> int:
-        return 10_000 if filters.keyword_search_enabled else 1
+        if filters.keyword_search_enabled:
+            return 10_000
+        if len(filters.step_ids) > 1:
+            # Сайт принимает один status за запрос. При мультивыборе добираем
+            # выдачу и применяем объединение статусов локально.
+            return 10_000
+        return 1
 
-    def _start_task(self, params: SearchParams, start: int, batches: int) -> None:
+    def _has_active_filters(self, filters: ClientFilters) -> bool:
+        return any(
+            (
+                bool(filters.quick_search),
+                bool(filters.keyword_search_enabled),
+                bool(filters.registry_contains),
+                bool(filters.unique_number_contains),
+                bool(filters.organizer_contains),
+                bool(filters.customer_contains),
+                bool(filters.customer_region_contains),
+                bool(filters.customer_agent_contains),
+                bool(filters.title_contains),
+                bool(filters.okpd2_contains),
+                bool(filters.okved2_contains),
+                filters.guarantee_min is not None,
+                filters.guarantee_max is not None,
+                bool(filters.responsible_contains),
+                bool(filters.trend_pur),
+                bool(filters.step_ids),
+                bool(filters.purchase_form),
+                filters.applics_min is not None,
+                filters.applics_max is not None,
+                filters.lots_min is not None,
+                filters.lots_max is not None,
+                filters.price_min is not None,
+                filters.price_max is not None,
+                filters.published_from is not None,
+                filters.published_to is not None,
+                filters.end_from is not None,
+                filters.end_to is not None,
+                filters.results_from is not None,
+                filters.results_to is not None,
+                bool(filters.special_features_contains),
+                bool(filters.position_name_contains),
+                bool(filters.national_regime_contains),
+            )
+        )
+
+    def _start_task(
+        self,
+        params: SearchParams,
+        start: int,
+        batches: int,
+        filters: Optional[ClientFilters] = None,
+    ) -> None:
+        filters = filters if filters is not None else self.sidebar.client_filters()
+        self._cache_save_enabled = not self._has_active_filters(filters)
         self.progress.show()
         self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
@@ -1007,7 +1075,7 @@ class MainWindow(QMainWindow):
             params,
             start,
             batches,
-            client_filters=self.sidebar.client_filters(),
+            client_filters=filters,
         )
         try:
             self.runner.start(
@@ -1068,7 +1136,8 @@ class MainWindow(QMainWindow):
             self.model.append_rows(procs)
         self._current_start = start
         self._refresh_counter()
-        self._schedule_cache_save()
+        if self._cache_save_enabled:
+            self._schedule_cache_save()
 
     @Slot(str)
     def _on_error(self, msg: str) -> None:
@@ -1203,7 +1272,7 @@ class MainWindow(QMainWindow):
             ws.append(
                 [
                     p.get("registry_number") or p.get("procedure_number") or "",
-                    trend_pur_label(p.get("trend_pur")),
+                    self.model._display(p, "trend_pur_label"),
                     p.get("short_name") or p.get("full_name") or "",
                     p.get("title") or "",
                     ", ".join(self.model._keyword_matches(p)),

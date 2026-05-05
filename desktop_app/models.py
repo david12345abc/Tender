@@ -6,7 +6,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
-from etp_client import step_id_label, trend_pur_label
+from etp_client import procedure_type_label, step_id_label, trend_pur_label
 
 from .constants import COLUMNS
 from .keywords import load_keywords
@@ -62,6 +62,13 @@ class ProcedureTableModel(QAbstractTableModel):
         return None
 
     def _status_label(self, proc: dict[str, Any]) -> str:
+        status_suffix = ""
+        if proc.get("oos_changes_status") == 1:
+            status_suffix = "\nОжидается публикация изменений на ЕИС"
+
+        def with_suffix(label: str) -> str:
+            return label + status_suffix if status_suffix and status_suffix not in label else label
+
         for status_key in (
             "step_name",
             "step_label",
@@ -71,7 +78,7 @@ class ProcedureTableModel(QAbstractTableModel):
             "stage_name",
         ):
             if proc.get(status_key):
-                return str(proc[status_key])
+                return with_suffix(str(proc[status_key]))
         step = proc.get("step_id")
         status_blob = " ".join(
             str(proc.get(key) or "")
@@ -88,7 +95,33 @@ class ProcedureTableModel(QAbstractTableModel):
             )
         ).casefold()
         if "архив" in status_blob:
-            return "В архиве"
+            return with_suffix("В архиве")
+        lots = proc.get("lots")
+        if isinstance(lots, list) and lots:
+            lot = next((item for item in lots if isinstance(item, dict) and item.get("actual")), None)
+            if not isinstance(lot, dict):
+                lot = next((item for item in lots if isinstance(item, dict)), None)
+            if isinstance(lot, dict):
+                lot_step = str(lot.get("lot_step") or "").casefold()
+                if lot.get("date_archived"):
+                    return with_suffix("В архиве")
+                if lot_step in {"second_parts", "second_parts_review"}:
+                    second_parts_dt = parse_dt(lot.get("date_end_second_parts_review"))
+                    if (
+                        second_parts_dt is not None
+                        and second_parts_dt.replace(tzinfo=None) < datetime.now()
+                    ):
+                        return with_suffix("Подведение итогов")
+                    return with_suffix("Рассмотрение заявок")
+                if lot_step in {"registration", "applic_access"}:
+                    end_dt = parse_dt(lot.get("date_end_registration"))
+                    if end_dt is not None and end_dt.replace(tzinfo=None) < datetime.now():
+                        return with_suffix("Подведение итогов")
+                lot_status = lot.get("status")
+                if lot_status == 6:
+                    return with_suffix("Подведение итогов")
+                if lot_status == 5:
+                    return with_suffix("Рассмотрение заявок")
         # На ЭТП ГПБ у некоторых процедур технический step_id остаётся старым.
         # Фактическую стадию берём из дат блока «Этапы закупочной процедуры».
         if step in {"applic_access", "registration"}:
@@ -108,7 +141,7 @@ class ProcedureTableModel(QAbstractTableModel):
                 ),
             )
             if results_dt is not None and results_dt.replace(tzinfo=None) < datetime.now():
-                return "В архиве"
+                return with_suffix("Подведение итогов")
             end_dt = self._first_date(
                 proc,
                 (
@@ -120,8 +153,8 @@ class ProcedureTableModel(QAbstractTableModel):
                 ),
             )
             if end_dt is not None and end_dt.replace(tzinfo=None) < datetime.now():
-                return "Подведение итогов"
-        return step_id_label(step)
+                return with_suffix("Подведение итогов")
+        return with_suffix(step_id_label(step))
 
     def _status_background_color(self, proc: dict[str, Any]) -> Optional[QColor]:
         status = self._status_label(proc).casefold()
@@ -163,6 +196,11 @@ class ProcedureTableModel(QAbstractTableModel):
 
     def _display(self, proc: dict[str, Any], key: str) -> Any:
         if key == "trend_pur_label":
+            procedure_type = proc.get("procedure_type")
+            if procedure_type not in (None, ""):
+                label = procedure_type_label(procedure_type)
+                if label != str(procedure_type):
+                    return label
             for type_key in (
                 "trend_pur_name",
                 "trend_pur_label",

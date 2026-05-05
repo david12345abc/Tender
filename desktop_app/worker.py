@@ -213,18 +213,45 @@ def make_search_task(
             # фильтрация по подстроке ломает выдачу и счётчики.
             if is_roseltorg and getattr(client_filters, "quick_search", ""):
                 probe_filters = replace(client_filters, quick_search="")
-            if (
-                not is_roseltorg
-                and len(getattr(client_filters, "step_ids", ()) or ()) == 1
-                and str((getattr(client_filters, "step_ids", ()) or ("",))[0])
-                .casefold()
-                .replace("ё", "е")
-                == "прием заявок"
-            ):
-                # Этот статус сайт фильтрует серверным полем status=2.
-                # Повторная локальная проверка уже по вычисленному статусу
-                # может отсеять строки, которые сам сайт вернул в выдачу.
-                probe_filters = replace(client_filters, step_ids=())
+            if not is_roseltorg:
+                # Для ЭТП ГПБ дополнительные фильтры отправляются в Procedure.list
+                # теми же полями, что использует сайт. Локально оставляем только
+                # фильтр ключевых слов, которого нет в форме ЭТП.
+                step_ids = tuple(getattr(client_filters, "step_ids", ()) or ())
+                probe_filters = replace(
+                    client_filters,
+                    quick_search="",
+                    registry_contains="",
+                    unique_number_contains="",
+                    organizer_contains="",
+                    customer_contains="",
+                    customer_region_contains="",
+                    customer_agent_contains="",
+                    title_contains="",
+                    okpd2_contains="",
+                    okved2_contains="",
+                    guarantee_min=None,
+                    guarantee_max=None,
+                    responsible_contains="",
+                    trend_pur="",
+                    step_ids=() if len(step_ids) == 1 else step_ids,
+                    purchase_form="",
+                    applics_min=None,
+                    applics_max=None,
+                    lots_min=None,
+                    lots_max=None,
+                    price_min=None,
+                    price_max=None,
+                    published_from=None,
+                    published_to=None,
+                    end_from=None,
+                    end_to=None,
+                    results_from=None,
+                    results_to=None,
+                    special_features_contains="",
+                    position_name_contains="",
+                    national_regime_contains="",
+                )
             probe_proxy.set_filters(probe_filters)
             set_client_filters = getattr(client, "set_client_filters", None)
             if callable(set_client_filters):
@@ -247,7 +274,7 @@ def make_search_task(
                     params.query
                     or (
                         getattr(client_filters, "quick_search", "")
-                        if is_roseltorg and client_filters is not None
+                        if client_filters is not None
                         else ""
                     )
                     or None
