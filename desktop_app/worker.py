@@ -213,6 +213,18 @@ def make_search_task(
             # фильтрация по подстроке ломает выдачу и счётчики.
             if is_roseltorg and getattr(client_filters, "quick_search", ""):
                 probe_filters = replace(client_filters, quick_search="")
+            if (
+                not is_roseltorg
+                and len(getattr(client_filters, "step_ids", ()) or ()) == 1
+                and str((getattr(client_filters, "step_ids", ()) or ("",))[0])
+                .casefold()
+                .replace("ё", "е")
+                == "прием заявок"
+            ):
+                # Этот статус сайт фильтрует серверным полем status=2.
+                # Повторная локальная проверка уже по вычисленному статусу
+                # может отсеять строки, которые сам сайт вернул в выдачу.
+                probe_filters = replace(client_filters, step_ids=())
             probe_proxy.set_filters(probe_filters)
             set_client_filters = getattr(client, "set_client_filters", None)
             if callable(set_client_filters):
@@ -226,12 +238,12 @@ def make_search_task(
                 f"Запрос Procedure.list: start={cur_start}, limit={request_limit}"
                 + (f"  (найдено {accepted_this_task}, просмотрено {loaded_this_task}/{total})" if total else "")
             )
-            res = client.fetch_page(
-                start=cur_start,
-                limit=request_limit,
-                date_from=params.date_from or None,
-                date_to=params.date_to or None,
-                query=(
+            fetch_kwargs = {
+                "start": cur_start,
+                "limit": request_limit,
+                "date_from": params.date_from or None,
+                "date_to": params.date_to or None,
+                "query": (
                     params.query
                     or (
                         getattr(client_filters, "quick_search", "")
@@ -240,10 +252,13 @@ def make_search_task(
                     )
                     or None
                 ),
-                tag_id=params.tag_id,
-                sort=params.sort,
-                direction=params.direction,
-            )
+                "tag_id": params.tag_id,
+                "sort": params.sort,
+                "direction": params.direction,
+            }
+            if not is_roseltorg:
+                fetch_kwargs["client_filters"] = client_filters
+            res = client.fetch_page(**fetch_kwargs)
             if w.is_stop_requested():
                 return
             if res.get("error"):

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import os
 import re
@@ -35,6 +36,25 @@ DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
 HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт сервер за один вызов
 ETP_URL = "https://etpgaz.gazprombank.ru/#com/procedure/index"
+
+SERVER_STATUS_BY_LABEL = {
+    # Значения соответствуют полю status в Procedure.list на сайте ЭТП ГПБ.
+    # Например, «Прием заявок» сайт отправляет как status: 2.
+    "активные": 1,
+    "прием заявок": 2,
+    "приём заявок": 2,
+    "ожидает начала регистрации": 3,
+    "ожидает начала процедуры": 4,
+    "ожидает открытия доступа": 5,
+    "регистрация для участия": 6,
+    "повышение стартовой цены": 7,
+    "вскрытие заявок": 8,
+    "прием ценовой информации": 9,
+    "приём ценовой информации": 9,
+    "завершение процедуры": 10,
+    "рассмотрение заявок": 11,
+    "подведение итогов": 12,
+}
 
 
 @dataclass(frozen=True)
@@ -130,6 +150,33 @@ const explicitToken = arguments[1] || '';
   }
 })();
 """
+
+
+def _date_to_etp_iso(value: Optional[str], end_of_day: bool = False) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        time_part = "23:59:59" if end_of_day else "00:00:00"
+        return f"{value:%Y-%m-%d}T{time_part}+03:00"
+    text = str(value).strip()
+    if not text:
+        return ""
+    if "T" in text:
+        return text
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            time_part = "23:59:59" if end_of_day else "00:00:00"
+            return f"{dt:%Y-%m-%d}T{time_part}+03:00"
+        except ValueError:
+            pass
+    return text
+
+
+def _server_status_value(labels: tuple[str, ...]) -> Optional[int]:
+    if len(labels) != 1:
+        return None
+    return SERVER_STATUS_BY_LABEL.get(labels[0].casefold().replace("ё", "е"))
 
 _COLLECT_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
@@ -787,6 +834,7 @@ class EtpClient:
         tag_id: Optional[int] = None,
         sort: str = "id",
         direction: str = "DESC",
+        client_filters: Any = None,
         _recover_attempt: int = 0,
     ) -> dict[str, Any]:
         """Один RPC Procedure.list. Сервер жёстко ограничивает отдачу ~25 штук."""
@@ -798,16 +846,119 @@ class EtpClient:
             "sort": sort,
             "dir": direction,
             "with_affiliates": True,
+            "date_published_from": _date_to_etp_iso(date_from),
             "query": query or "",
             "tag_id": tag_id,
             "limit": limit,
+            "procedure_number2_like": "",
+            "procedure_number_like": "",
+            "title_like": "",
+            "lot_nomenclature": "",
+            "lot_okved": "",
+            "organizer": "",
+            "customer": "",
+            "lot_customer_region_okato": "",
+            "agents": "",
+            "coordination_resolved": False,
+            "guarantee_application_from": None,
+            "guarantee_application_till": None,
+            "department_id": -1,
+            "contact_person_like": "",
+            "procedure_type": "",
+            "status": None,
+            "private": -1,
+            "lot_count_from": "",
+            "lot_count_till": "",
+            "applics_added_from": "",
+            "applics_added_till": "",
+            "experts": "",
+            "asez_plan_position_id": "",
+            "date_published_till": _date_to_etp_iso(date_to, end_of_day=True),
+            "date_end_registration_from": "",
+            "date_end_registration_till": "",
+            "date_end_second_parts_review_from": "",
+            "date_end_second_parts_review_till": "",
+            "start_price_from": None,
+            "start_price_till": None,
+            "special_mark": "",
+            "lot_units_search": "",
+            "nm_types": "",
+            "internal_registry_number": "",
+            "managed_by_parent": False,
             "start": start,
             "__tid": int(time.time() * 1000) % 1_000_000,
         }
-        if date_from:
-            payload["date_published_from"] = date_from
-        if date_to:
-            payload["date_published_to"] = date_to
+        if client_filters is not None:
+            registry = str(getattr(client_filters, "registry_contains", "") or "")
+            payload.update(
+                {
+                    "procedure_number2_like": str(
+                        getattr(client_filters, "unique_number_contains", "") or ""
+                    ),
+                    "procedure_number_like": registry,
+                    "title_like": str(getattr(client_filters, "title_contains", "") or ""),
+                    "lot_nomenclature": str(
+                        getattr(client_filters, "okpd2_contains", "") or ""
+                    ),
+                    "lot_okved": str(getattr(client_filters, "okved2_contains", "") or ""),
+                    "organizer": str(getattr(client_filters, "organizer_contains", "") or ""),
+                    "customer": str(getattr(client_filters, "customer_contains", "") or ""),
+                    "lot_customer_region_okato": str(
+                        getattr(client_filters, "customer_region_contains", "") or ""
+                    ),
+                    "agents": str(
+                        getattr(client_filters, "customer_agent_contains", "") or ""
+                    ),
+                    "contact_person_like": str(
+                        getattr(client_filters, "responsible_contains", "") or ""
+                    ),
+                    "procedure_type": str(getattr(client_filters, "trend_pur", "") or ""),
+                    "status": _server_status_value(
+                        tuple(getattr(client_filters, "step_ids", ()) or ())
+                    ),
+                    "lot_count_from": (
+                        str(getattr(client_filters, "lots_min", "") or "")
+                    ),
+                    "lot_count_till": (
+                        str(getattr(client_filters, "lots_max", "") or "")
+                    ),
+                    "applics_added_from": (
+                        str(getattr(client_filters, "applics_min", "") or "")
+                    ),
+                    "applics_added_till": (
+                        str(getattr(client_filters, "applics_max", "") or "")
+                    ),
+                    "start_price_from": getattr(client_filters, "price_min", None),
+                    "start_price_till": getattr(client_filters, "price_max", None),
+                    "date_end_registration_from": _date_to_etp_iso(
+                        getattr(client_filters, "end_from", None)
+                    ),
+                    "date_end_registration_till": _date_to_etp_iso(
+                        getattr(client_filters, "end_to", None), end_of_day=True
+                    ),
+                    "date_end_second_parts_review_from": _date_to_etp_iso(
+                        getattr(client_filters, "results_from", None)
+                    ),
+                    "date_end_second_parts_review_till": _date_to_etp_iso(
+                        getattr(client_filters, "results_to", None), end_of_day=True
+                    ),
+                    "special_mark": str(
+                        getattr(client_filters, "special_features_contains", "") or ""
+                    ),
+                    "lot_units_search": str(
+                        getattr(client_filters, "position_name_contains", "") or ""
+                    ),
+                    "nm_types": str(
+                        getattr(client_filters, "national_regime_contains", "") or ""
+                    ),
+                }
+            )
+            guarantee_min = getattr(client_filters, "guarantee_min", None)
+            guarantee_max = getattr(client_filters, "guarantee_max", None)
+            if guarantee_min is not None:
+                payload["guarantee_application_from"] = guarantee_min
+            if guarantee_max is not None:
+                payload["guarantee_application_till"] = guarantee_max
 
         try:
             res = self.driver.execute_async_script(
@@ -827,6 +978,7 @@ class EtpClient:
                         tag_id=tag_id,
                         sort=sort,
                         direction=direction,
+                        client_filters=client_filters,
                         _recover_attempt=_recover_attempt + 1,
                     )
             return {
@@ -856,6 +1008,7 @@ class EtpClient:
                     tag_id=tag_id,
                     sort=sort,
                     direction=direction,
+                    client_filters=client_filters,
                     _recover_attempt=_recover_attempt + 1,
                 )
         return res
@@ -891,10 +1044,6 @@ TREND_PUR_LABELS = {
 
 STATUS_LABELS = [
     "Активные",
-    "Приём предложений",
-    "Прием предложений",
-    "Прием заявок на допуск",
-    "Проверка заявок на допуск",
     "Прием заявок",
     "Ожидает начала регистрации",
     "Ожидает начала процедуры",
@@ -906,8 +1055,6 @@ STATUS_LABELS = [
     "Завершение процедуры",
     "Рассмотрение заявок",
     "Подведение итогов",
-    "В архиве",
-    "Процедура отменена",
 ]
 
 STEP_ID_LABELS = {

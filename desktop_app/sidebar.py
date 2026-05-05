@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Sequence
 
 from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtWidgets import (
@@ -32,6 +32,69 @@ from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
+
+
+class StatusMultiSelect(QWidget):
+    """Compact multi-select control that opens the status list above the form."""
+
+    def __init__(self, labels: Sequence[str], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setMinimumWidth(190)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.button = QToolButton()
+        self.button.setText("Все")
+        self.button.setMinimumHeight(30)
+        self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.button.setArrowType(Qt.DownArrow)
+        self.button.clicked.connect(self._show_popup)
+        layout.addWidget(self.button)
+
+        self.popup = QWidget(self, Qt.Popup | Qt.FramelessWindowHint)
+        popup_layout = QVBoxLayout(self.popup)
+        popup_layout.setContentsMargins(1, 1, 1, 1)
+        popup_layout.setSpacing(0)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setMinimumHeight(220)
+        self.list_widget.setMaximumHeight(320)
+        self.list_widget.setAlternatingRowColors(True)
+        self.list_widget.setStyleSheet(
+            "QListWidget { background: white; border: 1px solid #b9c7dc; }"
+        )
+        for label in labels:
+            item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, label)
+            self.list_widget.addItem(item)
+        self.list_widget.itemChanged.connect(self._update_button_text)
+        popup_layout.addWidget(self.list_widget)
+
+    def _show_popup(self) -> None:
+        self._update_button_text()
+        width = max(self.width(), 260)
+        height = min(320, max(220, self.list_widget.sizeHintForRow(0) * self.list_widget.count() + 8))
+        self.popup.resize(width, height)
+        self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self.popup.show()
+        self.list_widget.setFocus()
+
+    def _update_button_text(self) -> None:
+        selected = [
+            self.list_widget.item(i).text()
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        ]
+        if not selected:
+            self.button.setText("Все")
+        elif len(selected) == 1:
+            self.button.setText(selected[0])
+        else:
+            self.button.setText(f"Выбрано: {len(selected)}")
 
 class Sidebar(QWidget):
     """Подробная форма фильтров, похожая на форму на сайте ЭТП."""
@@ -263,16 +326,8 @@ class Sidebar(QWidget):
         self.cb_trend = self._make_combo(
             [(label, label) for label in PROCEDURE_TYPE_LABELS]
         )
-        self.lst_steps = QListWidget()
-        self.lst_steps.setMinimumHeight(220)
-        self.lst_steps.setMaximumHeight(360)
-        self.lst_steps.setAlternatingRowColors(True)
-        for label in STATUS_LABELS:
-            item = QListWidgetItem(label)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            item.setData(Qt.UserRole, label)
-            self.lst_steps.addItem(item)
+        self.status_selector = StatusMultiSelect(STATUS_LABELS)
+        self.lst_steps = self.status_selector.list_widget
         self.cb_purchase_form = self._make_combo(
             [("Любая", ""), ("Электронная", "электрон"), ("Бумажная", "бумаж")]
         )
@@ -325,7 +380,7 @@ class Sidebar(QWidget):
         )
         self._add_row(grid, 1, 1, "Ответственное лицо:", self.ed_responsible)
         self._add_row(grid, 2, 1, "Тип процедуры:", self.cb_trend)
-        self._add_row(grid, 3, 1, "Статус процедуры:", self.lst_steps)
+        self._add_row(grid, 3, 1, "Статус процедуры:", self.status_selector)
         self._add_row(grid, 4, 1, "Форма закупки:", self.cb_purchase_form)
         self._add_row(
             grid,

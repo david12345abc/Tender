@@ -123,6 +123,31 @@ class ProcedureTableModel(QAbstractTableModel):
                 return "Подведение итогов"
         return step_id_label(step)
 
+    def _status_background_color(self, proc: dict[str, Any]) -> Optional[QColor]:
+        status = self._status_label(proc).casefold()
+        if "архив" in status or "заверш" in status:
+            return QColor(235, 235, 235)
+        if "отмен" in status:
+            return QColor(248, 225, 225)
+        if (
+            "подвед" in status
+            or "рассмотр" in status
+            or "провер" in status
+            or "вскры" in status
+        ):
+            return QColor(250, 240, 210)
+        if "ожида" in status:
+            return QColor(230, 240, 255)
+        if (
+            "прием" in status
+            or "приём" in status
+            or "регистрац" in status
+            or "актив" in status
+            or "повышение" in status
+        ):
+            return QColor(225, 245, 225)
+        return None
+
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
@@ -274,15 +299,7 @@ class ProcedureTableModel(QAbstractTableModel):
                 info.append(f"id: {proc.get('id')}")
                 return "\n".join(info)
         if role == Qt.BackgroundRole:
-            step = proc.get("step_id")
-            if step == "registration":
-                return QColor(225, 245, 225)
-            if step == "applic_access":
-                return QColor(230, 240, 255)
-            if step == "second_parts":
-                return QColor(250, 240, 210)
-            if step == "finalizing_procedure":
-                return QColor(235, 235, 235)
+            return self._status_background_color(proc)
         return None
 
     def set_rows(self, procs: list[dict[str, Any]]) -> None:
