@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from typing import Any, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
@@ -12,6 +13,22 @@ from .constants import COLUMNS
 from .keywords import load_keywords
 from .params import ClientFilters
 from .utils import fmt_date, fmt_money, parse_dt, parse_price
+
+
+def _word_tokens(text: str) -> list[str]:
+    return re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", text.casefold().replace("ё", "е"))
+
+
+def _contains_keyword_as_words(text: str, keyword: str) -> bool:
+    haystack = _word_tokens(text)
+    needle = _word_tokens(keyword)
+    if not haystack or not needle:
+        return False
+    if len(needle) == 1:
+        return needle[0] in set(haystack)
+    last_start = len(haystack) - len(needle)
+    return any(haystack[i : i + len(needle)] == needle for i in range(last_start + 1))
+
 
 class ProcedureTableModel(QAbstractTableModel):
     COL_KEYS = [c[0] for c in COLUMNS]
@@ -50,9 +67,13 @@ class ProcedureTableModel(QAbstractTableModel):
         haystack = " ".join(
             str(proc.get(key) or "")
             for key in ("title", "name", "procedure_name", "lot_name")
-        ).casefold()
+        )
         keywords = self._keywords or tuple(load_keywords())
-        return [keyword for keyword in keywords if keyword.casefold() in haystack]
+        return [
+            keyword
+            for keyword in keywords
+            if _contains_keyword_as_words(haystack, keyword)
+        ]
 
     def _first_date(self, proc: dict[str, Any], keys: tuple[str, ...]) -> Optional[datetime]:
         for key in keys:
@@ -509,9 +530,12 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             haystack = self._blob(
                 proc,
                 ("title", "name", "procedure_name", "lot_name"),
-            ).casefold()
-            keywords = tuple(k.casefold() for k in f.keywords if k.strip())
-            if not keywords or not any(keyword in haystack for keyword in keywords):
+            )
+            keywords = tuple(k for k in f.keywords if k.strip())
+            if not keywords or not any(
+                _contains_keyword_as_words(haystack, keyword)
+                for keyword in keywords
+            ):
                 return False
 
         if f.registry_contains:
