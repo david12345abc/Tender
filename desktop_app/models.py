@@ -7,7 +7,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
-from etp_client import procedure_type_label, step_id_label, trend_pur_label
+from etp_client import SERVER_STATUS_BY_LABEL, procedure_type_label, step_id_label, trend_pur_label
 
 from .constants import COLUMNS
 from .keywords import load_keywords
@@ -28,6 +28,10 @@ def _contains_keyword_as_words(text: str, keyword: str) -> bool:
         return needle[0] in set(haystack)
     last_start = len(haystack) - len(needle)
     return any(haystack[i : i + len(needle)] == needle for i in range(last_start + 1))
+
+
+def _normalize_status(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").casefold().replace("ё", "е")).strip()
 
 
 class ProcedureTableModel(QAbstractTableModel):
@@ -496,6 +500,47 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             return len(lots)
         return 1
 
+    def _status_matches(self, proc: dict[str, Any], selected: str, display_status: str) -> bool:
+        selected_norm = _normalize_status(selected)
+        if not selected_norm:
+            return True
+
+        display_values = [
+            display_status,
+            str(display_status or "").splitlines()[0],
+            step_id_label(proc.get("step_id")),
+        ]
+        if any(_normalize_status(value) == selected_norm for value in display_values):
+            return True
+
+        display_norm = _normalize_status(display_status)
+        if display_norm and display_norm not in {"-", "—"} and selected_norm != "активные":
+            return False
+
+        text_keys = (
+            "step_name",
+            "step_label",
+            "status_name",
+            "status_label",
+            "state_name",
+            "stage_name",
+        )
+        if any(_normalize_status(proc.get(key)) == selected_norm for key in text_keys):
+            return True
+
+        selected_server_status = SERVER_STATUS_BY_LABEL.get(selected_norm)
+        if selected_server_status is None:
+            return False
+
+        for key in ("status", "status_id", "stage"):
+            value = proc.get(key)
+            try:
+                if int(str(value)) == selected_server_status:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        return False
+
     def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
         if not isinstance(model, ProcedureTableModel):
@@ -623,16 +668,8 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         ):
             return False
         if f.step_ids:
-            computed_status = model._status_label(proc).casefold()
-            if not any(
-                selected_matches(
-                    step_id,
-                    ("step_id", "status", "stage"),
-                    ("step_name", "step_label", "status_name", "status_label", "state_name", "stage_name"),
-                )
-                or step_id.casefold() == computed_status
-                for step_id in f.step_ids
-            ):
+            display_status = model._status_label(proc)
+            if not any(self._status_matches(proc, step_id, display_status) for step_id in f.step_ids):
                 return False
         if f.purchase_form:
             if not self._contains(

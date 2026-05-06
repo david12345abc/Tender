@@ -1158,9 +1158,14 @@ class MainWindow(QMainWindow):
         self.sidebar.set_controls_enabled(True)
         self._update_controls()
         if self.model.rowCount() > 0:
-            self.status_msg.setText(
-                f"Загружено {self.model.rowCount()} / {self._last_total or self.model.rowCount()} процедур."
-            )
+            loaded = self.model.rowCount()
+            total = self._last_total or loaded
+            if total and self._current_start and self._current_start != loaded:
+                self.status_msg.setText(
+                    f"Подошло {loaded}; просмотрено {min(self._current_start, total)} / {total} процедур."
+                )
+            else:
+                self.status_msg.setText(f"Загружено {loaded} / {total} процедур.")
 
     def _on_stop(self) -> None:
         self.runner.request_stop()
@@ -1312,6 +1317,16 @@ class MainWindow(QMainWindow):
         total = self._last_total
         if loaded == 0 and total == 0:
             self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+        elif total and self._current_start and self._current_start != loaded:
+            scanned = min(self._current_start, total)
+            if scanned < total:
+                self.lbl_counter.setText(
+                    f"Показано {visible} (подошло {loaded}; просмотрено {scanned} из {total}) по фильтру поиска."
+                )
+            else:
+                self.lbl_counter.setText(
+                    f"Показано {visible} из {loaded} подходящих процедур. Просмотрено все {total} по фильтру поиска."
+                )
         elif total and loaded < total:
             self.lbl_counter.setText(
                 f"Показано {visible} (загружено {loaded}) из {total} по фильтру поиска."
