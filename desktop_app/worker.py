@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from etp_client import HARD_SERVER_LIMIT, EtpClient
+from etp_client import HARD_SERVER_LIMIT, EtpClient, _server_status_value
 
 from .constants import ANALYSIS_DIR, VIEW_URL
 from .document_text import prepare_documents_for_analysis
@@ -202,10 +202,12 @@ def make_search_task(
         pages_done = 0
         last_next_start = cur_start
         last_emitted_start = cur_start
+        seen_keys: set[str] = set()
         probe_model = ProcedureTableModel()
         probe_proxy = ProcedureFilterProxy()
         probe_proxy.setSourceModel(probe_model)
         probe_filters = client_filters
+        server_filter_variants = [client_filters]
         is_roseltorg = "roseltorg" in str(getattr(client, "target_host", ""))
         if client_filters is not None:
             # Для Росэлторга быстрый поиск выполняет сервер. Повторная локальная
@@ -217,6 +219,18 @@ def make_search_task(
                 # теми же полями, что использует сайт. Локально оставляем только
                 # фильтр ключевых слов, которого нет в форме ЭТП.
                 step_ids = tuple(getattr(client_filters, "step_ids", ()) or ())
+                if len(step_ids) > 1:
+                    concrete_step_ids = tuple(
+                        step_id
+                        for step_id in step_ids
+                        if str(step_id).casefold().replace("ё", "е") != "активные"
+                    )
+                    step_ids_for_api = concrete_step_ids or step_ids
+                    server_filter_variants = [
+                        replace(client_filters, step_ids=(step_id,))
+                        for step_id in step_ids_for_api
+                        if _server_status_value((step_id,)) is not None
+                    ] or [client_filters]
                 probe_filters = replace(
                     client_filters,
                     quick_search="",
@@ -233,7 +247,7 @@ def make_search_task(
                     guarantee_max=None,
                     responsible_contains="",
                     trend_pur="",
-                    step_ids=() if len(step_ids) == 1 else step_ids,
+                    step_ids=(),
                     purchase_form="",
                     applics_min=None,
                     applics_max=None,
@@ -252,109 +266,141 @@ def make_search_task(
                     national_regime_contains="",
                 )
             probe_proxy.set_filters(probe_filters)
+        aggregate_total = 0
+        aggregate_processed = 0
+        for filter_variant in server_filter_variants:
+            cur_start = start
+            variant_total: Optional[int] = None
+            pages_done = 0
+            variant_step_ids = tuple(getattr(filter_variant, "step_ids", ()) or ())
+            variant_status_label = variant_step_ids[0] if len(variant_step_ids) == 1 else ""
+            if str(variant_status_label).casefold().replace("ё", "е") == "активные":
+                variant_status_label = ""
             set_client_filters = getattr(client, "set_client_filters", None)
             if callable(set_client_filters):
-                set_client_filters(client_filters)
+                set_client_filters(filter_variant)
 
-        while True:
-            if w.is_stop_requested():
-                return
-            request_limit = max(1, int(params.limit or HARD_SERVER_LIMIT))
-            w.progress.emit(
-                f"Запрос Procedure.list: start={cur_start}, limit={request_limit}"
-                + (f"  (найдено {accepted_this_task}, просмотрено {loaded_this_task}/{total})" if total else "")
-            )
-            fetch_kwargs = {
-                "start": cur_start,
-                "limit": request_limit,
-                "date_from": params.date_from or None,
-                "date_to": params.date_to or None,
-                "query": (
-                    params.query
-                    or (
-                        getattr(client_filters, "quick_search", "")
-                        if client_filters is not None
-                        else ""
+            while True:
+                if w.is_stop_requested():
+                    return
+                request_limit = max(1, int(params.limit or HARD_SERVER_LIMIT))
+                w.progress.emit(
+                    "Ищу процедуры..."
+                    + (f" Найдено подходящих: {accepted_this_task}." if accepted_this_task else "")
+                )
+                fetch_kwargs = {
+                    "start": cur_start,
+                    "limit": request_limit,
+                    "date_from": params.date_from or None,
+                    "date_to": params.date_to or None,
+                    "query": (
+                        params.query
+                        or (
+                            getattr(filter_variant, "quick_search", "")
+                            if filter_variant is not None
+                            else ""
+                        )
+                        or None
+                    ),
+                    "tag_id": params.tag_id,
+                    "sort": params.sort,
+                    "direction": params.direction,
+                }
+                if not is_roseltorg:
+                    fetch_kwargs["client_filters"] = filter_variant
+                res = client.fetch_page(**fetch_kwargs)
+                if w.is_stop_requested():
+                    return
+                if res.get("error"):
+                    err_text = str(res["error"])
+                    err_low = err_text.lower()
+                    if (
+                        "no such window" in err_low
+                        or "web view not found" in err_low
+                        or "target window already closed" in err_low
+                        or "target frame detached" in err_low
+                        or "invalid session id" in err_low
+                    ):
+                        short = (
+                            "Вкладка ЭТП была закрыта в Chrome. "
+                            "Открыл её заново — попробуйте ещё раз нажать «Поиск»."
+                        )
+                        w.error.emit(short)
+                    else:
+                        w.error.emit(f"Сервер вернул ошибку: {err_text}")
+                    return
+                if res.get("no_access") or res.get("no_session"):
+                    msg = res.get("message") or "Нет доступа / сессия не активна."
+                    host = str(getattr(client, "target_host", ""))
+                    login_hint = (
+                        "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
+                        "затем снова нажмите «Поиск»."
+                        if "roseltorg" in host
+                        else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                        "затем снова нажмите «Поиск»."
                     )
-                    or None
-                ),
-                "tag_id": params.tag_id,
-                "sort": params.sort,
-                "direction": params.direction,
-            }
-            if not is_roseltorg:
-                fetch_kwargs["client_filters"] = client_filters
-            res = client.fetch_page(**fetch_kwargs)
-            if w.is_stop_requested():
-                return
-            if res.get("error"):
-                err_text = str(res["error"])
-                err_low = err_text.lower()
-                if (
-                    "no such window" in err_low
-                    or "web view not found" in err_low
-                    or "target window already closed" in err_low
-                    or "target frame detached" in err_low
-                    or "invalid session id" in err_low
-                ):
-                    short = (
-                        "Вкладка ЭТП была закрыта в Chrome. "
-                        "Открыл её заново — попробуйте ещё раз нажать «Поиск»."
+                    w.session.emit(
+                        False,
+                        f"{msg}\n\n{login_hint}",
                     )
-                    w.error.emit(short)
+                    return
+                procs = res.get("procedures") or []
+                if variant_status_label:
+                    for row in procs:
+                        if isinstance(row, dict):
+                            row["_api_status_label"] = variant_status_label
+                if variant_total is None:
+                    variant_total = int(res.get("totalCount") or 0)
+                    aggregate_total += variant_total
+                    total = aggregate_total
+                accepted = procs
+                if probe_filters is not None:
+                    probe_model.set_rows(procs)
+                    accepted = []
+                    for source_row in probe_proxy.filtered_source_rows():
+                        row = probe_model.row_at(source_row)
+                        if row is not None:
+                            accepted.append(row)
+                deduped: list[dict] = []
+                for row in accepted:
+                    key = str(
+                        row.get("id")
+                        or row.get("registry_number")
+                        or row.get("procedure_number")
+                        or row.get("procedure_number2")
+                        or id(row)
+                    )
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    deduped.append(row)
+                next_start = cur_start + len(procs)
+                aggregate_processed += len(procs)
+                last_next_start = aggregate_processed
+                if deduped:
+                    w.batch.emit(deduped, aggregate_processed, aggregate_total or 0)
+                    last_emitted_start = aggregate_processed
+                    accepted_this_task += len(deduped)
                 else:
-                    w.error.emit(f"Сервер вернул ошибку: {err_text}")
-                return
-            if res.get("no_access") or res.get("no_session"):
-                msg = res.get("message") or "Нет доступа / сессия не активна."
-                host = str(getattr(client, "target_host", ""))
-                login_hint = (
-                    "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
-                    "затем снова нажмите «Поиск»."
-                    if "roseltorg" in host
-                    else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
-                    "затем снова нажмите «Поиск»."
-                )
-                w.session.emit(
-                    False,
-                    f"{msg}\n\n{login_hint}",
-                )
-                return
-            procs = res.get("procedures") or []
-            if total is None:
-                total = int(res.get("totalCount") or 0)
-            accepted = procs
-            if probe_filters is not None:
-                probe_model.set_rows(procs)
-                accepted = []
-                for i in range(probe_proxy.rowCount()):
-                    src = probe_proxy.mapToSource(probe_proxy.index(i, 0))
-                    row = probe_model.row_at(src.row())
-                    if row is not None:
-                        accepted.append(row)
-            next_start = cur_start + len(procs)
-            last_next_start = next_start
-            if accepted:
-                w.batch.emit(accepted, next_start, total or 0)
-                last_emitted_start = next_start
-                accepted_this_task += len(accepted)
-            loaded_this_task += len(procs)
-            pages_done += 1
-            reached_user_batch = accepted_this_task >= request_limit
-            if not procs:
-                break
-            if total and next_start >= total:
-                break
-            if batches_left == 1 and reached_user_batch:
-                # Один пользовательский батч = примерно request_limit строк,
-                # которые прошли клиентские фильтры и попадут в таблицу.
-                break
-            if batches_left != 1 and pages_done >= batches_left:
-                break
-            cur_start = next_start
+                    w.batch.emit([], aggregate_processed, aggregate_total or 0)
+                    last_emitted_start = aggregate_processed
+                loaded_this_task += len(procs)
+                pages_done += 1
+                reached_user_batch = accepted_this_task >= request_limit
+                if not procs:
+                    break
+                if variant_total and next_start >= variant_total:
+                    break
+                if batches_left == 1 and reached_user_batch:
+                    # Один пользовательский батч = примерно request_limit строк,
+                    # которые прошли клиентские фильтры и попадут в таблицу.
+                    break
+                if batches_left != 1 and pages_done >= batches_left:
+                    break
+                cur_start = next_start
 
         if last_emitted_start != last_next_start:
-            w.batch.emit([], last_next_start, total or 0)
+            w.batch.emit([], last_next_start, aggregate_total or 0)
         w.session.emit(True, "Готово.")
 
     return _run

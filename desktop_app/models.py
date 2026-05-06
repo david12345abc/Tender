@@ -7,7 +7,7 @@ from typing import Any, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
-from etp_client import SERVER_STATUS_BY_LABEL, procedure_type_label, step_id_label, trend_pur_label
+from etp_client import SERVER_STATUS_BY_LABEL, STATUS_LABELS, procedure_type_label, step_id_label, trend_pur_label
 
 from .constants import COLUMNS
 from .keywords import load_keywords
@@ -32,6 +32,25 @@ def _contains_keyword_as_words(text: str, keyword: str) -> bool:
 
 def _normalize_status(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").casefold().replace("ё", "е")).strip()
+
+
+SERVER_STATUS_LABEL_BY_VALUE: dict[int, str] = {}
+for _label in STATUS_LABELS:
+    _value = SERVER_STATUS_BY_LABEL.get(_normalize_status(_label))
+    if _value is not None and _value not in SERVER_STATUS_LABEL_BY_VALUE:
+        SERVER_STATUS_LABEL_BY_VALUE[_value] = _label
+
+
+def _server_status_label(proc: dict[str, Any]) -> Optional[str]:
+    for key in ("status", "status_id"):
+        value = proc.get(key)
+        try:
+            label = SERVER_STATUS_LABEL_BY_VALUE.get(int(str(value)))
+        except (TypeError, ValueError):
+            label = None
+        if label:
+            return label
+    return None
 
 
 class ProcedureTableModel(QAbstractTableModel):
@@ -94,6 +113,9 @@ class ProcedureTableModel(QAbstractTableModel):
         def with_suffix(label: str) -> str:
             return label + status_suffix if status_suffix and status_suffix not in label else label
 
+        if proc.get("_api_status_label"):
+            return with_suffix(str(proc["_api_status_label"]))
+
         for status_key in (
             "step_name",
             "step_label",
@@ -121,6 +143,9 @@ class ProcedureTableModel(QAbstractTableModel):
         ).casefold()
         if "архив" in status_blob:
             return with_suffix("В архиве")
+        server_label = _server_status_label(proc)
+        if server_label:
+            return with_suffix(server_label)
         lots = proc.get("lots")
         if isinstance(lots, list) and lots:
             lot = next((item for item in lots if isinstance(item, dict) and item.get("actual")), None)
@@ -393,15 +418,81 @@ class ProcedureTableModel(QAbstractTableModel):
 
 
 class ProcedureFilterProxy(QSortFilterProxyModel):
+    PAGE_SIZE = 25
+
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._flt = ClientFilters()
+        self._page = 0
+        self._matching_rows_cache: Optional[list[int]] = None
         self.setSortRole(Qt.UserRole)
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
 
+    def setSourceModel(self, source_model: QAbstractTableModel) -> None:
+        super().setSourceModel(source_model)
+        source_model.modelReset.connect(self._clear_matching_cache)
+        source_model.rowsInserted.connect(self._clear_matching_cache)
+        source_model.rowsRemoved.connect(self._clear_matching_cache)
+        source_model.dataChanged.connect(self._clear_matching_cache)
+
+    def _clear_matching_cache(self, *args: Any) -> None:
+        self._matching_rows_cache = None
+
     def set_filters(self, flt: ClientFilters) -> None:
         self._flt = flt
+        self._page = 0
+        self._clear_matching_cache()
         self.invalidateFilter()
+
+    def refresh_page(self) -> None:
+        self._clear_matching_cache()
+        self._page = max(0, min(self._page, self.page_count() - 1))
+        self.invalidateFilter()
+
+    def page_size(self) -> int:
+        return self.PAGE_SIZE
+
+    def current_page(self) -> int:
+        return self._page
+
+    def filtered_count(self) -> int:
+        return len(self._matching_source_rows())
+
+    def filtered_source_rows(self) -> list[int]:
+        return list(self._matching_source_rows())
+
+    def page_count(self) -> int:
+        total = self.filtered_count()
+        return max(1, (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
+
+    def set_page(self, page: int) -> None:
+        new_page = max(0, min(page, self.page_count() - 1))
+        if new_page == self._page:
+            return
+        self._page = new_page
+        self.invalidateFilter()
+
+    def next_page(self) -> None:
+        self.set_page(self._page + 1)
+
+    def previous_page(self) -> None:
+        self.set_page(self._page - 1)
+
+    def _matching_source_rows(self) -> list[int]:
+        if self._matching_rows_cache is not None:
+            return self._matching_rows_cache
+        model = self.sourceModel()
+        if not isinstance(model, ProcedureTableModel):
+            self._matching_rows_cache = []
+            return self._matching_rows_cache
+        self._matching_rows_cache = [
+            row
+            for row in range(model.rowCount())
+            if self._matches_source_row(row, QModelIndex())
+        ]
+        if self._page >= self.page_count():
+            self._page = self.page_count() - 1
+        return self._matching_rows_cache
 
     def _all_text(self, value: Any) -> str:
         values: list[str] = []
@@ -508,40 +599,13 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         display_values = [
             display_status,
             str(display_status or "").splitlines()[0],
-            step_id_label(proc.get("step_id")),
         ]
         if any(_normalize_status(value) == selected_norm for value in display_values):
             return True
 
-        display_norm = _normalize_status(display_status)
-        if display_norm and display_norm not in {"-", "—"} and selected_norm != "активные":
-            return False
-
-        text_keys = (
-            "step_name",
-            "step_label",
-            "status_name",
-            "status_label",
-            "state_name",
-            "stage_name",
-        )
-        if any(_normalize_status(proc.get(key)) == selected_norm for key in text_keys):
-            return True
-
-        selected_server_status = SERVER_STATUS_BY_LABEL.get(selected_norm)
-        if selected_server_status is None:
-            return False
-
-        for key in ("status", "status_id", "stage"):
-            value = proc.get(key)
-            try:
-                if int(str(value)) == selected_server_status:
-                    return True
-            except (TypeError, ValueError):
-                pass
         return False
 
-    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+    def _matches_source_row(self, source_row: int, source_parent: QModelIndex) -> bool:
         model = self.sourceModel()
         if not isinstance(model, ProcedureTableModel):
             return True
@@ -668,8 +732,21 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         ):
             return False
         if f.step_ids:
+            normalized_steps = tuple(_normalize_status(step_id) for step_id in f.step_ids)
+            effective_step_ids = (
+                ()
+                if normalized_steps == ("активные",)
+                else tuple(
+                    step_id
+                    for step_id in f.step_ids
+                    if _normalize_status(step_id) != "активные"
+                )
+            )
             display_status = model._status_label(proc)
-            if not any(self._status_matches(proc, step_id, display_status) for step_id in f.step_ids):
+            if effective_step_ids and not any(
+                self._status_matches(proc, step_id, display_status)
+                for step_id in effective_step_ids
+            ):
                 return False
         if f.purchase_form:
             if not self._contains(
@@ -757,3 +834,15 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ):
                 return False
         return True
+
+    def filterAcceptsRow(self, source_row: int, source_parent: QModelIndex) -> bool:
+        if not isinstance(self.sourceModel(), ProcedureTableModel):
+            return True
+        if not self._matches_source_row(source_row, source_parent):
+            return False
+        try:
+            ordinal = self._matching_source_rows().index(source_row)
+        except ValueError:
+            return False
+        page_start = self._page * self.PAGE_SIZE
+        return page_start <= ordinal < page_start + self.PAGE_SIZE

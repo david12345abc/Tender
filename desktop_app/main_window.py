@@ -213,17 +213,22 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(10, 8, 10, 8)
         bottom_layout.setSpacing(8)
 
-        self.btn_load_more = QPushButton("Следующий батч")
-        self.btn_load_more.setToolTip("Загрузить следующий пакет данных")
-        self.btn_load_more.clicked.connect(self._on_load_more)
-        self.btn_load_more.setEnabled(False)
-        bottom_layout.addWidget(self.btn_load_more)
+        self.btn_prev_page = QPushButton("←")
+        self.btn_prev_page.setToolTip("Предыдущая страница")
+        self.btn_prev_page.clicked.connect(self._on_prev_page)
+        self.btn_prev_page.setEnabled(False)
+        bottom_layout.addWidget(self.btn_prev_page)
 
-        self.btn_load_all = QPushButton("Загрузить все батчи")
-        self.btn_load_all.setToolTip("Подряд скачать все оставшиеся пачки")
-        self.btn_load_all.clicked.connect(self._on_load_all)
-        self.btn_load_all.setEnabled(False)
-        bottom_layout.addWidget(self.btn_load_all)
+        self.lbl_page = QLabel("Страница 0 из 0")
+        self.lbl_page.setMinimumWidth(120)
+        self.lbl_page.setAlignment(Qt.AlignCenter)
+        bottom_layout.addWidget(self.lbl_page)
+
+        self.btn_next_page = QPushButton("→")
+        self.btn_next_page.setToolTip("Следующая страница")
+        self.btn_next_page.clicked.connect(self._on_next_page)
+        self.btn_next_page.setEnabled(False)
+        bottom_layout.addWidget(self.btn_next_page)
 
         self.btn_download_docs = QPushButton("Скачать документы")
         self.btn_download_docs.setToolTip("Скачать документацию выбранных процедур")
@@ -272,6 +277,7 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setFixedWidth(220)
         self.progress.setRange(0, 0)
+        self.progress.setFormat("Обработано: %v из %m")
         self.progress.hide()
         sb.addPermanentWidget(self.progress)
 
@@ -659,31 +665,15 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
         self._cache_dirty = False
 
-    def _on_load_more(self) -> None:
-        if self.runner.is_running():
-            return
-        if not self._ensure_platform_ready():
-            return
-        filters = self.sidebar.client_filters()
-        self._start_task(
-            self.sidebar.search_params(),
-            start=self._current_start,
-            batches=1,
-            filters=filters,
-        )
+    def _on_prev_page(self) -> None:
+        self.proxy.previous_page()
+        self._refresh_counter()
+        self.table.scrollToTop()
 
-    def _on_load_all(self) -> None:
-        if self.runner.is_running():
-            return
-        if not self._ensure_platform_ready():
-            return
-        filters = self.sidebar.client_filters()
-        self._start_task(
-            self.sidebar.search_params(),
-            start=self._current_start,
-            batches=10_000,
-            filters=filters,
-        )
+    def _on_next_page(self) -> None:
+        self.proxy.next_page()
+        self._refresh_counter()
+        self.table.scrollToTop()
 
     def _selected_procedures(self) -> list[dict[str, Any]]:
         rows = sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
@@ -734,10 +724,12 @@ class MainWindow(QMainWindow):
         self._apply_selected_browser()
 
         self.progress.show()
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Скачиваю документы...")
         self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
-        self.btn_load_more.setEnabled(False)
-        self.btn_load_all.setEnabled(False)
+        self.btn_prev_page.setEnabled(False)
+        self.btn_next_page.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
         self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Скачиваю документы…")
@@ -779,10 +771,12 @@ class MainWindow(QMainWindow):
         self._analysis_sink.clear()
 
         self.progress.show()
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Анализирую...")
         self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
-        self.btn_load_more.setEnabled(False)
-        self.btn_load_all.setEnabled(False)
+        self.btn_prev_page.setEnabled(False)
+        self.btn_next_page.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
         self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Анализ карточки и LM Studio…")
@@ -1006,13 +1000,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _search_batches(self, filters: ClientFilters) -> int:
-        if filters.keyword_search_enabled:
-            return 10_000
-        if len(filters.step_ids) > 1:
-            # Сайт принимает один status за запрос. При мультивыборе добираем
-            # выдачу и применяем объединение статусов локально.
-            return 10_000
-        return 1
+        return 10_000
 
     def _has_active_filters(self, filters: ClientFilters) -> bool:
         return any(
@@ -1062,10 +1050,12 @@ class MainWindow(QMainWindow):
         filters = filters if filters is not None else self.sidebar.client_filters()
         self._cache_save_enabled = not self._has_active_filters(filters)
         self.progress.show()
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Ищу процедуры...")
         self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
-        self.btn_load_more.setEnabled(False)
-        self.btn_load_all.setEnabled(False)
+        self.btn_prev_page.setEnabled(False)
+        self.btn_next_page.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
         self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Работаю…")
@@ -1130,13 +1120,19 @@ class MainWindow(QMainWindow):
     @Slot(list, int, int)
     def _on_batch_loaded(self, procs: list, start: int, total: int) -> None:
         self._last_total = total or self._last_total
+        if total:
+            processed = min(max(start, 0), total)
+            self.progress.setRange(0, total)
+            self.progress.setValue(processed)
+            self.progress.setFormat(f"Обработано: {processed} из {total}")
         if start == 0 and self.model.rowCount() == 0:
             self.model.set_rows(procs)
         else:
             self.model.append_rows(procs)
         self._current_start = start
+        self.proxy.refresh_page()
         self._refresh_counter()
-        if self._cache_save_enabled:
+        if procs and self._cache_save_enabled:
             self._schedule_cache_save()
 
     @Slot(str)
@@ -1157,15 +1153,7 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         self.sidebar.set_controls_enabled(True)
         self._update_controls()
-        if self.model.rowCount() > 0:
-            loaded = self.model.rowCount()
-            total = self._last_total or loaded
-            if total and self._current_start and self._current_start != loaded:
-                self.status_msg.setText(
-                    f"Подошло {loaded}; просмотрено {min(self._current_start, total)} / {total} процедур."
-                )
-            else:
-                self.status_msg.setText(f"Загружено {loaded} / {total} процедур.")
+        self.status_msg.setText(f"Найдено {self.proxy.filtered_count()} процедур.")
 
     def _on_stop(self) -> None:
         self.runner.request_stop()
@@ -1204,7 +1192,16 @@ class MainWindow(QMainWindow):
         if not idx.isValid():
             return
         proc = self._proc_from_index(idx)
+        if not proc:
+            return
+        cell_value = str(idx.data(Qt.DisplayRole) or "").strip()
         menu = QMenu(self)
+        copy_cell_action = menu.addAction(
+            "Копировать значение ячейки",
+            lambda value=cell_value: QApplication.clipboard().setText(value),
+        )
+        copy_cell_action.setEnabled(bool(cell_value))
+        menu.addSeparator()
         menu.addAction("Открыть в Chrome", lambda: self._open_in_browser(proc))
         menu.addSeparator()
         menu.addAction(
@@ -1314,25 +1311,20 @@ class MainWindow(QMainWindow):
     def _refresh_counter(self) -> None:
         loaded = self.model.rowCount()
         visible = self.proxy.rowCount()
-        total = self._last_total
-        if loaded == 0 and total == 0:
+        found = self.proxy.filtered_count()
+        page_count = self.proxy.page_count()
+        current_page = self.proxy.current_page() + 1 if found else 0
+        if loaded == 0:
             self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
-        elif total and self._current_start and self._current_start != loaded:
-            scanned = min(self._current_start, total)
-            if scanned < total:
-                self.lbl_counter.setText(
-                    f"Показано {visible} (подошло {loaded}; просмотрено {scanned} из {total}) по фильтру поиска."
-                )
-            else:
-                self.lbl_counter.setText(
-                    f"Показано {visible} из {loaded} подходящих процедур. Просмотрено все {total} по фильтру поиска."
-                )
-        elif total and loaded < total:
-            self.lbl_counter.setText(
-                f"Показано {visible} (загружено {loaded}) из {total} по фильтру поиска."
-            )
+            self.lbl_page.setText("Страница 0 из 0")
+        elif found == 0:
+            self.lbl_counter.setText("По текущим фильтрам ничего не найдено.")
+            self.lbl_page.setText("Страница 0 из 0")
         else:
-            self.lbl_counter.setText(f"Показано {visible} из {loaded} процедур.")
+            self.lbl_counter.setText(
+                f"Найдено {found}. Показано {visible} на странице."
+            )
+            self.lbl_page.setText(f"Страница {current_page} из {page_count}")
         self._update_controls()
 
     def _set_badge(self, state: str, text: str) -> None:
@@ -1344,16 +1336,18 @@ class MainWindow(QMainWindow):
     def _update_controls(self) -> None:
         running = self.runner.is_running()
         platform_ready = self._is_platform_ready()
-        loaded = self.model.rowCount()
-        total = self._last_total
-        has_more = total > 0 and self._current_start < total
+        found = self.proxy.filtered_count()
+        has_rows = self.model.rowCount() > 0
+        has_visible_rows = found > 0
+        current_page = self.proxy.current_page()
+        page_count = self.proxy.page_count()
         self.btn_platform_gpb.setEnabled(not running)
         self.btn_platform_roseltorg.setEnabled(not running)
-        self.btn_load_more.setEnabled(platform_ready and not running and has_more)
-        self.btn_load_all.setEnabled(platform_ready and not running and has_more)
-        self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and loaded > 0)
-        self.btn_analyze.setEnabled(platform_ready and self._platform_key == "gpb" and not running and loaded > 0)
-        self.btn_export.setEnabled(platform_ready and loaded > 0)
+        self.btn_prev_page.setEnabled(platform_ready and current_page > 0)
+        self.btn_next_page.setEnabled(platform_ready and current_page + 1 < page_count)
+        self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
+        self.btn_analyze.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
+        self.btn_export.setEnabled(platform_ready and has_rows)
         self.sidebar.set_controls_enabled(platform_ready and not running)
 
     # --------------- кэш
