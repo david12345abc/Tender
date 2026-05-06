@@ -20,12 +20,9 @@ def user_writable_root() -> Path:
     return Path.home() / ".etp_gpb_search"
 
 
-# В exe ключевые слова не храним рядом с .exe: PyInstaller кладёт шаблон в _MEIPASS,
-# а запись в LOCALAPPDATA доступна с любого ПК и не требует прав на каталог установки.
-if getattr(sys, "frozen", False):
-    KEYWORDS_FILE = user_writable_root() / "data" / "keywords.txt"
-else:
-    KEYWORDS_FILE = APP_ROOT / "data" / "keywords.txt"
+# Основной внешний список ключевых слов лежит рядом с приложением/проектом.
+# Если его нет, приложение использует встроенный список из кода.
+KEYWORDS_FILE = APP_ROOT / "data" / "keywords.txt"
 
 
 def bundled_keywords_template_path() -> Path | None:
