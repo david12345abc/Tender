@@ -50,6 +50,20 @@ def _server_status_label(proc: dict[str, Any]) -> Optional[str]:
             label = None
         if label:
             return label
+    lots = proc.get("lots")
+    if isinstance(lots, list):
+        lot = next((item for item in lots if isinstance(item, dict) and item.get("actual")), None)
+        if not isinstance(lot, dict):
+            lot = next((item for item in lots if isinstance(item, dict)), None)
+        if isinstance(lot, dict):
+            for key in ("status", "status_id"):
+                value = lot.get(key)
+                try:
+                    label = SERVER_STATUS_LABEL_BY_VALUE.get(int(str(value)))
+                except (TypeError, ValueError):
+                    label = None
+                if label:
+                    return label
     return None
 
 
@@ -112,9 +126,6 @@ class ProcedureTableModel(QAbstractTableModel):
 
         def with_suffix(label: str) -> str:
             return label + status_suffix if status_suffix and status_suffix not in label else label
-
-        if proc.get("_api_status_label"):
-            return with_suffix(str(proc["_api_status_label"]))
 
         for status_key in (
             "step_name",

@@ -219,12 +219,13 @@ def make_search_task(
                 # теми же полями, что использует сайт. Локально оставляем только
                 # фильтр ключевых слов, которого нет в форме ЭТП.
                 step_ids = tuple(getattr(client_filters, "step_ids", ()) or ())
+                concrete_step_ids = tuple(
+                    step_id
+                    for step_id in step_ids
+                    if str(step_id).casefold().replace("ё", "е") != "активные"
+                )
+                local_step_ids = concrete_step_ids if step_ids else ()
                 if len(step_ids) > 1:
-                    concrete_step_ids = tuple(
-                        step_id
-                        for step_id in step_ids
-                        if str(step_id).casefold().replace("ё", "е") != "активные"
-                    )
                     step_ids_for_api = concrete_step_ids or step_ids
                     server_filter_variants = [
                         replace(client_filters, step_ids=(step_id,))
@@ -247,7 +248,7 @@ def make_search_task(
                     guarantee_max=None,
                     responsible_contains="",
                     trend_pur="",
-                    step_ids=(),
+                    step_ids=local_step_ids,
                     purchase_form="",
                     applics_min=None,
                     applics_max=None,
@@ -272,10 +273,6 @@ def make_search_task(
             cur_start = start
             variant_total: Optional[int] = None
             pages_done = 0
-            variant_step_ids = tuple(getattr(filter_variant, "step_ids", ()) or ())
-            variant_status_label = variant_step_ids[0] if len(variant_step_ids) == 1 else ""
-            if str(variant_status_label).casefold().replace("ё", "е") == "активные":
-                variant_status_label = ""
             set_client_filters = getattr(client, "set_client_filters", None)
             if callable(set_client_filters):
                 set_client_filters(filter_variant)
@@ -345,10 +342,6 @@ def make_search_task(
                     )
                     return
                 procs = res.get("procedures") or []
-                if variant_status_label:
-                    for row in procs:
-                        if isinstance(row, dict):
-                            row["_api_status_label"] = variant_status_label
                 if variant_total is None:
                     variant_total = int(res.get("totalCount") or 0)
                     aggregate_total += variant_total
