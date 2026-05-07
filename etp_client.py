@@ -979,6 +979,29 @@ class EtpClient:
             if guarantee_max is not None:
                 payload["guarantee_application_till"] = guarantee_max
 
+        request_data = dict(payload)
+        request_data.pop("__tid", None)
+        request_body = {
+            "action": "Procedure",
+            "method": "list",
+            "data": [request_data],
+            "type": "rpc",
+            "tid": payload.get("__tid") or 1,
+            "token": self._token,
+        }
+        request_debug = {
+            "platform": "gpb",
+            "method": "POST",
+            "url": RPC_ENDPOINT,
+            "headers": {
+                "Content-Type": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            "body": request_body,
+            "token": self._token,
+            "request_payload": payload,
+        }
+
         try:
             res = self.driver.execute_async_script(
                 _FETCH_LIST_JS, payload, self._token
@@ -1005,6 +1028,10 @@ class EtpClient:
                 "error": str(e),
                 "procedures": [],
                 "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "exception": str(e),
+                },
             }
         if not isinstance(res, dict):
             return {
@@ -1012,6 +1039,10 @@ class EtpClient:
                 "error": "no_response",
                 "procedures": [],
                 "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "raw_response": res,
+                },
             }
 
         if (res.get("no_access") or res.get("no_session")) and not res.get("error"):
@@ -1030,6 +1061,11 @@ class EtpClient:
                     client_filters=client_filters,
                     _recover_attempt=_recover_attempt + 1,
                 )
+        raw_res = dict(res)
+        res["_debug"] = {
+            **request_debug,
+            "raw_response": raw_res,
+        }
         return res
 
     def close(self) -> None:

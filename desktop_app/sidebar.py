@@ -69,6 +69,13 @@ class StatusMultiSelect(QWidget):
         self.list_widget.setStyleSheet(
             "QListWidget { background: white; border: 1px solid #b9c7dc; }"
         )
+        self.set_options(options)
+        self.list_widget.itemChanged.connect(self._update_button_text)
+        popup_layout.addWidget(self.list_widget)
+
+    def set_options(self, options: Sequence[str | tuple[str, str]]) -> None:
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
         for option in options:
             if isinstance(option, tuple):
                 label, value = option
@@ -80,8 +87,8 @@ class StatusMultiSelect(QWidget):
             item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, value)
             self.list_widget.addItem(item)
-        self.list_widget.itemChanged.connect(self._update_button_text)
-        popup_layout.addWidget(self.list_widget)
+        self.list_widget.blockSignals(False)
+        self._update_button_text()
 
     def _show_popup(self) -> None:
         self._update_button_text()
@@ -120,6 +127,8 @@ class Sidebar(QWidget):
         super().__init__(parent)
         self.setObjectName("Sidebar")
         self.setMinimumHeight(88)
+        self._filter_rows: dict[str, tuple[QLabel, QWidget, int, int]] = {}
+        self._platform_key = "gpb"
         self._build_ui()
 
     def _make_line(self, placeholder: str = "") -> QLineEdit:
@@ -235,7 +244,15 @@ class Sidebar(QWidget):
         row.setMinimumHeight(34)
         return row
 
-    def _add_row(self, grid: QGridLayout, row: int, col: int, label: str, widget: QWidget) -> None:
+    def _add_row(
+        self,
+        grid: QGridLayout,
+        row: int,
+        col: int,
+        label: str,
+        widget: QWidget,
+        key: str = "",
+    ) -> None:
         lbl = QLabel(label)
         lbl.setObjectName("FilterLabel")
         lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -243,6 +260,8 @@ class Sidebar(QWidget):
         widget.setMinimumHeight(max(widget.minimumHeight(), 30))
         grid.addWidget(lbl, row, col * 2)
         grid.addWidget(widget, row, col * 2 + 1)
+        if key:
+            self._filter_rows[key] = (lbl, widget, row, col)
 
     def _build_ui(self) -> None:
         body_layout = QVBoxLayout(self)
@@ -311,6 +330,7 @@ class Sidebar(QWidget):
         extra_layout.setSpacing(12)
 
         grid = QGridLayout()
+        self._filter_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(14)
@@ -370,15 +390,15 @@ class Sidebar(QWidget):
         self.sb_apc_min = self._make_int()
         self.sb_apc_max = self._make_int()
 
-        self._add_row(grid, 0, 0, "Номер закупки:", self.ed_registry)
-        self._add_row(grid, 1, 0, "Уникальный номер закупки:", self.ed_unique_number)
-        self._add_row(grid, 2, 0, "Наименование закупки:", self.ed_title_local)
-        self._add_row(grid, 3, 0, "ОКПД2:", self.ed_okpd2)
-        self._add_row(grid, 4, 0, "ОКВЭД2:", self.ed_okved2)
-        self._add_row(grid, 5, 0, "Организатор процедуры:", self.ed_organizer)
-        self._add_row(grid, 6, 0, "Заказчик:", self.ed_customer)
-        self._add_row(grid, 7, 0, "Регион заказчика:", self.ed_customer_region)
-        self._add_row(grid, 8, 0, "Агент заказчика:", self.ed_customer_agent)
+        self._add_row(grid, 0, 0, "Номер закупки:", self.ed_registry, "registry")
+        self._add_row(grid, 1, 0, "Уникальный номер закупки:", self.ed_unique_number, "unique_number")
+        self._add_row(grid, 2, 0, "Наименование закупки:", self.ed_title_local, "title")
+        self._add_row(grid, 3, 0, "ОКПД2:", self.ed_okpd2, "okpd2")
+        self._add_row(grid, 4, 0, "ОКВЭД2:", self.ed_okved2, "okved2")
+        self._add_row(grid, 5, 0, "Организатор процедуры:", self.ed_organizer, "organizer")
+        self._add_row(grid, 6, 0, "Заказчик:", self.ed_customer, "customer")
+        self._add_row(grid, 7, 0, "Регион заказчика:", self.ed_customer_region, "customer_region")
+        self._add_row(grid, 8, 0, "Агент заказчика:", self.ed_customer_agent, "customer_agent")
 
         self._add_row(
             grid,
@@ -386,17 +406,19 @@ class Sidebar(QWidget):
             1,
             "Обеспечение заявки:",
             self._range_row(self.sb_guarantee_min, self.sb_guarantee_max),
+            "guarantee",
         )
-        self._add_row(grid, 1, 1, "Ответственное лицо:", self.ed_responsible)
-        self._add_row(grid, 2, 1, "Тип процедуры:", self.cb_trend)
-        self._add_row(grid, 3, 1, "Статус процедуры:", self.status_selector)
-        self._add_row(grid, 4, 1, "Форма закупки:", self.cb_purchase_form)
+        self._add_row(grid, 1, 1, "Ответственное лицо:", self.ed_responsible, "responsible")
+        self._add_row(grid, 2, 1, "Тип процедуры:", self.cb_trend, "trend")
+        self._add_row(grid, 3, 1, "Статус процедуры:", self.status_selector, "status")
+        self._add_row(grid, 4, 1, "Форма закупки:", self.cb_purchase_form, "purchase_form")
         self._add_row(
             grid,
             5,
             1,
             "Лотов в закупке:",
             self._range_row(self.sb_lots_min, self.sb_lots_max),
+            "lots",
         )
         self._add_row(
             grid,
@@ -404,8 +426,9 @@ class Sidebar(QWidget):
             1,
             "Намерений:",
             self._range_row(self.sb_apc_min, self.sb_apc_max),
+            "applics",
         )
-        self._add_row(grid, 7, 1, "Тег:", self.ed_tag_id)
+        self._add_row(grid, 7, 1, "Тег:", self.ed_tag_id, "tag")
 
         published_row = QWidget()
         published_lay = QHBoxLayout(published_row)
@@ -417,7 +440,7 @@ class Sidebar(QWidget):
         published_lay.addWidget(QLabel("по"))
         published_lay.addWidget(self.ed_date_to)
         published_row.setMinimumHeight(34)
-        self._add_row(grid, 9, 0, "Дата публикации:", published_row)
+        self._add_row(grid, 9, 0, "Дата публикации:", published_row, "published")
 
         end_row = QWidget()
         end_lay = QHBoxLayout(end_row)
@@ -429,7 +452,7 @@ class Sidebar(QWidget):
         end_lay.addWidget(QLabel("по"))
         end_lay.addWidget(self.de_end_to)
         end_row.setMinimumHeight(34)
-        self._add_row(grid, 10, 0, "Окончание приема заявок:", end_row)
+        self._add_row(grid, 10, 0, "Окончание приема заявок:", end_row, "end")
         results_row = QWidget()
         results_lay = QHBoxLayout(results_row)
         results_lay.setContentsMargins(0, 0, 0, 0)
@@ -439,17 +462,18 @@ class Sidebar(QWidget):
         results_lay.addWidget(self.de_results_from)
         results_lay.addWidget(QLabel("по"))
         results_lay.addWidget(self.de_results_to)
-        self._add_row(grid, 8, 1, "Дата подведения итогов:", results_row)
+        self._add_row(grid, 8, 1, "Дата подведения итогов:", results_row, "results")
         self._add_row(
             grid,
             9,
             1,
             "Начальная цена (с НДС):",
             self._range_row(self.sb_price_min, self.sb_price_max, "от", "до"),
+            "price",
         )
-        self._add_row(grid, 10, 1, "Специальные признаки:", self.ed_special_features)
-        self._add_row(grid, 11, 0, "Наименование позиции:", self.ed_position_name)
-        self._add_row(grid, 11, 1, "Национальный режим закупок:", self.ed_national_regime)
+        self._add_row(grid, 10, 1, "Специальные признаки:", self.ed_special_features, "special_features")
+        self._add_row(grid, 11, 0, "Наименование позиции:", self.ed_position_name, "position_name")
+        self._add_row(grid, 11, 1, "Национальный режим закупок:", self.ed_national_regime, "national_regime")
 
         extra_layout.addLayout(grid)
         self.extra_scroll.setWidget(self.extra_filters)
@@ -511,17 +535,142 @@ class Sidebar(QWidget):
 
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
-        self.setMinimumHeight(560 if visible else 88)
+        self.setMinimumHeight(self._expanded_min_height() if visible else 88)
         self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
         self.updateGeometry()
         parent = self.parentWidget()
         if parent is not None:
             parent.updateGeometry()
 
+    def _expanded_min_height(self) -> int:
+        return 360 if self._platform_key == "roseltorg" else 560
+
     def _section(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setObjectName("SidebarSection")
         return lbl
+
+    def set_platform_filter_options(
+        self,
+        procedure_type_options: Sequence[tuple[str, str]],
+        status_options: Sequence[str | tuple[str, str]],
+        search_by_options: Optional[Sequence[tuple[str, str]]] = None,
+        platform_key: str = "gpb",
+    ) -> None:
+        self._platform_key = platform_key
+        current_trend = self.cb_trend.currentData()
+        self.cb_trend.blockSignals(True)
+        self.cb_trend.clear()
+        self.cb_trend.addItem("Все", "")
+        for label, value in procedure_type_options:
+            self.cb_trend.addItem(label, value)
+        trend_idx = self.cb_trend.findData(current_trend)
+        self.cb_trend.setCurrentIndex(trend_idx if trend_idx >= 0 else 0)
+        self.cb_trend.blockSignals(False)
+
+        self.status_selector.set_options(status_options)
+
+        current_search_by = self.cb_purchase_form.currentData()
+        self.cb_purchase_form.blockSignals(True)
+        self.cb_purchase_form.clear()
+        if search_by_options:
+            for label, value in search_by_options:
+                self.cb_purchase_form.addItem(label, value)
+        else:
+            self.cb_purchase_form.addItem("Любая", "")
+            self.cb_purchase_form.addItem("Электронная", "электрон")
+            self.cb_purchase_form.addItem("Бумажная", "бумаж")
+        search_by_idx = self.cb_purchase_form.findData(current_search_by)
+        self.cb_purchase_form.setCurrentIndex(search_by_idx if search_by_idx >= 0 else 0)
+        self.cb_purchase_form.blockSignals(False)
+        self._apply_platform_filter_visibility()
+
+    def _set_row_visible(self, key: str, visible: bool) -> None:
+        row = self._filter_rows.get(key)
+        if row is None:
+            return
+        label, widget, _, _ = row
+        label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _set_row_label(self, key: str, text: str) -> None:
+        row = self._filter_rows.get(key)
+        if row is None:
+            return
+        row[0].setText(text)
+
+    def _place_row(self, key: str, row: int, col: int, visible: bool = True) -> None:
+        stored = self._filter_rows.get(key)
+        if stored is None:
+            return
+        label, widget, _, _ = stored
+        self._filter_grid.removeWidget(label)
+        self._filter_grid.removeWidget(widget)
+        self._filter_grid.addWidget(label, row, col * 2)
+        self._filter_grid.addWidget(widget, row, col * 2 + 1)
+        label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _restore_row_position(self, key: str) -> None:
+        stored = self._filter_rows.get(key)
+        if stored is None:
+            return
+        _, _, row, col = stored
+        self._place_row(key, row, col, True)
+
+    def _apply_platform_filter_visibility(self) -> None:
+        if self._platform_key == "roseltorg":
+            visible_keys = {"trend", "purchase_form", "status", "organizer", "price", "published", "end", "results"}
+            self._set_row_label("trend", "Процедуры по:")
+            self._set_row_label("purchase_form", "Отображать по:")
+            self._set_row_label("organizer", "Организатор:")
+            self._set_row_label("price", "Цена:")
+            self._set_row_label("published", "Дата публикации:")
+            self._set_row_label("end", "Дата окончания приема предложений:")
+            self._set_row_label("results", "Дата выбора победителя:")
+            for row in range(12):
+                self._filter_grid.setRowMinimumHeight(row, 0)
+            for row in range(4):
+                self._filter_grid.setRowMinimumHeight(row, 36)
+            for key in self._filter_rows:
+                self._set_row_visible(key, False)
+            for key, row, col in (
+                ("trend", 0, 0),
+                ("purchase_form", 0, 1),
+                ("status", 1, 0),
+                ("organizer", 1, 1),
+                ("published", 2, 0),
+                ("results", 2, 1),
+                ("end", 3, 0),
+                ("price", 3, 1),
+            ):
+                self._place_row(key, row, col, key in visible_keys)
+            self.extra_filters.setMinimumHeight(190)
+            self.extra_scroll.setMinimumHeight(230)
+            self.extra_scroll.setMaximumHeight(320)
+        else:
+            visible_keys = set(self._filter_rows)
+            self._set_row_label("trend", "Тип процедуры:")
+            self._set_row_label("purchase_form", "Форма закупки:")
+            self._set_row_label("organizer", "Организатор процедуры:")
+            self._set_row_label("price", "Начальная цена (с НДС):")
+            self._set_row_label("published", "Дата публикации:")
+            self._set_row_label("end", "Окончание приема заявок:")
+            self._set_row_label("results", "Дата подведения итогов:")
+            for row in range(12):
+                self._filter_grid.setRowMinimumHeight(row, 36)
+            for key in self._filter_rows:
+                self._restore_row_position(key)
+            self.extra_filters.setMinimumHeight(680)
+            self.extra_scroll.setMinimumHeight(380)
+            self.extra_scroll.setMaximumHeight(560)
+        for key in self._filter_rows:
+            self._set_row_visible(key, key in visible_keys)
+        if self.extra_scroll.isVisible():
+            self.setMinimumHeight(self._expanded_min_height())
+        self.extra_filters.updateGeometry()
+        self.extra_scroll.updateGeometry()
+        self.updateGeometry()
 
     def search_params(self) -> SearchParams:
         use_extra = self.extra_scroll.isVisible()
@@ -546,6 +695,46 @@ class Sidebar(QWidget):
                 quick_search=self.ed_quick_search.text().strip(),
                 keyword_search_enabled=self.cb_keyword_search.isChecked(),
                 keywords=keywords,
+            )
+        if self._platform_key == "roseltorg":
+            return ClientFilters(
+                quick_search=self.ed_quick_search.text().strip(),
+                keyword_search_enabled=self.cb_keyword_search.isChecked(),
+                keywords=keywords,
+                organizer_contains=self.ed_organizer.text().strip(),
+                trend_pur=self.cb_trend.currentData() or "",
+                step_ids=tuple(
+                    str(self.lst_steps.item(i).data(Qt.UserRole) or "")
+                    for i in range(self.lst_steps.count())
+                    if self.lst_steps.item(i).checkState() == Qt.Checked
+                ),
+                purchase_form=self.cb_purchase_form.currentData() or "",
+                price_min=(self.sb_price_min.value() or None),
+                price_max=(self.sb_price_max.value() or None),
+                published_from=(
+                    datetime.combine(self.ed_date_from.date().toPython(), datetime.min.time())
+                    if self.cb_published_enabled.isChecked() else None
+                ),
+                published_to=(
+                    datetime.combine(self.ed_date_to.date().toPython(), datetime.max.time())
+                    if self.cb_published_enabled.isChecked() else None
+                ),
+                end_from=(
+                    datetime.combine(self.de_end_from.date().toPython(), datetime.min.time())
+                    if self.cb_end_enabled.isChecked() else None
+                ),
+                end_to=(
+                    datetime.combine(self.de_end_to.date().toPython(), datetime.max.time())
+                    if self.cb_end_enabled.isChecked() else None
+                ),
+                results_from=(
+                    datetime.combine(self.de_results_from.date().toPython(), datetime.min.time())
+                    if self.cb_results_enabled.isChecked() else None
+                ),
+                results_to=(
+                    datetime.combine(self.de_results_to.date().toPython(), datetime.max.time())
+                    if self.cb_results_enabled.isChecked() else None
+                ),
             )
         return ClientFilters(
             quick_search=self.ed_quick_search.text().strip(),

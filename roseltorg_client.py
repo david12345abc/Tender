@@ -15,6 +15,39 @@ ROSELTORG_URL = (
     "%22sortDirection%22=%22DESC%22"
 )
 
+ROSELTORG_PROCEDURE_TYPE_OPTIONS = [
+    ("Закупка", "buy"),
+    ("Продажа", "sale"),
+]
+
+ROSELTORG_SEARCH_BY_OPTIONS = [
+    ("Процедуры", "procedures"),
+    ("Лоты / позиции", "lots"),
+]
+
+ROSELTORG_STATUS_OPTIONS = [
+    ("Прием заявок на допуск", "ProcedureAcceptanceAdmissionRequests"),
+    ("Проверка заявок на допуск", "ProcedureVerificationAdmissionRequests"),
+    ("Приём предложений", "Published"),
+    ("Подведение итогов", "ReviewOffers"),
+    ("В архиве", "procedureArchive"),
+    ("Процедура отменена", "procedureCancelled"),
+]
+
+ROSELTORG_STATUS_LABELS = {
+    "Published": "Приём предложений",
+    "ReviewOffers": "Подведение итогов",
+    "procedureArchive": "В архиве",
+    "ProcedureArchive": "В архиве",
+    "Archived": "В архиве",
+    "procedureCancelled": "Процедура отменена",
+    "ProcedureCancelled": "Процедура отменена",
+    "Canceled": "Процедура отменена",
+    "Cancelled": "Процедура отменена",
+    "ProcedureAcceptanceAdmissionRequests": "Прием заявок на допуск",
+    "ProcedureVerificationAdmissionRequests": "Проверка заявок на допуск",
+}
+
 
 _FETCH_PROCEDURES_JS = r"""
 const callback = arguments[arguments.length - 1];
@@ -119,30 +152,36 @@ class RoseltorgClient(EtpClient):
     def _api_endpoint(self, start: int, limit: int, query: Optional[str]) -> str:
         f = self._filters
         page = max(1, start // max(1, limit) + 1)
+        search_by = f.purchase_form if f.purchase_form in {"procedures", "lots"} else "procedures"
+        order_type = f.trend_pur if f.trend_pur in {"buy", "sale"} else "buy"
+        template_briefs = ("10", "12") if order_type == "sale" else ("8", "9", "11")
         params: list[tuple[str, Any]] = [
-            ("searchBy", "procedures"),
+            ("searchBy", search_by),
+            ("searchByOrderType", order_type),
             ("page", page),
             ("limit", limit),
             ("visibility", "show-all"),
             ("offset", start),
             ("sort", json.dumps([{"property": "datePublication", "direction": "DESC"}], ensure_ascii=False)),
-            ("templateBrief[0]", 8),
-            ("templateBrief[1]", 9),
-            ("templateBrief[2]", 11),
         ]
+        for idx, template in enumerate(template_briefs):
+            params.append((f"templateBrief[{idx}]", template))
         search_text = query or f.quick_search or f.registry_contains or f.title_contains
         if search_text:
             params.append(("query", str(search_text).strip()))
+        if f.organizer_contains:
+            params.append(("organizer", str(f.organizer_contains).strip()))
+        status_param = "procedureStates" if search_by == "procedures" else "states"
+        for idx, state in enumerate(str(item).strip() for item in f.step_ids if str(item).strip()):
+            params.append((f"{status_param}[{idx}]", state))
         if f.published_from:
             params.append(("datePublicationFrom", f.published_from.strftime("%Y-%m-%d")))
         if f.published_to:
             params.append(("datePublicationTo", f.published_to.strftime("%Y-%m-%d")))
-        # На Росэлторге это поле соответствует фильтру
-        # "Дата окончания приема предложений".
         if f.end_from:
-            params.append(("datePricesProvisionStartFrom", f.end_from.strftime("%Y-%m-%d")))
+            params.append(("dateAcceptanceApplicationsEndFrom", f.end_from.strftime("%Y-%m-%d")))
         if f.end_to:
-            params.append(("datePricesProvisionStartTo", f.end_to.strftime("%Y-%m-%d")))
+            params.append(("dateAcceptanceApplicationsEndTo", f.end_to.strftime("%Y-%m-%d")))
         if f.results_from:
             params.append(("dateSummingUpFrom", f.results_from.strftime("%Y-%m-%d")))
         if f.results_to:
@@ -170,15 +209,7 @@ class RoseltorgClient(EtpClient):
                 if isinstance(pos, dict) and pos.get("name"):
                     lot_items.append(str(pos["name"]))
         state = str(item.get("state") or "")
-        status_label = {
-            "Published": "Приём предложений",
-            "ReviewOffers": "Подведение итогов",
-            "procedureArchive": "В архиве",
-            "ProcedureArchive": "В архиве",
-            "Archived": "В архиве",
-            "Canceled": "Процедура отменена",
-            "Cancelled": "Процедура отменена",
-        }.get(state, state)
+        status_label = ROSELTORG_STATUS_LABELS.get(state, state)
         return {
             **item,
             "source": "roseltorg",
@@ -226,10 +257,32 @@ class RoseltorgClient(EtpClient):
         _recover_attempt: int = 0,
     ) -> dict[str, Any]:
         assert self.driver is not None, "Сначала вызовите connect()"
+        token = self._token or self.pull_token()
         endpoint = self._api_endpoint(start=start, limit=limit, query=query)
+        request_debug = {
+            "platform": "roseltorg",
+            "method": "GET",
+            "url": endpoint,
+            "headers": {
+                "Accept": "application/json, text/plain, */*",
+                "Authorization": f"Bearer {token}",
+            },
+            "body": None,
+            "token": token,
+            "endpoint": endpoint,
+        }
         result = self.driver.execute_async_script(_FETCH_PROCEDURES_JS, endpoint)
         if not isinstance(result, dict):
-            return {"success": False, "error": "no_response", "procedures": [], "totalCount": None}
+            return {
+                "success": False,
+                "error": "no_response",
+                "procedures": [],
+                "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "raw_response": result,
+                },
+            }
         if result.get("no_session"):
             return {
                 "success": False,
@@ -237,6 +290,10 @@ class RoseltorgClient(EtpClient):
                 "message": "Нет активной сессии Росэлторга.",
                 "procedures": [],
                 "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "raw_response": result,
+                },
             }
         if not result.get("ok"):
             return {
@@ -244,6 +301,10 @@ class RoseltorgClient(EtpClient):
                 "error": result.get("error") or result.get("text") or f"HTTP {result.get('status')}",
                 "procedures": [],
                 "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "raw_response": result,
+                },
             }
         data = result.get("data") or {}
         items = data.get("items") if isinstance(data, dict) else []
@@ -253,4 +314,8 @@ class RoseltorgClient(EtpClient):
             "success": True,
             "procedures": [self._normalize_item(item) for item in items if isinstance(item, dict)],
             "totalCount": int(data.get("totalCount") or len(items)) if isinstance(data, dict) else len(items),
+            "_debug": {
+                **request_debug,
+                "raw_response": result,
+            },
         }

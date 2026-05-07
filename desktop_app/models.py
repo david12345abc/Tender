@@ -127,7 +127,7 @@ class ProcedureTableModel(QAbstractTableModel):
     def _keyword_matches(self, proc: dict[str, Any]) -> list[str]:
         haystack = " ".join(
             str(proc.get(key) or "")
-            for key in ("title", "name", "procedure_name", "lot_name")
+            for key in ("title", "name", "procedure_name")
         )
         keywords = self._keywords or tuple(load_keywords())
         return [
@@ -639,6 +639,11 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             if raw_status_values:
                 return selected_code in raw_status_values
 
+        raw_selected = _normalize_status(selected)
+        for key in ("state", "step_id", "status", "status_label", "step_label"):
+            if _normalize_status(proc.get(key)) == raw_selected:
+                return True
+
         try:
             selected_label = SERVER_STATUS_LABEL_BY_VALUE.get(int(str(selected).strip()))
         except (TypeError, ValueError):
@@ -688,7 +693,7 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         if f.keyword_search_enabled:
             haystack = self._blob(
                 proc,
-                ("title", "name", "procedure_name", "lot_name"),
+                ("title", "name", "procedure_name"),
             )
             keywords = tuple(k for k in f.keywords if k.strip())
             if not keywords or not any(

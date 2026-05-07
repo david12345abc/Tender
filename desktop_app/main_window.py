@@ -42,8 +42,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etp_client import EtpClient, step_id_label, trend_pur_label
-from roseltorg_client import RoseltorgClient
+from etp_client import EtpClient, PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS, step_id_label, trend_pur_label
+from roseltorg_client import (
+    ROSELTORG_PROCEDURE_TYPE_OPTIONS,
+    ROSELTORG_SEARCH_BY_OPTIONS,
+    ROSELTORG_STATUS_OPTIONS,
+    RoseltorgClient,
+)
 
 from .constants import (
     ANALYSIS_DIR,
@@ -123,6 +128,7 @@ class MainWindow(QMainWindow):
         self._cache_dirty: bool = False
         self._cache_save_enabled: bool = True
         self._platform_key: str = "gpb"
+        self._api_debug_chunks: list[str] = []
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -212,6 +218,12 @@ class MainWindow(QMainWindow):
         self.btn_export = QPushButton("Экспорт в XLSX…")
         self.btn_export.clicked.connect(self._on_export)
         actions_layout.addWidget(self.btn_export)
+
+        self.btn_save_api_debug = QPushButton("Сохранить API-логи…")
+        self.btn_save_api_debug.setToolTip("Сохранить запросы, headers, body, token и ответы API в файл")
+        self.btn_save_api_debug.clicked.connect(self._save_api_debug)
+        self.btn_save_api_debug.setEnabled(False)
+        actions_layout.addWidget(self.btn_save_api_debug)
 
         main_area_layout.addWidget(actions)
 
@@ -353,6 +365,65 @@ class MainWindow(QMainWindow):
     def _resize_table_rows_to_contents(self) -> None:
         self.table.resizeRowsToContents()
 
+    def _clear_api_debug(self) -> None:
+        self._api_debug_chunks.clear()
+        self.btn_save_api_debug.setEnabled(False)
+
+    @Slot(str)
+    def _on_api_debug(self, text: str) -> None:
+        if not text:
+            return
+        self._api_debug_chunks.append(text.strip())
+        self.btn_save_api_debug.setEnabled(True)
+
+    def _save_api_debug(self) -> None:
+        if not self._api_debug_chunks:
+            QMessageBox.information(
+                self,
+                "Логов пока нет",
+                "Запустите поиск. После первых ответов API здесь можно будет сохранить лог.",
+            )
+            return
+
+        default_name = f"api_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Куда сохранить API-логи",
+            default_name,
+            "JSON (*.json);;Text (*.txt);;Все файлы (*.*)",
+        )
+        if not path:
+            return
+
+        entries: list[Any] = []
+        for chunk in self._api_debug_chunks:
+            try:
+                entries.append(json.loads(chunk))
+            except json.JSONDecodeError:
+                entries.append({"raw": chunk})
+        content = json.dumps(
+            {
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+                "entries": entries,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+        try:
+            Path(path).write_text(content, encoding="utf-8")
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить лог",
+                "Файл не удалось записать. Выберите другую папку или имя файла.\n\n"
+                f"Путь: {path}\n\n"
+                f"Подробности: {e}",
+            )
+            return
+
+        QMessageBox.information(self, "API-логи сохранены", f"Файл сохранён:\n{path}")
+
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
             wheel = event
@@ -379,6 +450,12 @@ class MainWindow(QMainWindow):
 
     def _apply_platform_ui(self) -> None:
         if self._platform_key == "roseltorg":
+            self.sidebar.set_platform_filter_options(
+                ROSELTORG_PROCEDURE_TYPE_OPTIONS,
+                ROSELTORG_STATUS_OPTIONS,
+                ROSELTORG_SEARCH_BY_OPTIONS,
+                platform_key="roseltorg",
+            )
             self.title_label.setText("Росэлторг — Актуальные процедуры")
             self.subtitle_label.setText("Поиск, фильтры и ключевые слова")
             self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
@@ -386,6 +463,12 @@ class MainWindow(QMainWindow):
             self._set_badge("idle", "○  Росэлторг")
             self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
         else:
+            self.sidebar.set_platform_filter_options(
+                PROCEDURE_TYPE_OPTIONS,
+                STATUS_OPTIONS,
+                None,
+                platform_key="gpb",
+            )
             self.title_label.setText("ЭТП ГПБ — Актуальные процедуры")
             self.subtitle_label.setText("Поиск, фильтры и экспорт")
             if not self.model.rowCount():
@@ -1105,6 +1188,7 @@ class MainWindow(QMainWindow):
         self.progress.show()
         self.progress.setRange(0, 0)
         self.progress.setFormat("Ищу процедуры...")
+        self._clear_api_debug()
         self.btn_stop.setEnabled(True)
         self.sidebar.set_controls_enabled(False)
         self.btn_prev_page.setEnabled(False)
@@ -1126,6 +1210,7 @@ class MainWindow(QMainWindow):
                 on_progress=self._on_progress,
                 on_session=self._on_session_status,
                 on_batch=self._on_batch_loaded,
+                on_debug=self._on_api_debug,
                 on_error=self._on_error,
                 on_done=self._on_task_done,
             )

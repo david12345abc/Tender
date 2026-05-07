@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import traceback
 from dataclasses import replace
 from pathlib import Path
@@ -41,6 +42,7 @@ class Worker(QObject):
         progress(str)      — сообщения о прогрессе
         session(bool, str) — результат проверки сессии
         batch(list, int, int) — загружена пачка: procedures, start, total
+        debug(str)        — сырой запрос/ответ API для диагностики
         error(str)         — неперехваченное исключение
         finished()         — всегда вызывается после run()
     """
@@ -48,6 +50,7 @@ class Worker(QObject):
     progress = Signal(str)
     session = Signal(bool, str)
     batch = Signal(list, int, int)
+    debug = Signal(str)
     error = Signal(str)
     finished = Signal()
 
@@ -90,6 +93,7 @@ class TaskRunner(QObject):
         on_progress: Optional[Callable[[str], None]] = None,
         on_session: Optional[Callable[[bool, str], None]] = None,
         on_batch: Optional[Callable[[list, int, int], None]] = None,
+        on_debug: Optional[Callable[[str], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
         on_done: Optional[Callable[[], None]] = None,
     ) -> Worker:
@@ -106,6 +110,8 @@ class TaskRunner(QObject):
             worker.session.connect(on_session)
         if on_batch:
             worker.batch.connect(on_batch)
+        if on_debug:
+            worker.debug.connect(on_debug)
         if on_error:
             worker.error.connect(on_error)
 
@@ -210,10 +216,43 @@ def make_search_task(
         server_filter_variants = [client_filters]
         is_roseltorg = "roseltorg" in str(getattr(client, "target_host", ""))
         if client_filters is not None:
-            # Для Росэлторга быстрый поиск выполняет сервер. Повторная локальная
-            # фильтрация по подстроке ломает выдачу и счётчики.
-            if is_roseltorg and getattr(client_filters, "quick_search", ""):
-                probe_filters = replace(client_filters, quick_search="")
+            if is_roseltorg:
+                # Росэлторг уже фильтрует форму на сервере. Локально оставляем
+                # только ключевые слова: это наш дополнительный отбор по названию.
+                probe_filters = replace(
+                    client_filters,
+                    quick_search="",
+                    registry_contains="",
+                    unique_number_contains="",
+                    organizer_contains="",
+                    customer_contains="",
+                    customer_region_contains="",
+                    customer_agent_contains="",
+                    title_contains="",
+                    okpd2_contains="",
+                    okved2_contains="",
+                    guarantee_min=None,
+                    guarantee_max=None,
+                    responsible_contains="",
+                    trend_pur="",
+                    step_ids=(),
+                    purchase_form="",
+                    applics_min=None,
+                    applics_max=None,
+                    lots_min=None,
+                    lots_max=None,
+                    price_min=None,
+                    price_max=None,
+                    published_from=None,
+                    published_to=None,
+                    end_from=None,
+                    end_to=None,
+                    results_from=None,
+                    results_to=None,
+                    special_features_contains="",
+                    position_name_contains="",
+                    national_regime_contains="",
+                )
             if not is_roseltorg:
                 # Для ЭТП ГПБ дополнительные фильтры отправляются в Procedure.list
                 # теми же полями, что использует сайт. Локально оставляем только
@@ -307,6 +346,24 @@ def make_search_task(
                 if not is_roseltorg:
                     fetch_kwargs["client_filters"] = filter_variant
                 res = client.fetch_page(**fetch_kwargs)
+                debug_payload = res.get("_debug") if isinstance(res, dict) else None
+                if debug_payload is not None:
+                    try:
+                        w.debug.emit(
+                            json.dumps(
+                                {
+                                    "page_start": cur_start,
+                                    "request_limit": request_limit,
+                                    "accepted_before_page": accepted_this_task,
+                                    "api": debug_payload,
+                                },
+                                ensure_ascii=False,
+                                indent=2,
+                                default=str,
+                            )
+                        )
+                    except Exception:
+                        w.debug.emit(str(debug_payload))
                 if w.is_stop_requested():
                     return
                 if res.get("error"):
