@@ -74,6 +74,11 @@ class StatusMultiSelect(QWidget):
         popup_layout.addWidget(self.list_widget)
 
     def set_options(self, options: Sequence[str | tuple[str, str]]) -> None:
+        selected_values = {
+            str(self.list_widget.item(i).data(Qt.UserRole) or "")
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        }
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         for option in options:
@@ -84,8 +89,8 @@ class StatusMultiSelect(QWidget):
                 value = option
             item = QListWidgetItem(label)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, value)
+            item.setCheckState(Qt.Checked if str(value) in selected_values else Qt.Unchecked)
             self.list_widget.addItem(item)
         self.list_widget.blockSignals(False)
         self._update_button_text()
@@ -690,12 +695,6 @@ class Sidebar(QWidget):
 
     def client_filters(self) -> ClientFilters:
         keywords = tuple(load_keywords()) if self.cb_keyword_search.isChecked() else ()
-        if not self.extra_scroll.isVisible():
-            return ClientFilters(
-                quick_search=self.ed_quick_search.text().strip(),
-                keyword_search_enabled=self.cb_keyword_search.isChecked(),
-                keywords=keywords,
-            )
         if self._platform_key == "roseltorg":
             return ClientFilters(
                 quick_search=self.ed_quick_search.text().strip(),

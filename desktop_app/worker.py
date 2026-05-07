@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import traceback
-from dataclasses import replace
+from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -349,12 +349,18 @@ def make_search_task(
                 debug_payload = res.get("_debug") if isinstance(res, dict) else None
                 if debug_payload is not None:
                     try:
+                        filters_debug = (
+                            asdict(filter_variant)
+                            if is_dataclass(filter_variant)
+                            else filter_variant
+                        )
                         w.debug.emit(
                             json.dumps(
                                 {
                                     "page_start": cur_start,
                                     "request_limit": request_limit,
                                     "accepted_before_page": accepted_this_task,
+                                    "client_filters": filters_debug,
                                     "api": debug_payload,
                                 },
                                 ensure_ascii=False,
