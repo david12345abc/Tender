@@ -67,6 +67,30 @@ def _server_status_label(proc: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _server_status_values(proc: dict[str, Any]) -> tuple[int, ...]:
+    values: list[int] = []
+
+    def append_status(value: Any) -> None:
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return
+        if parsed not in values:
+            values.append(parsed)
+
+    for key in ("status", "status_id"):
+        append_status(proc.get(key))
+    lots = proc.get("lots")
+    if isinstance(lots, list):
+        lot = next((item for item in lots if isinstance(item, dict) and item.get("actual")), None)
+        if not isinstance(lot, dict):
+            lot = next((item for item in lots if isinstance(item, dict)), None)
+        if isinstance(lot, dict):
+            for key in ("status", "status_id"):
+                append_status(lot.get(key))
+    return tuple(values)
+
+
 class ProcedureTableModel(QAbstractTableModel):
     COL_KEYS = [c[0] for c in COLUMNS]
     COL_TITLES = [c[1] for c in COLUMNS]
@@ -606,6 +630,15 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         selected_norm = _normalize_status(selected)
         if not selected_norm:
             return True
+        try:
+            selected_code = int(str(selected).strip())
+        except (TypeError, ValueError):
+            selected_code = None
+        if selected_code is not None and selected_code > 0:
+            raw_status_values = _server_status_values(proc)
+            if raw_status_values:
+                return selected_code in raw_status_values
+
         try:
             selected_label = SERVER_STATUS_LABEL_BY_VALUE.get(int(str(selected).strip()))
         except (TypeError, ValueError):
