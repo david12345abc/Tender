@@ -173,10 +173,16 @@ def _date_to_etp_iso(value: Optional[str], end_of_day: bool = False) -> str:
     return text
 
 
-def _server_status_value(labels: tuple[str, ...]) -> Optional[int]:
+def _server_status_value(labels: tuple[Any, ...]) -> Optional[int]:
     if len(labels) != 1:
         return None
-    return SERVER_STATUS_BY_LABEL.get(labels[0].casefold().replace("ё", "е"))
+    raw_value = labels[0]
+    try:
+        return int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        pass
+    label = re.sub(r"\s+", " ", str(raw_value or "").casefold().replace("ё", "е")).strip()
+    return SERVER_STATUS_BY_LABEL.get(label)
 
 
 def _purchase_form_value(value: str) -> int:
@@ -873,7 +879,7 @@ class EtpClient:
             "guarantee_application_till": None,
             "department_id": -1,
             "contact_person_like": "",
-            "procedure_type": "",
+            "procedure_type": 0,
             "status": "",
             "private": -1,
             "lot_count_from": "",
@@ -924,7 +930,7 @@ class EtpClient:
                     "contact_person_like": str(
                         getattr(client_filters, "responsible_contains", "") or ""
                     ),
-                    "procedure_type": str(getattr(client_filters, "trend_pur", "") or ""),
+                    "procedure_type": getattr(client_filters, "trend_pur", None) or 0,
                     "status": status_value if status_value is not None else "",
                     "private": _purchase_form_value(
                         str(getattr(client_filters, "purchase_form", "") or "")
@@ -1070,6 +1076,11 @@ STATUS_LABELS = [
     "Завершение процедуры",
     "Рассмотрение заявок",
     "Подведение итогов",
+]
+
+STATUS_OPTIONS = [
+    (label, str(SERVER_STATUS_BY_LABEL[label.casefold().replace("ё", "е")]))
+    for label in STATUS_LABELS
 ]
 
 STEP_ID_LABELS = {

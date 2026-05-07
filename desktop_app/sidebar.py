@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_LABELS
+from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS
 
 from .browsers import BrowserConfig, available_browsers
 from .keywords import load_keyword_items, load_keywords
@@ -37,7 +37,11 @@ DEFAULT_REQUEST_LIMIT = 500
 class StatusMultiSelect(QWidget):
     """Compact multi-select control that opens the status list above the form."""
 
-    def __init__(self, labels: Sequence[str], parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        options: Sequence[str | tuple[str, str]],
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self.setMinimumWidth(190)
 
@@ -65,11 +69,16 @@ class StatusMultiSelect(QWidget):
         self.list_widget.setStyleSheet(
             "QListWidget { background: white; border: 1px solid #b9c7dc; }"
         )
-        for label in labels:
+        for option in options:
+            if isinstance(option, tuple):
+                label, value = option
+            else:
+                label = option
+                value = option
             item = QListWidgetItem(label)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
-            item.setData(Qt.UserRole, label)
+            item.setData(Qt.UserRole, value)
             self.list_widget.addItem(item)
         self.list_widget.itemChanged.connect(self._update_button_text)
         popup_layout.addWidget(self.list_widget)
@@ -326,7 +335,7 @@ class Sidebar(QWidget):
         self.cb_trend = self._make_combo(
             list(PROCEDURE_TYPE_OPTIONS)
         )
-        self.status_selector = StatusMultiSelect(STATUS_LABELS)
+        self.status_selector = StatusMultiSelect(STATUS_OPTIONS)
         self.lst_steps = self.status_selector.list_widget
         self.cb_purchase_form = self._make_combo(
             [("Любая", ""), ("Электронная", "электрон"), ("Бумажная", "бумаж")]

@@ -223,6 +223,7 @@ def make_search_task(
                     step_id
                     for step_id in step_ids
                     if str(step_id).casefold().replace("ё", "е") != "активные"
+                    and _server_status_value((step_id,)) != -2
                 )
                 local_step_ids = concrete_step_ids if step_ids else ()
                 if len(step_ids) > 1:

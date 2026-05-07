@@ -606,6 +606,12 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         selected_norm = _normalize_status(selected)
         if not selected_norm:
             return True
+        try:
+            selected_label = SERVER_STATUS_LABEL_BY_VALUE.get(int(str(selected).strip()))
+        except (TypeError, ValueError):
+            selected_label = None
+        if selected_label:
+            selected_norm = _normalize_status(selected_label)
 
         display_values = [
             display_status,
@@ -743,15 +749,20 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
         ):
             return False
         if f.step_ids:
-            normalized_steps = tuple(_normalize_status(step_id) for step_id in f.step_ids)
+            def is_active_selection(step_id: Any) -> bool:
+                normalized = _normalize_status(step_id)
+                if normalized == "активные":
+                    return True
+                try:
+                    return int(str(step_id).strip()) == -2
+                except (TypeError, ValueError):
+                    return False
+
+            active_only = len(f.step_ids) == 1 and is_active_selection(f.step_ids[0])
             effective_step_ids = (
                 ()
-                if normalized_steps == ("активные",)
-                else tuple(
-                    step_id
-                    for step_id in f.step_ids
-                    if _normalize_status(step_id) != "активные"
-                )
+                if active_only
+                else tuple(step_id for step_id in f.step_ids if not is_active_selection(step_id))
             )
             display_status = model._status_label(proc)
             if effective_step_ids and not any(

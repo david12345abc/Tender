@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QTimer, Qt, Slot
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QSize, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +36,8 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
 )
@@ -66,6 +68,42 @@ from .worker import (
     make_download_documents_task,
     make_search_task,
 )
+
+
+class LimitedWrapDelegate(QStyledItemDelegate):
+    """Переносит длинный текст в таблице, но не даёт строкам занять весь экран."""
+
+    MAX_ROW_HEIGHT = 96
+    MIN_ROW_HEIGHT = 26
+    PADDING = 12
+
+    def initStyleOption(self, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # noqa: N802
+        super().initStyleOption(option, index)
+        option.features |= QStyleOptionViewItem.ViewItemFeature.WrapText
+        option.textElideMode = Qt.TextElideMode.ElideRight
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:  # noqa: N802
+        base = super().sizeHint(option, index)
+        text = str(index.data(Qt.DisplayRole) or "")
+        if not text:
+            return QSize(base.width(), self.MIN_ROW_HEIGHT)
+
+        width = option.rect.width()
+        view = self.parent()
+        if width <= 0 and isinstance(view, QTableView):
+            width = view.columnWidth(index.column())
+        text_width = max(40, width - self.PADDING)
+        rect = option.fontMetrics.boundingRect(
+            0,
+            0,
+            text_width,
+            10_000,
+            int(Qt.TextFlag.TextWordWrap | Qt.TextFlag.TextExpandTabs),
+            text,
+        )
+        height = min(max(self.MIN_ROW_HEIGHT, rect.height() + self.PADDING), self.MAX_ROW_HEIGHT)
+        return QSize(base.width(), height)
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -198,11 +236,16 @@ class MainWindow(QMainWindow):
         hh = self.table.horizontalHeader()
         hh.setStretchLastSection(False)
         hh.setCascadingSectionResizes(False)
-        self.table.setWordWrap(False)
+        self.table.setWordWrap(True)
+        self.table.setItemDelegate(LimitedWrapDelegate(self.table))
+        hh.sectionResized.connect(lambda *_: self._schedule_table_row_resize())
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.doubleClicked.connect(self._on_row_double_clicked)
         self.proxy.modelReset.connect(self._apply_table_column_widths)
+        self.proxy.modelReset.connect(self._schedule_table_row_resize)
+        self.proxy.rowsInserted.connect(self._schedule_table_row_resize)
+        self.proxy.layoutChanged.connect(self._schedule_table_row_resize)
         self.table.viewport().installEventFilter(self)
         self._apply_table_column_widths()
         main_area_layout.addWidget(self.table, 1)
@@ -300,8 +343,15 @@ class MainWindow(QMainWindow):
         widths = [170, 180, 230, 280, 220, 80, 95, 145, 145, 170, 200]
         n = min(len(widths), self.proxy.columnCount())
         for i in range(n):
-            hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
+            hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
             hh.resizeSection(i, widths[i])
+        self._schedule_table_row_resize()
+
+    def _schedule_table_row_resize(self) -> None:
+        QTimer.singleShot(0, self._resize_table_rows_to_contents)
+
+    def _resize_table_rows_to_contents(self) -> None:
+        self.table.resizeRowsToContents()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
@@ -655,6 +705,7 @@ class MainWindow(QMainWindow):
             f"Показано из кэша: {len(procs)} процедур (сохранено {saved_at})."
         )
         self._refresh_counter()
+        self._schedule_table_row_resize()
         self._update_controls()
 
     def _delete_cache(self) -> None:
@@ -669,11 +720,13 @@ class MainWindow(QMainWindow):
         self.proxy.previous_page()
         self._refresh_counter()
         self.table.scrollToTop()
+        self._schedule_table_row_resize()
 
     def _on_next_page(self) -> None:
         self.proxy.next_page()
         self._refresh_counter()
         self.table.scrollToTop()
+        self._schedule_table_row_resize()
 
     def _selected_procedures(self) -> list[dict[str, Any]]:
         rows = sorted({idx.row() for idx in self.table.selectionModel().selectedRows()})
@@ -1132,6 +1185,7 @@ class MainWindow(QMainWindow):
         self._current_start = start
         self.proxy.refresh_page()
         self._refresh_counter()
+        self._schedule_table_row_resize()
         if procs and self._cache_save_enabled:
             self._schedule_cache_save()
 
@@ -1170,12 +1224,14 @@ class MainWindow(QMainWindow):
         self.proxy.set_filters(filters)
         self.model.set_keywords(filters.keywords)
         self._refresh_counter()
+        self._schedule_table_row_resize()
 
     def _on_reset_filters(self) -> None:
         self.sidebar.reset_client_filters()
         self.proxy.set_filters(ClientFilters())
         self.model.set_keywords(())
         self._refresh_counter()
+        self._schedule_table_row_resize()
 
     # --------------- таблица
     def _proc_from_index(self, idx: QModelIndex) -> Optional[dict[str, Any]]:
