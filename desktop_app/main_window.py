@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import traceback
 import webbrowser
 from datetime import datetime
@@ -298,6 +299,12 @@ class MainWindow(QMainWindow):
         self.btn_analyze.clicked.connect(self._on_analyze_procedures)
         self.btn_analyze.setEnabled(False)
         bottom_layout.addWidget(self.btn_analyze)
+
+        self.btn_show_analysis = QPushButton("Результат анализа")
+        self.btn_show_analysis.setToolTip("Повторно открыть последнее окно результата анализа")
+        self.btn_show_analysis.clicked.connect(self._on_show_analysis_result)
+        self.btn_show_analysis.setEnabled(False)
+        bottom_layout.addWidget(self.btn_show_analysis)
 
         self.btn_stop = QPushButton("Стоп")
         self.btn_stop.setObjectName("Danger")
@@ -905,6 +912,7 @@ class MainWindow(QMainWindow):
             return
         self._apply_selected_browser()
         self._analysis_sink.clear()
+        self.btn_show_analysis.setEnabled(False)
 
         self.progress.show()
         self.progress.setRange(0, 0)
@@ -915,6 +923,7 @@ class MainWindow(QMainWindow):
         self.btn_next_page.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
         self.btn_analyze.setEnabled(False)
+        self.btn_show_analysis.setEnabled(False)
         self._set_badge("idle", "● Анализ карточки и LM Studio…")
 
         fn = make_analyze_procedure_task(
@@ -955,7 +964,15 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self._on_error(f"Не удалось сохранить файлы анализа: {e}")
                 return
+            self.btn_show_analysis.setEnabled(True)
             self._show_analysis_table_dialog(summary_rows)
+
+    def _on_show_analysis_result(self) -> None:
+        rows = self._analysis_sink.get("summary_rows") or []
+        if not rows:
+            QMessageBox.information(self, "Результат анализа", "Пока нет сохранённого результата анализа.")
+            return
+        self._show_analysis_table_dialog(rows)
 
     def _safe_analysis_filename(self, name: str, default: str = "analysis") -> str:
         clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
@@ -1029,60 +1046,112 @@ class MainWindow(QMainWindow):
         dlg.resize(min(1100, self.width() + 80), min(520, self.height()))
         layout = QVBoxLayout(dlg)
         hint = QLabel(
-            "Полная таблица анализа сохранена в файлы Word (.docx) и Excel (.xlsx) с одинаковым именем. "
-            "Нажмите «ссылка» в третьей колонке, чтобы выделить Word-файл, "
-            "или в четвёртой колонке, чтобы открыть папку с разархивированными документами."
+            "Полная таблица анализа подготовлена в Word (.docx) и Excel (.xlsx). "
+            "Нажмите «Скачать», выберите папку на своём компьютере, и приложение скопирует файлы туда."
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        headers = ["Реестровый номер", "Наименование", "Файл с таблицей", "Разархивированные документы"]
+        headers = ["Реестровый номер", "Наименование", "Таблица анализа", "Разархивированные документы"]
         table = QTableWidget(len(rows), len(headers))
         table.setHorizontalHeaderLabels(headers)
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        hh.setStretchLastSection(True)
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        table.setColumnWidth(2, 80)
-        table.setColumnWidth(3, 120)
+        hh.setStretchLastSection(False)
+        table.setColumnWidth(0, 150)
+        table.setColumnWidth(1, 520)
+        table.setColumnWidth(2, 130)
+        table.setColumnWidth(3, 180)
+        table.setWordWrap(True)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        def unique_destination(target: Path) -> Path:
+            if not target.exists():
+                return target
+            stem, suffix = target.stem, target.suffix
+            n = 2
+            while True:
+                candidate = target.with_name(f"{stem}_{n}{suffix}")
+                if not candidate.exists():
+                    return candidate
+                n += 1
+
+        def copy_analysis_files(row_index: int) -> None:
+            source = rows[row_index][2] if 0 <= row_index < len(rows) and len(rows[row_index]) > 2 else ""
+            if not source:
+                return
+            destination_dir = QFileDialog.getExistingDirectory(
+                dlg,
+                "Куда скачать таблицу анализа",
+                str(Path.home()),
+            )
+            if not destination_dir:
+                return
+            try:
+                copied: list[Path] = []
+                src_docx = Path(source)
+                candidates = [src_docx, src_docx.with_suffix(".xlsx")]
+                for src in candidates:
+                    if not src.is_file():
+                        continue
+                    dst = unique_destination(Path(destination_dir) / src.name)
+                    if src.resolve() != dst.resolve():
+                        shutil.copy2(src, dst)
+                    copied.append(dst)
+                QMessageBox.information(
+                    dlg,
+                    "Скачивание завершено",
+                    "Скопированы файлы:\n" + "\n".join(str(p) for p in copied),
+                )
+            except Exception as e:
+                QMessageBox.critical(dlg, "Ошибка скачивания", f"Не удалось скачать таблицу анализа:\n{e}")
+
+        def copy_unpacked_documents(row_index: int) -> None:
+            source = rows[row_index][3] if 0 <= row_index < len(rows) and len(rows[row_index]) > 3 else ""
+            if not source:
+                return
+            destination_dir = QFileDialog.getExistingDirectory(
+                dlg,
+                "Куда скачать разархивированные документы",
+                str(Path.home()),
+            )
+            if not destination_dir:
+                return
+            try:
+                src_dir = Path(source)
+                if not src_dir.is_dir():
+                    raise RuntimeError(f"Папка не найдена: {src_dir}")
+                dst_dir = unique_destination(Path(destination_dir) / src_dir.name)
+                shutil.copytree(src_dir, dst_dir)
+                QMessageBox.information(dlg, "Скачивание завершено", f"Документы скопированы в:\n{dst_dir}")
+            except Exception as e:
+                QMessageBox.critical(dlg, "Ошибка скачивания", f"Не удалось скачать документы:\n{e}")
+
         for r, row in enumerate(rows):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val[:2000] if val else "")
                 if c in {2, 3}:
-                    item.setText("ссылка" if val else "—")
-                    item.setToolTip(val)
-                    if val:
-                        font = QFont(item.font())
-                        font.setUnderline(True)
-                        item.setFont(font)
-                        item.setForeground(QColor("#0645ad"))
+                    item.setText("")
+                if c == 1:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 table.setItem(r, c, item)
 
-        def open_analysis_file(row: int, col: int) -> None:
-            if col not in {2, 3}:
-                return
-            source = rows[row][col] if 0 <= row < len(rows) and len(rows[row]) > col else ""
-            if source:
-                try:
-                    import subprocess
+            btn_table = QPushButton("Скачать")
+            btn_table.setEnabled(bool(row[2] if len(row) > 2 else ""))
+            btn_table.clicked.connect(lambda _checked=False, row_index=r: copy_analysis_files(row_index))
+            table.setCellWidget(r, 2, btn_table)
 
-                    resolved = Path(source).resolve()
-                    if col == 2:
-                        subprocess.Popen(["explorer", "/select,", str(resolved)])
-                    else:
-                        subprocess.Popen(["explorer", str(resolved)])
-                except Exception:
-                    webbrowser.open(Path(source).resolve().as_uri())
+            btn_docs = QPushButton("Скачать")
+            btn_docs.setEnabled(bool(row[3] if len(row) > 3 else ""))
+            btn_docs.clicked.connect(lambda _checked=False, row_index=r: copy_unpacked_documents(row_index))
+            table.setCellWidget(r, 3, btn_docs)
 
-        table.cellClicked.connect(open_analysis_file)
-        table.cellDoubleClicked.connect(open_analysis_file)
+            title_len = len(str(row[1] if len(row) > 1 else ""))
+            table.setRowHeight(r, min(96, max(34, 34 + (title_len // 90) * 18)))
+
         layout.addWidget(table, 1)
 
         issues = self._analysis_sink.get("document_issues") or []
@@ -1211,6 +1280,7 @@ class MainWindow(QMainWindow):
         self.btn_prev_page.setEnabled(False)
         self.btn_next_page.setEnabled(False)
         self.btn_download_docs.setEnabled(False)
+        self.btn_show_analysis.setEnabled(False)
         self.btn_analyze.setEnabled(False)
         self._set_badge("idle", "● Работаю…")
 
@@ -1505,6 +1575,7 @@ class MainWindow(QMainWindow):
         self.btn_next_page.setEnabled(platform_ready and current_page + 1 < page_count)
         self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
         self.btn_analyze.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
+        self.btn_show_analysis.setEnabled(not running and bool(self._analysis_sink.get("summary_rows")))
         self.btn_export.setEnabled(platform_ready and has_rows)
         self.sidebar.set_controls_enabled(platform_ready and not running)
 
