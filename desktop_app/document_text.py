@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import html
+import os
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
 import zipfile
@@ -58,6 +60,61 @@ def _safe_extract_path(root: Path, member_name: str) -> Path:
     return target
 
 
+def _runtime_roots() -> list[Path]:
+    roots: list[Path] = []
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir:
+        roots.append(Path(bundle_dir).resolve())
+    roots.append(Path(__file__).resolve().parent)
+    roots.append(Path.cwd())
+    return roots
+
+
+def _rar_tool_candidates() -> list[tuple[str, Path]]:
+    candidates: list[tuple[str, Path]] = []
+    for root in _runtime_roots():
+        candidates.extend(
+            (
+                ("SEVENZIP_TOOL", root / "7z.exe"),
+                ("SEVENZIP_TOOL", root / "7za.exe"),
+                ("UNRAR_TOOL", root / "unrar.exe"),
+                ("SEVENZIP_TOOL", root / "tools" / "7zip" / "7z.exe"),
+                ("SEVENZIP_TOOL", root / "tools" / "7zip" / "7za.exe"),
+                ("UNRAR_TOOL", root / "tools" / "unrar" / "unrar.exe"),
+            )
+        )
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        base = os.environ.get(env_name)
+        if not base:
+            continue
+        candidates.extend(
+            (
+                ("SEVENZIP_TOOL", Path(base) / "7-Zip" / "7z.exe"),
+                ("SEVENZIP_TOOL", Path(base) / "7-Zip" / "7za.exe"),
+                ("UNRAR_TOOL", Path(base) / "WinRAR" / "unrar.exe"),
+            )
+        )
+    return candidates
+
+
+def _configure_rarfile_tools(rarfile) -> None:
+    for attr, candidate in _rar_tool_candidates():
+        if candidate.is_file():
+            setattr(rarfile, attr, str(candidate))
+            if attr == "SEVENZIP_TOOL" and hasattr(rarfile, "SEVENZIP2_TOOL"):
+                rarfile.SEVENZIP2_TOOL = str(candidate)
+            break
+    try:
+        rarfile.tool_setup(force=True)
+    except rarfile.RarCannotExec as exc:
+        raise RuntimeError(
+            "Не найден распаковщик RAR. Установите 7-Zip или WinRAR на этот компьютер "
+            "либо положите 7z.exe рядом с программой в папку tools\\7zip."
+        ) from exc
+
+
 def _extract_archive(path: Path, target_dir: Path) -> None:
     suffix = path.suffix.lower()
     name = path.name.lower()
@@ -81,6 +138,7 @@ def _extract_archive(path: Path, target_dir: Path) -> None:
     if suffix == ".rar":
         import rarfile
 
+        _configure_rarfile_tools(rarfile)
         with rarfile.RarFile(path) as archive:
             archive.extractall(path=target_dir)
         return

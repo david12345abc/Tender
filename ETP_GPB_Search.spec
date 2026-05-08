@@ -1,13 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
+
+
+datas = [('start_chrome.ps1', '.'), ('data', 'data')]
+if Path('tools').exists():
+    datas.append(('tools', 'tools'))
 
 
 a = Analysis(
     ['desktop_search.py'],
     pathex=[],
     binaries=[],
-    datas=[('start_chrome.ps1', '.'), ('data', 'data')],
+    datas=datas,
     hiddenimports=[
         'selenium.webdriver.chrome.webdriver',
         'selenium.webdriver.edge.webdriver',
