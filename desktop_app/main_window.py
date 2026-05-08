@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QSize, QTimer, Qt, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QKeySequence
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QSize, QTimer, Qt, Slot
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QVBoxLayout,
@@ -51,6 +52,7 @@ from roseltorg_client import (
     RoseltorgClient,
 )
 
+from .assets import asset_path
 from .constants import (
     ANALYSIS_DIR,
     APP_TITLE,
@@ -79,9 +81,11 @@ from .worker import (
 class LimitedWrapDelegate(QStyledItemDelegate):
     """Переносит длинный текст в таблице, но не даёт строкам занять весь экран."""
 
-    MAX_ROW_HEIGHT = 96
-    MIN_ROW_HEIGHT = 26
-    PADDING = 12
+    MAX_ROW_HEIGHT = 74
+    MIN_ROW_HEIGHT = 44
+    PADDING = 14
+
+    BADGE_COLUMNS = {1, 5, 10}
 
     def initStyleOption(self, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # noqa: N802
         super().initStyleOption(option, index)
@@ -110,11 +114,62 @@ class LimitedWrapDelegate(QStyledItemDelegate):
         height = min(max(self.MIN_ROW_HEIGHT, rect.height() + self.PADDING), self.MAX_ROW_HEIGHT)
         return QSize(base.width(), height)
 
+    def _badge_colors(self, column: int, text: str) -> tuple[QColor, QColor, QColor]:
+        t = text.casefold()
+        if column == 5:
+            if "223" in t:
+                return QColor("#0f5132"), QColor("#1f9d55"), QColor("#bdf7d3")
+            return QColor("#123a74"), QColor("#2563eb"), QColor("#c9ddff")
+        if column == 10:
+            if "отмен" in t:
+                return QColor("#4a1625"), QColor("#9f2944"), QColor("#ffc2cf")
+            if "итог" in t or "рассмотр" in t or "подвед" in t:
+                return QColor("#4a3511"), QColor("#9a6a12"), QColor("#ffe1a3")
+            return QColor("#123a74"), QColor("#2563eb"), QColor("#c9ddff")
+        if "аукцион" in t:
+            return QColor("#073744"), QColor("#0891b2"), QColor("#bff4ff")
+        if "запрос" in t:
+            return QColor("#102f69"), QColor("#2563eb"), QColor("#d6e4ff")
+        if "открыт" in t:
+            return QColor("#4a3208"), QColor("#b7791f"), QColor("#ffe4a6")
+        return QColor("#211d55"), QColor("#4f46e5"), QColor("#e1ddff")
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # noqa: N802
+        text = str(index.data(Qt.DisplayRole) or "")
+        if index.column() not in self.BADGE_COLUMNS or not text.strip():
+            super().paint(painter, option, index)
+            return
+
+        painter.save()
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        base = QColor("#263168" if selected else ("#0a1128" if index.row() % 2 else "#070d20"))
+        painter.fillRect(option.rect, base)
+
+        bg, border, fg = self._badge_colors(index.column(), text)
+        metrics = option.fontMetrics
+        badge_text = metrics.elidedText(text, Qt.TextElideMode.ElideRight, max(24, option.rect.width() - 18))
+        text_w = min(metrics.horizontalAdvance(badge_text) + 18, option.rect.width() - 12)
+        badge_h = min(24, option.rect.height() - 12)
+        badge = QRect(
+            option.rect.x() + 8,
+            option.rect.y() + max(6, (option.rect.height() - badge_h) // 2),
+            max(24, text_w),
+            badge_h,
+        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(border)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(badge, 7, 7)
+        painter.setPen(fg)
+        painter.drawText(badge.adjusted(9, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, badge_text)
+        painter.restore()
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_TITLE)
+        self.setWindowIcon(QIcon(str(asset_path("iconfounder.png"))))
         self.resize(1500, 900)
 
         self.client = EtpClient()
@@ -145,16 +200,16 @@ class MainWindow(QMainWindow):
         # ---------- Верхняя панель ----------
         top = QFrame()
         top.setObjectName("TopBar")
-        top.setFixedHeight(56)
+        top.setFixedHeight(78)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(16, 8, 16, 8)
-        top_layout.setSpacing(12)
+        top_layout.setContentsMargins(22, 10, 22, 10)
+        top_layout.setSpacing(18)
 
         platform_switcher = QFrame()
         platform_switcher.setObjectName("PlatformSwitcher")
         platform_layout = QHBoxLayout(platform_switcher)
-        platform_layout.setContentsMargins(2, 2, 2, 2)
-        platform_layout.setSpacing(2)
+        platform_layout.setContentsMargins(4, 4, 4, 4)
+        platform_layout.setSpacing(4)
         self.platform_group = QButtonGroup(self)
         self.platform_group.setExclusive(True)
         self.btn_platform_gpb = QPushButton("ЭТП ГПБ")
@@ -184,7 +239,7 @@ class MainWindow(QMainWindow):
         top_layout.addStretch(1)
 
         self.user_label = QLabel("Пользователь: —")
-        self.user_label.setStyleSheet("color: #4a515a;")
+        self.user_label.setStyleSheet("color: #9ca8d7;")
         top_layout.addWidget(self.user_label)
 
         self.session_badge = QLabel("○  Браузер не запущен")
@@ -202,25 +257,30 @@ class MainWindow(QMainWindow):
         main_area = QWidget()
         main_area.setMinimumHeight(360)
         main_area_layout = QVBoxLayout(main_area)
-        main_area_layout.setContentsMargins(12, 10, 12, 8)
-        main_area_layout.setSpacing(8)
+        main_area_layout.setContentsMargins(14, 12, 14, 10)
+        main_area_layout.setSpacing(10)
 
         # Верхняя полоска со счётчиком
         actions = QFrame()
+        actions.setObjectName("ActionsBar")
         actions_layout = QHBoxLayout(actions)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setContentsMargins(12, 9, 12, 9)
         actions_layout.setSpacing(8)
 
         self.lbl_counter = QLabel("Данных нет. Нажмите «Поиск».")
-        self.lbl_counter.setStyleSheet("color: #3a4048; font-weight: 600;")
+        self.lbl_counter.setStyleSheet("color: #dce4ff; font-weight: 600;")
         actions_layout.addWidget(self.lbl_counter)
         actions_layout.addStretch(1)
 
         self.btn_export = QPushButton("Экспорт в XLSX…")
+        self.btn_export.setIcon(QIcon(str(asset_path("xls.png"))))
+        self.btn_export.setIconSize(QSize(18, 18))
         self.btn_export.clicked.connect(self._on_export)
         actions_layout.addWidget(self.btn_export)
 
         self.btn_save_api_debug = QPushButton("Сохранить API-логи…")
+        self.btn_save_api_debug.setIcon(QIcon(str(asset_path("log.png"))))
+        self.btn_save_api_debug.setIconSize(QSize(18, 18))
         self.btn_save_api_debug.setToolTip("Сохранить запросы, headers, body, token и ответы API в файл")
         self.btn_save_api_debug.clicked.connect(self._save_api_debug)
         self.btn_save_api_debug.setEnabled(False)
@@ -245,8 +305,11 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QTableView.SelectRows)
         self.table.setSelectionMode(QTableView.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.verticalHeader().setDefaultSectionSize(44)
+        self.table.verticalHeader().setFixedWidth(30)
+        self.table.verticalHeader().setHighlightSections(False)
         hh = self.table.horizontalHeader()
+        hh.setMinimumHeight(44)
         hh.setStretchLastSection(False)
         hh.setCascadingSectionResizes(False)
         self.table.setWordWrap(True)
@@ -261,6 +324,7 @@ class MainWindow(QMainWindow):
         self.proxy.layoutChanged.connect(self._schedule_table_row_resize)
         self.table.viewport().installEventFilter(self)
         self._apply_table_column_widths()
+        self._build_empty_state()
         main_area_layout.addWidget(self.table, 1)
 
         bottom_bar = QFrame()
@@ -315,14 +379,31 @@ class MainWindow(QMainWindow):
         bottom_layout.addStretch(1)
         main_area_layout.addWidget(bottom_bar)
 
-        # Центральный виджет: вся страница прокручивается при раскрытых фильтрах.
+        # Центральный виджет: фильтры сверху, таблица слева, дополнительные фильтры справа.
         page = QWidget()
         cl = QVBoxLayout(page)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(0)
         cl.addWidget(top)
-        cl.addWidget(self.sidebar, 0)
-        cl.addWidget(main_area, 1)
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(10)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+        left_layout.addWidget(self.sidebar, 0)
+        left_layout.addWidget(main_area, 1)
+        content_layout.addWidget(left, 1)
+
+        if hasattr(self.sidebar, "extra_scroll"):
+            self.sidebar.layout().removeWidget(self.sidebar.extra_scroll)
+            self.sidebar.extra_scroll.setParent(content)
+            content_layout.addWidget(self.sidebar.extra_scroll, 0)
+
+        cl.addWidget(content, 1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -365,6 +446,56 @@ class MainWindow(QMainWindow):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
             hh.resizeSection(i, widths[i])
         self._schedule_table_row_resize()
+
+    def _build_empty_state(self) -> None:
+        self.empty_state = QFrame(self.table.viewport())
+        self.empty_state.setObjectName("EmptyState")
+        self.empty_state.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        box = QVBoxLayout(self.empty_state)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        box.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.empty_icon = QLabel()
+        self.empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        pix = QPixmap(str(asset_path("iconfounder.png")))
+        if not pix.isNull():
+            self.empty_icon.setPixmap(
+                pix.scaled(
+                    190,
+                    140,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+        self.empty_title = QLabel("Результаты поиска появятся здесь")
+        self.empty_title.setObjectName("EmptyStateTitle")
+        self.empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_text = QLabel("Запустите поиск, чтобы увидеть найденные процедуры")
+        self.empty_text.setObjectName("EmptyStateText")
+        self.empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        box.addWidget(self.empty_icon)
+        box.addWidget(self.empty_title)
+        box.addWidget(self.empty_text)
+        self._position_empty_state()
+        self._update_empty_state()
+
+    def _position_empty_state(self) -> None:
+        if not hasattr(self, "empty_state"):
+            return
+        margin = 24
+        rect = self.table.viewport().rect()
+        self.empty_state.setGeometry(
+            rect.x() + margin,
+            rect.y() + margin,
+            max(0, rect.width() - margin * 2),
+            max(0, rect.height() - margin * 2),
+        )
+
+    def _update_empty_state(self) -> None:
+        if hasattr(self, "empty_state"):
+            self.empty_state.setVisible(self.proxy.rowCount() == 0)
 
     def _schedule_table_row_resize(self) -> None:
         QTimer.singleShot(0, self._resize_table_rows_to_contents)
@@ -432,6 +563,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "API-логи сохранены", f"Файл сохранён:\n{path}")
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() in {QEvent.Type.Resize, QEvent.Type.Show}:
+            self._position_empty_state()
         if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
             wheel = event
             if wheel.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -1553,6 +1686,7 @@ class MainWindow(QMainWindow):
                 f"Найдено {found}. Показано {visible} на странице."
             )
             self.lbl_page.setText(f"Страница {current_page} из {page_count}")
+        self._update_empty_state()
         self._update_controls()
 
     def _set_badge(self, state: str, text: str) -> None:

@@ -276,7 +276,7 @@ class ProcedureTableModel(QAbstractTableModel):
         if role == Qt.DisplayRole and orientation == Qt.Horizontal:
             return self.COL_TITLES[section]
         if role == Qt.DisplayRole and orientation == Qt.Vertical:
-            return section + 1
+            return "☆"
         return None
 
     def _display(self, proc: dict[str, Any], key: str) -> Any:
@@ -422,7 +422,7 @@ class ProcedureTableModel(QAbstractTableModel):
                 info.append(f"id: {proc.get('id')}")
                 return "\n".join(info)
         if role == Qt.BackgroundRole:
-            return self._status_background_color(proc)
+            return None
         return None
 
     def set_rows(self, procs: list[dict[str, Any]]) -> None:

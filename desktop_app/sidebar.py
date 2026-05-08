@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Sequence
 
-from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtCore import QDate, QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCalendarWidget,
     QCheckBox,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS
 
+from .assets import asset_path
 from .browsers import BrowserConfig, available_browsers
 from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
@@ -263,15 +265,17 @@ class Sidebar(QWidget):
         lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         lbl.setMinimumHeight(30)
         widget.setMinimumHeight(max(widget.minimumHeight(), 30))
-        grid.addWidget(lbl, row, col * 2)
-        grid.addWidget(widget, row, col * 2 + 1)
+        actual_row = getattr(self, "_next_filter_row", 0)
+        self._next_filter_row = actual_row + 1
+        grid.addWidget(lbl, actual_row, 0)
+        grid.addWidget(widget, actual_row, 1)
         if key:
-            self._filter_rows[key] = (lbl, widget, row, col)
+            self._filter_rows[key] = (lbl, widget, actual_row, 0)
 
     def _build_ui(self) -> None:
         body_layout = QVBoxLayout(self)
-        body_layout.setContentsMargins(10, 8, 10, 8)
-        body_layout.setSpacing(6)
+        body_layout.setContentsMargins(14, 12, 14, 12)
+        body_layout.setSpacing(9)
 
         quick_row = QHBoxLayout()
         quick_row.setContentsMargins(0, 0, 0, 0)
@@ -280,20 +284,26 @@ class Sidebar(QWidget):
         quick_lbl.setObjectName("SidebarTitle")
         self.ed_quick_search = self._make_line("Введите текст для поиска по всем полям")
         self.ed_quick_search.setMinimumWidth(520)
+        self.ed_quick_search.setMinimumHeight(38)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
         quick_row.addWidget(QLabel("Браузер:"))
         self.cb_browser = QComboBox()
         self.cb_browser.setMinimumWidth(180)
+        self.cb_browser.setMinimumHeight(38)
+        self.cb_browser.setIconSize(QSize(20, 20))
         self._browsers = available_browsers()
         for browser in self._browsers:
-            self.cb_browser.addItem(browser.label, browser)
+            icon = QIcon(str(asset_path(f"{browser.key}.png")))
+            self.cb_browser.addItem(icon, browser.label, browser)
         quick_row.addWidget(self.cb_browser)
         self.btn_search = QPushButton("Искать")
         self.btn_search.setObjectName("Primary")
         self.btn_search.setMinimumWidth(110)
+        self.btn_search.setMinimumHeight(38)
         quick_row.addWidget(self.btn_search)
         self.btn_reset = QPushButton("Сбросить")
+        self.btn_reset.setMinimumHeight(38)
         quick_row.addWidget(self.btn_reset)
         body_layout.addLayout(quick_row)
 
@@ -310,37 +320,51 @@ class Sidebar(QWidget):
         self.lbl_keywords_count = QLabel()
         keyword_row.addWidget(self.lbl_keywords_count)
         keyword_row.addStretch(1)
-        body_layout.addLayout(keyword_row)
-        self.refresh_keywords_count()
-
         self.btn_toggle_extra = QToolButton()
-        self.btn_toggle_extra.setText("Дополнительные фильтры")
+        self.btn_toggle_extra.setObjectName("MoreFiltersButton")
+        self.btn_toggle_extra.setText("Еще фильтры")
         self.btn_toggle_extra.setCheckable(True)
         self.btn_toggle_extra.setChecked(False)
         self.btn_toggle_extra.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_toggle_extra.setArrowType(Qt.RightArrow)
-        body_layout.addWidget(self.btn_toggle_extra)
+        keyword_row.addWidget(self.btn_toggle_extra)
+        body_layout.addLayout(keyword_row)
+        self.refresh_keywords_count()
 
         self.extra_scroll = QScrollArea()
+        self.extra_scroll.setObjectName("ExtraFiltersPanel")
         self.extra_scroll.setVisible(False)
         self.extra_scroll.setWidgetResizable(True)
         self.extra_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.extra_scroll.setMinimumHeight(380)
-        self.extra_scroll.setMaximumHeight(560)
+        self.extra_scroll.setMinimumWidth(330)
+        self.extra_scroll.setMaximumWidth(360)
 
         self.extra_filters = QWidget()
+        self.extra_filters.setObjectName("ExtraFiltersBody")
         self.extra_filters.setMinimumHeight(680)
         extra_layout = QVBoxLayout(self.extra_filters)
-        extra_layout.setContentsMargins(0, 10, 0, 0)
+        extra_layout.setContentsMargins(14, 12, 14, 14)
         extra_layout.setSpacing(12)
+
+        extra_header = QHBoxLayout()
+        extra_header.setContentsMargins(0, 0, 0, 0)
+        title = QLabel("Дополнительные фильтры")
+        title.setObjectName("ExtraFiltersTitle")
+        extra_header.addWidget(title)
+        extra_header.addStretch(1)
+        btn_close_extra = QToolButton()
+        btn_close_extra.setObjectName("ExtraFiltersClose")
+        btn_close_extra.setText("×")
+        btn_close_extra.clicked.connect(lambda: self.btn_toggle_extra.setChecked(False))
+        extra_header.addWidget(btn_close_extra)
+        extra_layout.addLayout(extra_header)
 
         grid = QGridLayout()
         self._filter_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(14)
-        for c in (1, 3):
-            grid.setColumnStretch(c, 1)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(10)
+        grid.setColumnStretch(1, 1)
         for r in range(12):
             grid.setRowMinimumHeight(r, 36)
 
@@ -540,8 +564,9 @@ class Sidebar(QWidget):
 
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
-        self.setMinimumHeight(self._expanded_min_height() if visible else 88)
+        self.setMinimumHeight(88)
         self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
+        self.btn_toggle_extra.setText("Скрыть фильтры" if visible else "Еще фильтры")
         self.updateGeometry()
         parent = self.parentWidget()
         if parent is not None:
@@ -611,8 +636,9 @@ class Sidebar(QWidget):
         label, widget, _, _ = stored
         self._filter_grid.removeWidget(label)
         self._filter_grid.removeWidget(widget)
-        self._filter_grid.addWidget(label, row, col * 2)
-        self._filter_grid.addWidget(widget, row, col * 2 + 1)
+        actual_row = row * 2 + col
+        self._filter_grid.addWidget(label, actual_row, 0)
+        self._filter_grid.addWidget(widget, actual_row, 1)
         label.setVisible(visible)
         widget.setVisible(visible)
 
