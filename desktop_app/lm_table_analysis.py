@@ -83,6 +83,42 @@ def parse_llm_table_json(raw: str) -> dict[str, str]:
     return out
 
 
+def single_field_system_prompt(field_label_ru: str) -> str:
+    return (
+        "Ты система извлечения структурированных данных из документов и текста карточки закупки (ЭТП).\n"
+        "Тебе даётся ровно одно поле для заполнения.\n\n"
+        "Правила:\n"
+        "- Не придумывай значения.\n"
+        "- Если в контексте нет данных для поля — верни null для этого поля.\n"
+        "- Ответ только одним JSON-объектом (без markdown и текста вне JSON).\n"
+        "- Используй только информацию из контекста пользователя.\n\n"
+        f"Человекочитаемое название поля: {field_label_ru}\n"
+        "Формат ответа: объект с единственным ключом — строкой из поля "
+        "«Требуемое поле (ключ JSON)» в запросе пользователя — и значением типа string или null. "
+        "Строковые значения на русском языке."
+    )
+
+
+def parse_single_field_json(raw: str, field_key: str) -> str | None:
+    """Разбор ответа модели для одного поля."""
+    text = _strip_code_fence(raw)
+    obj = _first_json_decode(text)
+    if not isinstance(obj, dict):
+        raise ValueError("Ожидался JSON-объект.")
+    if field_key in obj:
+        v = obj[field_key]
+    elif "value" in obj:
+        v = obj["value"]
+    elif len(obj) == 1:
+        v = next(iter(obj.values()))
+    else:
+        raise ValueError(f"В объекте нет ключа «{field_key}».")
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
 def build_analysis_system_prompt() -> str:
     keys_line = ", ".join(ANALYSIS_JSON_KEYS)
     return (
@@ -125,6 +161,7 @@ def call_lm_studio_chat(
     system_prompt: str,
     user_prompt: str,
     timeout_sec: int = 900,
+    max_tokens: int = 8192,
 ) -> str:
     url = base_url.rstrip("/") + "/v1/chat/completions"
     payload: dict[str, Any] = {
@@ -134,7 +171,7 @@ def call_lm_studio_chat(
             {"role": "user", "content": user_prompt},
         ],
         "temperature": 0.15,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens,
         "stream": False,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

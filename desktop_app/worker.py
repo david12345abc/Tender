@@ -12,6 +12,7 @@ from etp_client import HARD_SERVER_LIMIT, EtpClient, _server_status_value
 
 from .constants import ANALYSIS_DIR, VIEW_URL
 from .document_text import prepare_documents_for_analysis
+from .gpb_rag.pipeline import ragged_analysis_available, run_rag_table_analysis
 from .lm_table_analysis import (
     build_analysis_system_prompt,
     build_analysis_user_prompt,
@@ -532,7 +533,7 @@ def make_analyze_procedure_task(
     lm_model: str,
     sink: dict,
 ) -> Callable[[Worker], None]:
-    """Карточка ЭТП ГПБ → текст страницы → LM Studio → строки таблицы в sink['rows']."""
+    """Карточка ЭТП ГПБ → текст страницы и документов → при наличии зависимостей RAG (FAISS+e5) поштучное извлечение полей в LM Studio; иначе один запрос ко всему тексту."""
 
     def _run(w: Worker) -> None:
         sink.clear()
@@ -562,7 +563,6 @@ def make_analyze_procedure_task(
                 w.error.emit(f"Ошибка подключения к Chrome: {e}")
                 return
 
-        system_prompt = build_analysis_system_prompt()
         rows: list[list[str]] = []
 
         for index, proc in enumerate(procedures, start=1):
@@ -666,62 +666,111 @@ def make_analyze_procedure_task(
                         }
                     )
 
-            w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
             parsed = None
             raw_llm = ""
             err_msg: str | None = None
-            try:
-                user_prompt = build_analysis_user_prompt(
-                    registry, detail_url, doc_summary, page_text, documents_text
-                )
-                raw_llm = call_lm_studio_chat(
-                    lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=900
-                )
-                sink["raw_by_registry"][registry] = raw_llm
-                parsed = parse_llm_table_json(raw_llm)
-            except Exception as e:
-                first_err = str(e)
-                sink["document_issues"].append(
-                    {
-                        "severity": "important",
-                        "registry": registry,
-                        "file": "LM Studio",
-                        "message": f"Первый запрос к модели не выполнен: {first_err}. Пробую укороченный контекст.",
-                    }
-                )
+            rag_used = False
+
+            if ragged_analysis_available():
                 try:
-                    w.progress.emit(f"Повторный запрос к LM Studio с укороченным контекстом: {registry}…")
-                    short_prompt = build_analysis_user_prompt(
-                        registry,
-                        detail_url,
-                        doc_summary,
-                        _trim_for_llm(page_text, 60_000),
-                        _trim_for_llm(documents_text, 20_000),
+                    w.progress.emit(f"RAG: индексация и извлечение полей для {registry}…")
+                    ingest_notes: list[str] = []
+                    debug_dir = ANALYSIS_DIR / "rag_debug" / _safe_folder_name(registry)
+                    parsed, raw_llm = run_rag_table_analysis(
+                        registry=registry,
+                        page_text=page_text,
+                        unpacked_dir=unpacked_dir,
+                        lm_base_url=lm_base_url,
+                        lm_model=lm_model,
+                        progress=w.progress.emit,
+                        stop_flag=w.is_stop_requested,
+                        debug_dir=debug_dir,
+                        ingest_notes_out=ingest_notes,
+                    )
+                    rag_used = True
+                    sink["raw_by_registry"][registry] = raw_llm
+                    for note in ingest_notes:
+                        sink["document_issues"].append(
+                            {
+                                "severity": "important",
+                                "registry": registry,
+                                "file": "",
+                                "message": note,
+                            }
+                        )
+                except Exception as rag_exc:
+                    sink["document_issues"].append(
+                        {
+                            "severity": "important",
+                            "registry": registry,
+                            "file": "RAG",
+                            "message": (
+                                "RAG-пайплайн недоступен или завершился ошибкой; "
+                                f"используется один запрос ко всему тексту: {rag_exc}"
+                            ),
+                        }
+                    )
+
+            if not rag_used:
+                system_prompt = build_analysis_system_prompt()
+                w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
+                try:
+                    user_prompt = build_analysis_user_prompt(
+                        registry, detail_url, doc_summary, page_text, documents_text
                     )
                     raw_llm = call_lm_studio_chat(
-                        lm_base_url,
-                        lm_model,
-                        system_prompt,
-                        short_prompt,
-                        timeout_sec=900,
+                        lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=900
                     )
                     sink["raw_by_registry"][registry] = raw_llm
                     parsed = parse_llm_table_json(raw_llm)
-                except Exception as retry_error:
-                    err_msg = str(retry_error)
+                except Exception as e:
+                    first_err = str(e)
                     sink["document_issues"].append(
                         {
-                            "severity": "critical",
+                            "severity": "important",
                             "registry": registry,
                             "file": "LM Studio",
-                            "message": f"Повторный запрос к модели не выполнен: {err_msg}",
+                            "message": (
+                                f"Первый запрос к модели не выполнен: {first_err}. "
+                                "Пробую укороченный контекст."
+                            ),
                         }
                     )
-                    sink["raw_by_registry"][registry] = (
-                        raw_llm
-                        + ("\n---\n" if raw_llm else "")
-                        + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
-                    )
+                    try:
+                        w.progress.emit(
+                            f"Повторный запрос к LM Studio с укороченным контекстом: {registry}…"
+                        )
+                        short_prompt = build_analysis_user_prompt(
+                            registry,
+                            detail_url,
+                            doc_summary,
+                            _trim_for_llm(page_text, 60_000),
+                            _trim_for_llm(documents_text, 20_000),
+                        )
+                        raw_llm = call_lm_studio_chat(
+                            lm_base_url,
+                            lm_model,
+                            system_prompt,
+                            short_prompt,
+                            timeout_sec=900,
+                        )
+                        sink["raw_by_registry"][registry] = raw_llm
+                        parsed = parse_llm_table_json(raw_llm)
+                    except Exception as retry_error:
+                        err_msg = str(retry_error)
+                        sink["document_issues"].append(
+                            {
+                                "severity": "critical",
+                                "registry": registry,
+                                "file": "LM Studio",
+                                "message": f"Повторный запрос к модели не выполнен: {err_msg}",
+                            }
+                        )
+                        sink["raw_by_registry"][registry] = (
+                            raw_llm
+                            + ("\n---\n" if raw_llm else "")
+                            + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
+                        )
 
             rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
 

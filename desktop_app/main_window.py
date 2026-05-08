@@ -1000,6 +1000,23 @@ class MainWindow(QMainWindow):
                 cells[1].text = str(value or "—")
 
             doc.save(path)
+            try:
+                from openpyxl import Workbook
+
+                xlsx_path = path.with_suffix(".xlsx")
+                wb = Workbook()
+                ws = wb.active
+                ws.title = "Анализ"
+                ws.append(["Реестровый номер", registry])
+                if title:
+                    ws.append(["Наименование", title])
+                ws.append([])
+                for header, value in zip(ANALYSIS_TABLE_HEADERS_RU, row):
+                    ws.append([str(header), str(value if value is not None else "—")])
+                wb.save(xlsx_path)
+            except Exception:
+                pass
+
             summary_rows.append([registry, title or "—", str(path), str(unpacked_by_registry.get(registry) or "")])
 
         self._analysis_sink["summary_rows"] = summary_rows
@@ -1012,7 +1029,7 @@ class MainWindow(QMainWindow):
         dlg.resize(min(1100, self.width() + 80), min(520, self.height()))
         layout = QVBoxLayout(dlg)
         hint = QLabel(
-            "Полная таблица анализа сохранена в Word-файлы. "
+            "Полная таблица анализа сохранена в файлы Word (.docx) и Excel (.xlsx) с одинаковым именем. "
             "Нажмите «ссылка» в третьей колонке, чтобы выделить Word-файл, "
             "или в четвёртой колонке, чтобы открыть папку с разархивированными документами."
         )
