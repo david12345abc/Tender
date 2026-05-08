@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCalendarWidget,
@@ -34,6 +35,8 @@ from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
+# Значение строки быстрого поиска при первом открытии (режим «по номеру» по умолчанию).
+DEFAULT_QUICK_SEARCH_VALUE = "РН60500923"
 
 
 class StatusMultiSelect(QWidget):
@@ -249,6 +252,7 @@ class Sidebar(QWidget):
         quick_lbl.setObjectName("SidebarTitle")
         self.ed_quick_search = self._make_line("Введите слово или фразу из названия")
         self.ed_quick_search.setMinimumWidth(420)
+        self.ed_quick_search.setText(DEFAULT_QUICK_SEARCH_VALUE)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
 
@@ -257,10 +261,10 @@ class Sidebar(QWidget):
         self.btn_search_by_title = QPushButton("Поиск по названию")
         self.btn_search_by_title.setObjectName("SearchModeButton")
         self.btn_search_by_title.setCheckable(True)
-        self.btn_search_by_title.setChecked(True)
         self.btn_search_by_number = QPushButton("Поиск по номеру")
         self.btn_search_by_number.setObjectName("SearchModeButton")
         self.btn_search_by_number.setCheckable(True)
+        self.btn_search_by_number.setChecked(True)
         self.search_mode_switch = QFrame()
         self.search_mode_switch.setObjectName("SearchModeSwitch")
         switch_layout = QHBoxLayout(self.search_mode_switch)
@@ -523,8 +527,25 @@ class Sidebar(QWidget):
         self.btn_reset.clicked.connect(self.resetRequested)
         self.btn_search_by_title.toggled.connect(self._update_search_mode)
         self.btn_search_by_number.toggled.connect(self._update_search_mode)
+        self._update_search_mode()
         self.cb_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         self.btn_edit_keywords.clicked.connect(self.editKeywordsRequested)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._ensure_search_mode_tab_selected()
+
+    def _ensure_search_mode_tab_selected(self) -> None:
+        """Всегда одна активная «вкладка» (синяя), иначе сбрасываются стили кнопок."""
+        if self.btn_search_by_title.isChecked() or self.btn_search_by_number.isChecked():
+            return
+        self.btn_search_by_title.blockSignals(True)
+        self.btn_search_by_number.blockSignals(True)
+        self.btn_search_by_title.setChecked(False)
+        self.btn_search_by_number.setChecked(True)
+        self.btn_search_by_title.blockSignals(False)
+        self.btn_search_by_number.blockSignals(False)
+        self._update_search_mode()
 
     def _update_search_mode(self, *_: object) -> None:
         if self.btn_search_by_number.isChecked():
@@ -636,7 +657,7 @@ class Sidebar(QWidget):
 
     def reset_client_filters(self) -> None:
         self.ed_quick_search.clear()
-        self.btn_search_by_title.setChecked(True)
+        self.btn_search_by_number.setChecked(True)
         self.cb_keyword_search.setChecked(False)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
