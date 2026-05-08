@@ -52,6 +52,7 @@ def available_browsers() -> list[BrowserConfig]:
     appdata = _env_path("APPDATA")
 
     chrome_app_path = _app_path("chrome.exe")
+    chromium_app_path = _app_path("chromium.exe")
     edge_app_path = _app_path("msedge.exe")
     yandex_app_path = _app_path("browser.exe")
     opera_app_path = _app_path("opera.exe")
@@ -116,7 +117,17 @@ def available_browsers() -> list[BrowserConfig]:
         BrowserConfig(
             key="chromium",
             label="Chromium",
-            exe_path=program_files / "Chromium" / "Application" / "chrome.exe",
+            exe_path=_first_existing(
+                [
+                    *([chromium_app_path] if chromium_app_path else []),
+                    program_files / "Chromium" / "Application" / "chrome.exe",
+                    program_files_x86 / "Chromium" / "Application" / "chrome.exe",
+                    local / "Chromium" / "Application" / "chrome.exe",
+                    local / "Chromium" / "chrome.exe",
+                    local / "Programs" / "Chromium" / "Application" / "chrome.exe",
+                    local / "Programs" / "Chromium" / "chromium.exe",
+                ]
+            ),
             user_data_dir=local / "Chromium" / "User Data",
             port=9226,
         ),

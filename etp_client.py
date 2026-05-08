@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+from datetime import datetime
+import json
 import os
 import re
 import socket
@@ -20,8 +22,12 @@ import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
+from selenium.common.exceptions import SessionNotCreatedException
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.webdriver import WebDriver as ChromeWebDriver
 from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
@@ -29,6 +35,26 @@ from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
 DEVTOOLS_PORT = 9222
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default&client=etp"
 HARD_SERVER_LIMIT = 500  # сколько фактически отдаёт сервер за один вызов
+ETP_URL = "https://etpgaz.gazprombank.ru/#com/procedure/index"
+
+SERVER_STATUS_BY_LABEL = {
+    # Значения соответствуют полю status в Procedure.list на сайте ЭТП ГПБ.
+    # Например, «Прием заявок» сайт отправляет как status: 2.
+    "активные": 1,
+    "прием заявок": 2,
+    "приём заявок": 2,
+    "ожидает начала регистрации": 3,
+    "ожидает начала процедуры": 4,
+    "ожидает открытия доступа": 5,
+    "регистрация для участия": 6,
+    "повышение стартовой цены": 7,
+    "вскрытие заявок": 8,
+    "прием ценовой информации": 9,
+    "приём ценовой информации": 9,
+    "завершение процедуры": 10,
+    "рассмотрение заявок": 11,
+    "подведение итогов": 12,
+}
 
 
 @dataclass(frozen=True)
@@ -125,10 +151,46 @@ const explicitToken = arguments[1] || '';
 })();
 """
 
+
+def _date_to_etp_iso(value: Optional[str], end_of_day: bool = False) -> str:
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        time_part = "23:59:59" if end_of_day else "00:00:00"
+        return f"{value:%Y-%m-%d}T{time_part}+03:00"
+    text = str(value).strip()
+    if not text:
+        return ""
+    if "T" in text:
+        return text
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            time_part = "23:59:59" if end_of_day else "00:00:00"
+            return f"{dt:%Y-%m-%d}T{time_part}+03:00"
+        except ValueError:
+            pass
+    return text
+
+
+def _server_status_value(labels: tuple[str, ...]) -> Optional[int]:
+    if len(labels) != 1:
+        return None
+    return SERVER_STATUS_BY_LABEL.get(labels[0].casefold().replace("ё", "е"))
+
+
+def _purchase_form_value(value: str) -> int:
+    text = str(value or "").casefold()
+    if "электрон" in text:
+        return 0
+    if "бумаж" in text:
+        return 1
+    return -1
+
 _COLLECT_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
 (() => {
-  const exts = /\.(docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const links = [];
   const seen = new Set();
   function push(href, text) {
@@ -144,6 +206,82 @@ const callback = arguments[arguments.length - 1];
     }
   }
   callback(links);
+})();
+"""
+
+_EXTRACT_PROCEDURE_VIEW_JS = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const bodyLen = () => String(document.body && document.body.innerText || "").length;
+
+  for (let i = 0; i < 60; i++) {
+    const t = String(document.body && document.body.innerText || "");
+    if (
+      /Сведения о процедуре/i.test(t)
+      || /Извещение о проведении/i.test(t)
+      || String(location.href || "").includes("procedure/view")
+    ) {
+      if (bodyLen() > 200) break;
+    }
+    await wait(400);
+  }
+
+  const scrollMax = Math.max(
+    document.body ? document.body.scrollHeight : 0,
+    document.documentElement ? document.documentElement.scrollHeight : 0,
+    1500
+  );
+  for (let y = 0; y <= scrollMax; y += 450) {
+    window.scrollTo(0, y);
+    await wait(100);
+  }
+  window.scrollTo(0, scrollMax);
+  await wait(200);
+  window.scrollTo(0, 0);
+  await wait(150);
+
+  function pickContainer() {
+    const sels = [
+      ".x-region-center",
+      ".x-border-region-center",
+      ".x-panel-body-default",
+      "#procedureview",
+      "#procedure-view",
+      "[id*=procedure][id*=view]",
+    ];
+    for (const sel of sels) {
+      try {
+        const el = document.querySelector(sel);
+        const txt = el && String(el.innerText || el.textContent || "").trim();
+        if (txt && txt.length > 500) return el;
+      } catch (e) {}
+    }
+    return document.body;
+  }
+  const root = pickContainer();
+  const pageText = String(root.innerText || root.textContent || "").trim();
+
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const docLinks = [];
+  const seen = new Set();
+  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+    const href = a.href || "";
+    const tx = (a.innerText || a.textContent || "").trim();
+    if (!href || seen.has(href)) continue;
+    if (exts.test(href) || exts.test(tx) || /download|attach|file|document/i.test(href)) {
+      seen.add(href);
+      docLinks.push({ href, text: tx.slice(0, 240) });
+    }
+  }
+
+  callback({
+    ok: true,
+    pageText,
+    docLinks,
+    url: location.href,
+    charCount: pageText.length,
+  });
 })();
 """
 
@@ -196,6 +334,8 @@ class EtpClient:
         self.port = port
         self.driver: Optional[ChromeWebDriver | EdgeWebDriver] = None
         self._token: str = ""
+        self.target_url = ETP_URL
+        self.target_host = "etpgaz.gazprombank.ru"
         self.browser = BrowserLaunchConfig(
             key="chrome",
             label="Google Chrome",
@@ -239,6 +379,83 @@ class EtpClient:
         except Exception:
             return False
 
+    def _devtools_json(self, endpoint: str) -> Any:
+        with urlopen(f"http://127.0.0.1:{self.port}{endpoint}", timeout=2) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+
+    def _running_browser_version(self) -> str:
+        try:
+            payload = self._devtools_json("/json/version")
+        except Exception:
+            return ""
+        browser = str(payload.get("Browser") or "")
+        match = re.search(r"(\d+\.\d+\.\d+\.\d+)", browser)
+        return match.group(1) if match else ""
+
+    def _has_devtools_page(self) -> bool:
+        try:
+            targets = self._devtools_json("/json/list")
+        except Exception:
+            return False
+        if not isinstance(targets, list):
+            return False
+        return any(target.get("type") == "page" for target in targets if isinstance(target, dict))
+
+    def _open_devtools_page(self, url: str) -> bool:
+        endpoint = f"/json/new?{quote(url, safe=':/?=&')}"
+        request = Request(f"http://127.0.0.1:{self.port}{endpoint}", method="PUT")
+        try:
+            with urlopen(request, timeout=3):
+                return True
+        except Exception:
+            return False
+
+    def _ensure_devtools_page(self, timeout: int = 8) -> None:
+        deadline = time.time() + timeout
+        opened = False
+        while time.time() < deadline:
+            if self._has_devtools_page():
+                return
+            if not opened:
+                opened = self._open_devtools_page(self.target_url) or self._open_devtools_page("about:blank")
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"{self.browser.label} слушает DevTools на порту {self.port}, но не отдаёт открытые вкладки. "
+            "Закройте все окна выбранного браузера и запустите поиск снова."
+        )
+
+    def _matching_chromedriver_service(self) -> Optional[ChromeService]:
+        version = self._running_browser_version()
+        major = version.split(".", 1)[0] if version else ""
+        if not major:
+            return None
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+
+            return ChromeService(ChromeDriverManager(driver_version=major).install())
+        except Exception:
+            return None
+
+    def _driver_version_hint(self, exc: Exception) -> str:
+        text = str(exc)
+        if "unable to discover open pages" in text:
+            return (
+                f"{self.browser.label} слушает DevTools на порту {self.port}, "
+                "но ChromeDriver не видит открытые вкладки. Закройте все окна выбранного "
+                "браузера и запустите поиск снова. Исходная ошибка Selenium: "
+                f"{text}"
+            )
+        if "This version of ChromeDriver only supports Chrome version" not in text:
+            return text
+        version = self._running_browser_version()
+        version_part = f" версии {version}" if version else ""
+        return (
+            f"Не удалось подобрать ChromeDriver для {self.browser.label}{version_part}. "
+            "Обновите выбранный браузер или проверьте интернет-доступ, чтобы приложение "
+            "смогло скачать совместимый драйвер. Исходная ошибка Selenium: "
+            f"{text}"
+        )
+
     def ensure_chrome(self, timeout: int = 40) -> None:
         """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
@@ -258,7 +475,7 @@ class EtpClient:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--start-maximized",
-                "https://etpgaz.gazprombank.ru/#com/procedure/index",
+                self.target_url,
             ], creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
 
         def wait_for_port(seconds: int) -> bool:
@@ -304,14 +521,38 @@ class EtpClient:
             raise RuntimeError(
                 f"{self.browser.label} с DevTools на порту {self.port} не запущен."
             )
-        if self.browser.key == "edge":
-            edge_opts = EdgeOptions()
-            edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
-            self.driver = EdgeWebDriver(options=edge_opts)
-        else:
-            opts = Options()
-            opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
-            self.driver = ChromeWebDriver(options=opts)
+        last_error: Exception | None = None
+        for attempt in range(3):
+            self._ensure_devtools_page()
+            try:
+                if self.browser.key == "edge":
+                    edge_opts = EdgeOptions()
+                    edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
+                    self.driver = EdgeWebDriver(options=edge_opts)
+                else:
+                    opts = Options()
+                    opts.binary_location = str(self.browser.exe_path)
+                    opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
+                    service = self._matching_chromedriver_service()
+                    if service is not None:
+                        self.driver = ChromeWebDriver(service=service, options=opts)
+                    else:
+                        self.driver = ChromeWebDriver(options=opts)
+                break
+            except SessionNotCreatedException as e:
+                raise RuntimeError(self._driver_version_hint(e)) from e
+            except Exception as e:
+                last_error = e
+                self.driver = None
+                if attempt >= 2:
+                    break
+                time.sleep(1.5)
+        if self.driver is None:
+            raise RuntimeError(
+                f"Не удалось подключиться к {self.browser.label} DevTools на порту {self.port}. "
+                "Закройте все окна выбранного браузера и запустите поиск снова. "
+                f"Исходная ошибка: {last_error}"
+            )
         self.driver.set_script_timeout(30)
         self._switch_to_etp_tab()
 
@@ -326,7 +567,7 @@ class EtpClient:
         for h in handles:
             try:
                 self.driver.switch_to.window(h)
-                if "etpgaz.gazprombank.ru" in (self.driver.current_url or ""):
+                if self.target_host in (self.driver.current_url or ""):
                     return True
             except Exception:
                 continue
@@ -340,19 +581,19 @@ class EtpClient:
                 continue
         try:
             self.driver.execute_script(
-                "window.open('https://etpgaz.gazprombank.ru/#com/procedure/index', '_blank');"
+                f"window.open('{self.target_url}', '_blank');"
             )
         except Exception:
             pass
         try:
             for h in self.driver.window_handles:
                 self.driver.switch_to.window(h)
-                if "etpgaz.gazprombank.ru" in (self.driver.current_url or ""):
+                if self.target_host in (self.driver.current_url or ""):
                     return True
         except Exception:
             pass
         try:
-            self.driver.get("https://etpgaz.gazprombank.ru/#com/procedure/index")
+            self.driver.get(self.target_url)
             return True
         except Exception:
             return False
@@ -400,7 +641,7 @@ class EtpClient:
         text = str(link.get("text") or "").strip()
         href = str(link.get("href") or "")
         for source in (text, href.rsplit("/", 1)[-1]):
-            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
+            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
             if m:
                 return self._safe_filename(m.group(1), f"document_{index}")
         return self._safe_filename(text or f"document_{index}", f"document_{index}")
@@ -474,6 +715,90 @@ class EtpClient:
             "errors": errors,
         }
 
+    def download_document_link(
+        self,
+        link: dict[str, Any],
+        output_dir: Path,
+        index: int = 1,
+    ) -> Path:
+        """Скачивает одну ссылку документации из текущей авторизованной вкладки."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        href = str((link or {}).get("href") or "")
+        if not href:
+            raise RuntimeError("Пустая ссылка на документ.")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        name = self._filename_from_link(link, index)
+        target = output_dir / name
+        stem, suffix = target.stem, target.suffix
+        n = 2
+        while target.exists():
+            target = output_dir / f"{stem}_{n}{suffix}"
+            n += 1
+        res = self.driver.execute_async_script(_DOWNLOAD_URL_JS, href)
+        if not isinstance(res, dict) or not res.get("ok"):
+            raise RuntimeError(f"Ошибка скачивания {name}: {res}")
+        data_url = str(res.get("dataUrl") or "")
+        if "," not in data_url:
+            raise RuntimeError(f"Пустой ответ при скачивании {name}")
+        raw = base64.b64decode(data_url.split(",", 1)[1])
+        target.write_bytes(raw)
+        return target
+
+    def extract_procedure_card_text(
+        self,
+        proc: dict[str, Any],
+        progress: Optional[Callable[[str], None]] = None,
+        max_page_chars: int = 120_000,
+    ) -> dict[str, Any]:
+        """Открывает карточку процедуры и собирает текст страницы + ссылки на файлы."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        proc_id = proc.get("id") or proc.get("procedure_id")
+        if not proc_id:
+            raise RuntimeError("У процедуры нет id для открытия подробной страницы.")
+
+        registry = str(proc.get("registry_number") or proc.get("procedure_number") or proc_id)
+        url = self._detail_url(proc_id)
+        if progress:
+            progress(f"Читаю карточку {registry}: {url}")
+        self.driver.get(url)
+        try:
+            self.driver.set_script_timeout(120)
+            raw = self.driver.execute_async_script(_EXTRACT_PROCEDURE_VIEW_JS)
+        finally:
+            self.driver.set_script_timeout(30)
+
+        if not isinstance(raw, dict) or not raw.get("ok"):
+            raise RuntimeError(f"Не удалось прочитать страницу: {raw}")
+
+        page_text = str(raw.get("pageText") or "").strip()
+        if len(page_text) > max_page_chars:
+            page_text = page_text[:max_page_chars] + "\n\n[…текст обрезан…]"
+
+        doc_links = raw.get("docLinks") or []
+        primary_file = ""
+        if isinstance(doc_links, list):
+            for item in doc_links:
+                if not isinstance(item, dict):
+                    continue
+                href = str(item.get("href") or "")
+                if re.search(r"\.(zip|rar|7z)\b", href, re.I):
+                    primary_file = href
+                    break
+            if not primary_file and doc_links:
+                first = doc_links[0]
+                if isinstance(first, dict):
+                    primary_file = str(first.get("href") or "")
+
+        return {
+            "procedure": registry,
+            "procedure_id": proc_id,
+            "url": url,
+            "page_text": page_text,
+            "doc_links": doc_links if isinstance(doc_links, list) else [],
+            "primary_doc_url": primary_file,
+            "char_count": int(raw.get("charCount") or len(page_text)),
+        }
+
     def pull_token(self) -> str:
         """Достаёт CSRF-токен из SPA или Index.index."""
         if not self.driver:
@@ -533,6 +858,7 @@ class EtpClient:
         tag_id: Optional[int] = None,
         sort: str = "id",
         direction: str = "DESC",
+        client_filters: Any = None,
         _recover_attempt: int = 0,
     ) -> dict[str, Any]:
         """Один RPC Procedure.list. Сервер жёстко ограничивает отдачу ~25 штук."""
@@ -544,16 +870,123 @@ class EtpClient:
             "sort": sort,
             "dir": direction,
             "with_affiliates": True,
+            "date_published_from": _date_to_etp_iso(date_from),
             "query": query or "",
             "tag_id": tag_id,
             "limit": limit,
+            "procedure_number2_like": "",
+            "procedure_number_like": "",
+            "title_like": "",
+            "lot_nomenclature": "",
+            "lot_okved": "",
+            "organizer": "",
+            "customer": "",
+            "lot_customer_region_okato": "",
+            "agents": "",
+            "coordination_resolved": False,
+            "guarantee_application_from": None,
+            "guarantee_application_till": None,
+            "department_id": -1,
+            "contact_person_like": "",
+            "procedure_type": "",
+            "status": "",
+            "private": -1,
+            "lot_count_from": "",
+            "lot_count_till": "",
+            "applics_added_from": "",
+            "applics_added_till": "",
+            "experts": "",
+            "asez_plan_position_id": "",
+            "date_published_till": _date_to_etp_iso(date_to, end_of_day=True),
+            "date_end_registration_from": "",
+            "date_end_registration_till": "",
+            "date_end_second_parts_review_from": "",
+            "date_end_second_parts_review_till": "",
+            "start_price_from": None,
+            "start_price_till": None,
+            "special_mark": "",
+            "lot_units_search": "",
+            "nm_types": "",
+            "internal_registry_number": "",
+            "managed_by_parent": False,
             "start": start,
             "__tid": int(time.time() * 1000) % 1_000_000,
         }
-        if date_from:
-            payload["date_published_from"] = date_from
-        if date_to:
-            payload["date_published_to"] = date_to
+        if client_filters is not None:
+            registry = str(getattr(client_filters, "registry_contains", "") or "")
+            status_value = _server_status_value(
+                tuple(getattr(client_filters, "step_ids", ()) or ())
+            )
+            payload.update(
+                {
+                    "procedure_number2_like": str(
+                        getattr(client_filters, "unique_number_contains", "") or ""
+                    ),
+                    "procedure_number_like": registry,
+                    "title_like": str(getattr(client_filters, "title_contains", "") or ""),
+                    "lot_nomenclature": str(
+                        getattr(client_filters, "okpd2_contains", "") or ""
+                    ),
+                    "lot_okved": str(getattr(client_filters, "okved2_contains", "") or ""),
+                    "organizer": str(getattr(client_filters, "organizer_contains", "") or ""),
+                    "customer": str(getattr(client_filters, "customer_contains", "") or ""),
+                    "lot_customer_region_okato": str(
+                        getattr(client_filters, "customer_region_contains", "") or ""
+                    ),
+                    "agents": str(
+                        getattr(client_filters, "customer_agent_contains", "") or ""
+                    ),
+                    "contact_person_like": str(
+                        getattr(client_filters, "responsible_contains", "") or ""
+                    ),
+                    "procedure_type": str(getattr(client_filters, "trend_pur", "") or ""),
+                    "status": status_value if status_value is not None else "",
+                    "private": _purchase_form_value(
+                        str(getattr(client_filters, "purchase_form", "") or "")
+                    ),
+                    "lot_count_from": (
+                        str(getattr(client_filters, "lots_min", "") or "")
+                    ),
+                    "lot_count_till": (
+                        str(getattr(client_filters, "lots_max", "") or "")
+                    ),
+                    "applics_added_from": (
+                        str(getattr(client_filters, "applics_min", "") or "")
+                    ),
+                    "applics_added_till": (
+                        str(getattr(client_filters, "applics_max", "") or "")
+                    ),
+                    "start_price_from": getattr(client_filters, "price_min", None),
+                    "start_price_till": getattr(client_filters, "price_max", None),
+                    "date_end_registration_from": _date_to_etp_iso(
+                        getattr(client_filters, "end_from", None)
+                    ),
+                    "date_end_registration_till": _date_to_etp_iso(
+                        getattr(client_filters, "end_to", None), end_of_day=True
+                    ),
+                    "date_end_second_parts_review_from": _date_to_etp_iso(
+                        getattr(client_filters, "results_from", None)
+                    ),
+                    "date_end_second_parts_review_till": _date_to_etp_iso(
+                        getattr(client_filters, "results_to", None), end_of_day=True
+                    ),
+                    "special_mark": str(
+                        getattr(client_filters, "special_features_contains", "") or ""
+                    ),
+                    "lot_units_search": str(
+                        getattr(client_filters, "position_name_contains", "") or ""
+                    ),
+                    "nm_types": str(
+                        getattr(client_filters, "national_regime_contains", "") or ""
+                    ),
+                }
+            )
+            guarantee_min = getattr(client_filters, "guarantee_min", None)
+            guarantee_max = getattr(client_filters, "guarantee_max", None)
+            if guarantee_min is not None:
+                payload["guarantee_application_from"] = guarantee_min
+            if guarantee_max is not None:
+                payload["guarantee_application_till"] = guarantee_max
 
         try:
             res = self.driver.execute_async_script(
@@ -573,6 +1006,7 @@ class EtpClient:
                         tag_id=tag_id,
                         sort=sort,
                         direction=direction,
+                        client_filters=client_filters,
                         _recover_attempt=_recover_attempt + 1,
                     )
             return {
@@ -602,6 +1036,7 @@ class EtpClient:
                     tag_id=tag_id,
                     sort=sort,
                     direction=direction,
+                    client_filters=client_filters,
                     _recover_attempt=_recover_attempt + 1,
                 )
         return res
@@ -616,15 +1051,17 @@ class EtpClient:
             self.driver = None
 
 
-PROCEDURE_TYPE_LABELS = [
-    "Запрос предложений",
-    "Конкурентный отбор",
-    "Маркетинговые исследования",
-    "Обсуждение с участниками (первый этап)",
-    "Запрос цен",
-    "Конкурентный отбор с повышением стартовой цены",
-    "Анализ рынка и сбор ценовой информации",
+PROCEDURE_TYPE_ID_LABELS = {
+    31: "Маркетинговые исследования",
+    32: "Конкурентный отбор",
+}
+
+PROCEDURE_TYPE_OPTIONS = [
+    ("Конкурентный отбор", "32"),
+    ("Маркетинговые исследования", "31"),
 ]
+
+PROCEDURE_TYPE_LABELS = [label for label, _ in PROCEDURE_TYPE_OPTIONS]
 
 TREND_PUR_LABELS = {
     "001": "Конкурентный отбор",
@@ -666,6 +1103,16 @@ def trend_pur_label(code: Any) -> str:
     if not code:
         return "—"
     return TREND_PUR_LABELS.get(str(code), str(code))
+
+
+def procedure_type_label(code: Any) -> str:
+    if code in (None, ""):
+        return "—"
+    try:
+        numeric = int(str(code))
+    except (TypeError, ValueError):
+        return str(code)
+    return PROCEDURE_TYPE_ID_LABELS.get(numeric, str(code))
 
 
 def step_id_label(step: Any) -> str:

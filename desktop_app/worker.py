@@ -1,15 +1,40 @@
 from __future__ import annotations
 
+import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
+import shutil
 from typing import Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
+from .constants import ANALYSIS_DIR, TENDER_DOCUMENTS_ROOT, VIEW_URL
+from .document_text import prepare_documents_for_analysis
+from .lm_table_analysis import (
+    build_analysis_system_prompt,
+    build_analysis_user_prompt,
+    build_result_row,
+    call_lm_studio_chat,
+    parse_llm_table_json,
+)
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import SearchParams
+
+
+def _safe_folder_name(name: str, default: str = "procedure") -> str:
+    import re
+
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
+    return clean[:120] or default
+
+
+def _trim_for_llm(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n\n[текст обрезан для повторного запроса к модели]"
 
 class Worker(QObject):
     """Универсальный работник: выполняет одну задачу за жизнь.
@@ -183,27 +208,89 @@ def make_search_task(
         probe_model = ProcedureTableModel()
         probe_proxy = ProcedureFilterProxy()
         probe_proxy.setSourceModel(probe_model)
+        probe_filters = client_filters
+        host = str(getattr(client, "target_host", ""))
+        uses_server_search = bool(getattr(client, "server_side_search", False)) or any(
+            marker in host for marker in ("roseltorg", "tektorg")
+        )
         if client_filters is not None:
-            probe_proxy.set_filters(client_filters)
+            # Для внешних площадок быстрый поиск выполняет сервер. Повторная
+            # локальная фильтрация по подстроке ломает выдачу и счётчики.
+            if uses_server_search and getattr(client_filters, "quick_search", ""):
+                probe_filters = replace(client_filters, quick_search="")
+            if not uses_server_search:
+                # Для ЭТП ГПБ дополнительные фильтры отправляются в Procedure.list
+                # теми же полями, что использует сайт. Локально оставляем только
+                # фильтр ключевых слов, которого нет в форме ЭТП.
+                step_ids = tuple(getattr(client_filters, "step_ids", ()) or ())
+                probe_filters = replace(
+                    client_filters,
+                    quick_search="",
+                    registry_contains="",
+                    unique_number_contains="",
+                    organizer_contains="",
+                    customer_contains="",
+                    customer_region_contains="",
+                    customer_agent_contains="",
+                    title_contains="",
+                    okpd2_contains="",
+                    okved2_contains="",
+                    guarantee_min=None,
+                    guarantee_max=None,
+                    responsible_contains="",
+                    trend_pur="",
+                    step_ids=() if len(step_ids) == 1 else step_ids,
+                    purchase_form="",
+                    applics_min=None,
+                    applics_max=None,
+                    lots_min=None,
+                    lots_max=None,
+                    price_min=None,
+                    price_max=None,
+                    published_from=None,
+                    published_to=None,
+                    end_from=None,
+                    end_to=None,
+                    results_from=None,
+                    results_to=None,
+                    special_features_contains="",
+                    position_name_contains="",
+                    national_regime_contains="",
+                )
+            probe_proxy.set_filters(probe_filters)
+            set_client_filters = getattr(client, "set_client_filters", None)
+            if callable(set_client_filters):
+                set_client_filters(client_filters)
 
         while True:
             if w.is_stop_requested():
                 return
             request_limit = max(1, int(params.limit or HARD_SERVER_LIMIT))
             w.progress.emit(
-                f"Запрос Procedure.list: start={cur_start}, limit={request_limit}"
+                f"Запрос списка процедур: start={cur_start}, limit={request_limit}"
                 + (f"  (найдено {accepted_this_task}, просмотрено {loaded_this_task}/{total})" if total else "")
             )
-            res = client.fetch_page(
-                start=cur_start,
-                limit=request_limit,
-                date_from=params.date_from or None,
-                date_to=params.date_to or None,
-                query=params.query or None,
-                tag_id=params.tag_id,
-                sort=params.sort,
-                direction=params.direction,
-            )
+            fetch_kwargs = {
+                "start": cur_start,
+                "limit": request_limit,
+                "date_from": params.date_from or None,
+                "date_to": params.date_to or None,
+                "query": (
+                    params.query
+                    or (
+                        getattr(client_filters, "quick_search", "")
+                        if client_filters is not None
+                        else ""
+                    )
+                    or None
+                ),
+                "tag_id": params.tag_id,
+                "sort": params.sort,
+                "direction": params.direction,
+            }
+            if not uses_server_search:
+                fetch_kwargs["client_filters"] = client_filters
+            res = client.fetch_page(**fetch_kwargs)
             if w.is_stop_requested():
                 return
             if res.get("error"):
@@ -226,17 +313,27 @@ def make_search_task(
                 return
             if res.get("no_access") or res.get("no_session"):
                 msg = res.get("message") or "Нет доступа / сессия не активна."
+                login_hint = (
+                    "В Chrome откройте ТЭК-Торг РН, выполните вход через ЭЦП до конца, "
+                    "затем снова нажмите «Поиск»."
+                    if "tektorg" in host
+                    else
+                    "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
+                    "затем снова нажмите «Поиск»."
+                    if "roseltorg" in host
+                    else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                    "затем снова нажмите «Поиск»."
+                )
                 w.session.emit(
                     False,
-                    f"{msg}\n\nВ Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
-                    "затем снова нажмите «Поиск».",
+                    f"{msg}\n\n{login_hint}",
                 )
                 return
             procs = res.get("procedures") or []
             if total is None:
                 total = int(res.get("totalCount") or 0)
             accepted = procs
-            if client_filters is not None:
+            if probe_filters is not None:
                 probe_model.set_rows(procs)
                 accepted = []
                 for i in range(probe_proxy.rowCount()):
@@ -266,6 +363,9 @@ def make_search_task(
                 viewed_in_user_batch = 0
             if batches_left != 1 and pages_done >= batches_left:
                 break
+            delay = float(getattr(client, "request_delay_seconds", 0) or 0)
+            if delay > 0:
+                time.sleep(delay)
             cur_start = next_start
 
         if last_emitted_start != last_next_start:
@@ -332,6 +432,297 @@ def make_download_documents_task(
             True,
             f"Скачивание завершено. Файлов: {saved_count}, ошибок: {error_count}. "
             f"Папка: {output_dir}",
+        )
+
+    return _run
+
+
+def make_tektorg_row_documents_task(
+    client: EtpClient,
+    proc: dict,
+    output_root: Path = TENDER_DOCUMENTS_ROOT,
+) -> Callable[[Worker], None]:
+    """Задача: создать папку закупки и скачать документы ТЭК-Торг по клику."""
+
+    def _run(w: Worker) -> None:
+        registry = str(
+            proc.get("registry_number")
+            or proc.get("procedure_number")
+            or proc.get("number")
+            or proc.get("id")
+            or ""
+        ).strip()
+        if not registry:
+            w.error.emit("У выбранной процедуры нет номера для создания папки.")
+            return
+
+        folder = output_root / _safe_folder_name(registry, "procedure")
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            removed_count = 0
+            for child in folder.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+                removed_count += 1
+        except OSError as e:
+            w.error.emit(f"Не удалось создать папку закупки:\n{folder}\n\n{e}")
+            return
+        if removed_count:
+            w.progress.emit(f"Папка закупки очищена: {folder}")
+        else:
+            w.progress.emit(f"Создана папка закупки: {folder}")
+
+        if w.is_stop_requested():
+            return
+
+        if not client.is_chrome_running():
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
+            try:
+                client.ensure_chrome(timeout=45)
+            except Exception as e:
+                w.error.emit(f"Не удалось запустить Chrome: {e}")
+                return
+
+        if client.driver is None:
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        download_fn = getattr(client, "download_visible_procedure_documents", None)
+        if not callable(download_fn):
+            w.error.emit("Для текущей площадки не подключено скачивание документов по строке.")
+            return
+
+        if w.is_stop_requested():
+            return
+
+        try:
+            result = download_fn(proc, folder, progress=w.progress.emit)
+        except Exception as e:
+            w.error.emit(f"Не удалось скачать документы: {e}")
+            return
+
+        saved = len(result.get("saved") or [])
+        found = int(result.get("found") or 0)
+        errors = len(result.get("errors") or [])
+        ok = saved > 0 and errors == 0
+        w.session.emit(
+            ok,
+            f"Документы обработаны. Найдено: {found}, скачано: {saved}, ошибок: {errors}. Папка: {folder}",
+        )
+
+    return _run
+
+
+def make_analyze_procedure_task(
+    client: EtpClient,
+    procedures: list[dict],
+    lm_base_url: str,
+    lm_model: str,
+    sink: dict,
+) -> Callable[[Worker], None]:
+    """Карточка ЭТП ГПБ → текст страницы → LM Studio → строки таблицы в sink['rows']."""
+
+    def _run(w: Worker) -> None:
+        sink.clear()
+        sink["rows"] = []
+        sink["raw_by_registry"] = {}
+        sink["title_by_registry"] = {}
+        sink["unpacked_docs_by_registry"] = {}
+        sink["document_issues"] = []
+
+        if not procedures:
+            w.error.emit("Не выбраны процедуры для анализа.")
+            return
+
+        if not client.is_chrome_running():
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
+            try:
+                client.ensure_chrome(timeout=45)
+            except Exception as e:
+                w.error.emit(f"Не удалось запустить Chrome: {e}")
+                return
+
+        if client.driver is None:
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        system_prompt = build_analysis_system_prompt()
+        rows: list[list[str]] = []
+
+        for index, proc in enumerate(procedures, start=1):
+            if w.is_stop_requested():
+                return
+            registry = str(
+                proc.get("registry_number") or proc.get("procedure_number") or proc.get("id") or ""
+            )
+            proc_title = str(proc.get("title") or proc.get("name") or "").strip()
+            sink["title_by_registry"][registry] = proc_title
+            w.progress.emit(f"Сбор текста карточки {index}/{len(procedures)}: {registry}")
+            try:
+                snap = client.extract_procedure_card_text(proc, progress=w.progress.emit)
+            except Exception as e:
+                pid = proc.get("id") or proc.get("procedure_id") or ""
+                detail = VIEW_URL.format(pid=pid) if pid else ""
+                rows.append(build_result_row(registry, detail, "", None, str(e)))
+                sink["raw_by_registry"][registry] = f"Ошибка сбора страницы: {e}"
+                continue
+
+            page_text = str(snap.get("page_text") or "")
+            detail_url = str(snap.get("url") or "")
+            doc_primary = str(snap.get("primary_doc_url") or "")
+            doc_list = snap.get("doc_links") or []
+            doc_summary = "; ".join(
+                str((d or {}).get("href") or "")
+                for d in (doc_list if isinstance(doc_list, list) else [])
+                if isinstance(d, dict) and (d.get("href"))
+            )[:4000]
+            downloaded_docs: list[Path] = []
+            documents_text = ""
+            unpacked_dir = ANALYSIS_DIR / "разархивированные_документы" / _safe_folder_name(registry)
+            unpacked_dir.mkdir(parents=True, exist_ok=True)
+            sink["unpacked_docs_by_registry"][registry] = str(unpacked_dir)
+            if not isinstance(doc_list, list) or not doc_list:
+                note = "На странице карточки не найдены ссылки на документы для скачивания."
+                (unpacked_dir / "Документы_не_найдены.txt").write_text(note, encoding="utf-8")
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "",
+                        "message": note,
+                    }
+                )
+                documents_text += f"\n--- Документы ---\n[{note}]\n"
+            else:
+                docs_dir = ANALYSIS_DIR / "_downloaded_docs" / _safe_folder_name(registry)
+                for doc_index, link in enumerate(doc_list, start=1):
+                    if w.is_stop_requested():
+                        return
+                    if not isinstance(link, dict) or not link.get("href"):
+                        continue
+                    try:
+                        w.progress.emit(
+                            f"Скачиваю документ {doc_index}/{len(doc_list)} для анализа: {registry}"
+                        )
+                        downloaded_docs.append(
+                            client.download_document_link(link, docs_dir, index=doc_index)
+                        )
+                    except Exception as e:
+                        err_note = (
+                            f"Документ {doc_index}: {(link or {}).get('text') or (link or {}).get('href')}\n"
+                            f"Не удалось скачать: {e}\n"
+                        )
+                        (unpacked_dir / f"Ошибка_скачивания_{doc_index}.txt").write_text(
+                            err_note,
+                            encoding="utf-8",
+                        )
+                        sink["document_issues"].append(
+                            {
+                                "severity": "critical",
+                                "registry": registry,
+                                "file": str((link or {}).get("text") or (link or {}).get("href") or ""),
+                                "message": f"Не удалось скачать документ: {e}",
+                            }
+                        )
+                        documents_text += (
+                            f"\n--- Документ {doc_index}: {(link or {}).get('text') or (link or {}).get('href')} ---\n"
+                            f"[не удалось скачать: {e}]\n"
+                        )
+                if downloaded_docs:
+                    extracted_text, extracted_folder = prepare_documents_for_analysis(
+                        downloaded_docs,
+                        unpacked_dir,
+                        progress=w.progress.emit,
+                        issues=sink["document_issues"],
+                        registry=registry,
+                    )
+                    documents_text += "\n" + extracted_text
+                    sink["unpacked_docs_by_registry"][registry] = str(extracted_folder)
+                else:
+                    note = "Ссылки на документы были найдены, но скачать документы не удалось."
+                    (unpacked_dir / "Документы_не_скачаны.txt").write_text(note, encoding="utf-8")
+                    sink["document_issues"].append(
+                        {
+                            "severity": "critical",
+                            "registry": registry,
+                            "file": "",
+                            "message": note,
+                        }
+                    )
+
+            w.progress.emit(f"Запрос к LM Studio ({lm_model}) для {registry}…")
+            parsed = None
+            raw_llm = ""
+            err_msg: str | None = None
+            try:
+                user_prompt = build_analysis_user_prompt(
+                    registry, detail_url, doc_summary, page_text, documents_text
+                )
+                raw_llm = call_lm_studio_chat(
+                    lm_base_url, lm_model, system_prompt, user_prompt, timeout_sec=900
+                )
+                sink["raw_by_registry"][registry] = raw_llm
+                parsed = parse_llm_table_json(raw_llm)
+            except Exception as e:
+                first_err = str(e)
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "LM Studio",
+                        "message": f"Первый запрос к модели не выполнен: {first_err}. Пробую укороченный контекст.",
+                    }
+                )
+                try:
+                    w.progress.emit(f"Повторный запрос к LM Studio с укороченным контекстом: {registry}…")
+                    short_prompt = build_analysis_user_prompt(
+                        registry,
+                        detail_url,
+                        doc_summary,
+                        _trim_for_llm(page_text, 60_000),
+                        _trim_for_llm(documents_text, 20_000),
+                    )
+                    raw_llm = call_lm_studio_chat(
+                        lm_base_url,
+                        lm_model,
+                        system_prompt,
+                        short_prompt,
+                        timeout_sec=900,
+                    )
+                    sink["raw_by_registry"][registry] = raw_llm
+                    parsed = parse_llm_table_json(raw_llm)
+                except Exception as retry_error:
+                    err_msg = str(retry_error)
+                    sink["document_issues"].append(
+                        {
+                            "severity": "critical",
+                            "registry": registry,
+                            "file": "LM Studio",
+                            "message": f"Повторный запрос к модели не выполнен: {err_msg}",
+                        }
+                    )
+                    sink["raw_by_registry"][registry] = (
+                        raw_llm
+                        + ("\n---\n" if raw_llm else "")
+                        + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
+                    )
+
+            rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
+
+        sink["rows"] = rows
+        w.session.emit(
+            True,
+            f"Анализ завершён: {len(rows)} процедур. LM Studio: {lm_base_url}, модель {lm_model}.",
         )
 
     return _run

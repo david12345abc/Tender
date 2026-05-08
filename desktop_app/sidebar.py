@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Sequence
 
 from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCalendarWidget,
     QCheckBox,
     QComboBox,
     QDateEdit,
     QDoubleSpinBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -23,13 +27,76 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from etp_client import PROCEDURE_TYPE_LABELS, STATUS_LABELS
+from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_LABELS
 
 from .browsers import BrowserConfig, available_browsers
 from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
+
+
+class StatusMultiSelect(QWidget):
+    """Compact multi-select control that opens the status list above the form."""
+
+    def __init__(self, labels: Sequence[str], parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setMinimumWidth(190)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.button = QToolButton()
+        self.button.setText("Все")
+        self.button.setMinimumHeight(30)
+        self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.button.setArrowType(Qt.DownArrow)
+        self.button.clicked.connect(self._show_popup)
+        layout.addWidget(self.button)
+
+        self.popup = QWidget(self, Qt.Popup | Qt.FramelessWindowHint)
+        popup_layout = QVBoxLayout(self.popup)
+        popup_layout.setContentsMargins(1, 1, 1, 1)
+        popup_layout.setSpacing(0)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setMinimumHeight(220)
+        self.list_widget.setMaximumHeight(320)
+        self.list_widget.setAlternatingRowColors(True)
+        self.list_widget.setStyleSheet(
+            "QListWidget { background: white; border: 1px solid #b9c7dc; }"
+        )
+        for label in labels:
+            item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, label)
+            self.list_widget.addItem(item)
+        self.list_widget.itemChanged.connect(self._update_button_text)
+        popup_layout.addWidget(self.list_widget)
+
+    def _show_popup(self) -> None:
+        self._update_button_text()
+        width = max(self.width(), 260)
+        height = min(320, max(220, self.list_widget.sizeHintForRow(0) * self.list_widget.count() + 8))
+        self.popup.resize(width, height)
+        self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self.popup.show()
+        self.list_widget.setFocus()
+
+    def _update_button_text(self) -> None:
+        selected = [
+            self.list_widget.item(i).text()
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        ]
+        if not selected:
+            self.button.setText("Все")
+        elif len(selected) == 1:
+            self.button.setText(selected[0])
+        else:
+            self.button.setText(f"Выбрано: {len(selected)}")
 
 class Sidebar(QWidget):
     """Подробная форма фильтров, похожая на форму на сайте ЭТП."""
@@ -178,12 +245,34 @@ class Sidebar(QWidget):
         quick_row = QHBoxLayout()
         quick_row.setContentsMargins(0, 0, 0, 0)
         quick_row.setSpacing(8)
-        quick_lbl = QLabel("Быстрый поиск:")
+        quick_lbl = QLabel("Поиск:")
         quick_lbl.setObjectName("SidebarTitle")
-        self.ed_quick_search = self._make_line("Введите текст для поиска по всем полям")
-        self.ed_quick_search.setMinimumWidth(520)
+        self.ed_quick_search = self._make_line("Введите слово или фразу из названия")
+        self.ed_quick_search.setMinimumWidth(420)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
+
+        self.search_mode_group = QButtonGroup(self)
+        self.search_mode_group.setExclusive(True)
+        self.btn_search_by_title = QPushButton("Поиск по названию")
+        self.btn_search_by_title.setObjectName("SearchModeButton")
+        self.btn_search_by_title.setCheckable(True)
+        self.btn_search_by_title.setChecked(True)
+        self.btn_search_by_number = QPushButton("Поиск по номеру")
+        self.btn_search_by_number.setObjectName("SearchModeButton")
+        self.btn_search_by_number.setCheckable(True)
+        self.search_mode_switch = QFrame()
+        self.search_mode_switch.setObjectName("SearchModeSwitch")
+        switch_layout = QHBoxLayout(self.search_mode_switch)
+        switch_layout.setContentsMargins(2, 2, 2, 2)
+        switch_layout.setSpacing(0)
+        for btn in (self.btn_search_by_title, self.btn_search_by_number):
+            btn.setMinimumHeight(30)
+            btn.setMinimumWidth(132)
+            switch_layout.addWidget(btn)
+            self.search_mode_group.addButton(btn)
+        quick_row.addWidget(self.search_mode_switch)
+
         quick_row.addWidget(QLabel("Браузер:"))
         self.cb_browser = QComboBox()
         self.cb_browser.setMinimumWidth(180)
@@ -204,7 +293,7 @@ class Sidebar(QWidget):
         keyword_row.setSpacing(8)
         self.cb_keyword_search = QCheckBox("Поиск по ключевым словам")
         self.cb_keyword_search.setToolTip(
-            "Искать процедуры, где встречается хотя бы одно слово из списка"
+            "Искать процедуры, где в названии встречается хотя бы одно слово из списка"
         )
         keyword_row.addWidget(self.cb_keyword_search)
         self.btn_edit_keywords = QPushButton("Редактировать список")
@@ -221,17 +310,17 @@ class Sidebar(QWidget):
         self.btn_toggle_extra.setChecked(False)
         self.btn_toggle_extra.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.btn_toggle_extra.setArrowType(Qt.RightArrow)
-        body_layout.addWidget(self.btn_toggle_extra)
+        self.btn_toggle_extra.setVisible(False)
 
         self.extra_scroll = QScrollArea()
         self.extra_scroll.setVisible(False)
         self.extra_scroll.setWidgetResizable(True)
         self.extra_scroll.setFrameShape(QScrollArea.NoFrame)
-        self.extra_scroll.setMinimumHeight(260)
-        self.extra_scroll.setMaximumHeight(360)
+        self.extra_scroll.setMinimumHeight(380)
+        self.extra_scroll.setMaximumHeight(560)
 
         self.extra_filters = QWidget()
-        self.extra_filters.setMinimumHeight(520)
+        self.extra_filters.setMinimumHeight(680)
         extra_layout = QVBoxLayout(self.extra_filters)
         extra_layout.setContentsMargins(0, 10, 0, 0)
         extra_layout.setSpacing(12)
@@ -259,11 +348,10 @@ class Sidebar(QWidget):
         self.sb_guarantee_max = self._make_money()
         self.ed_responsible = self._make_line()
         self.cb_trend = self._make_combo(
-            [(label, label) for label in PROCEDURE_TYPE_LABELS]
+            list(PROCEDURE_TYPE_OPTIONS)
         )
-        self.cb_step = self._make_combo()
-        for label in STATUS_LABELS:
-            self.cb_step.addItem(label, label)
+        self.status_selector = StatusMultiSelect(STATUS_LABELS)
+        self.lst_steps = self.status_selector.list_widget
         self.cb_purchase_form = self._make_combo(
             [("Любая", ""), ("Электронная", "электрон"), ("Бумажная", "бумаж")]
         )
@@ -316,7 +404,7 @@ class Sidebar(QWidget):
         )
         self._add_row(grid, 1, 1, "Ответственное лицо:", self.ed_responsible)
         self._add_row(grid, 2, 1, "Тип процедуры:", self.cb_trend)
-        self._add_row(grid, 3, 1, "Статус процедуры:", self.cb_step)
+        self._add_row(grid, 3, 1, "Статус процедуры:", self.status_selector)
         self._add_row(grid, 4, 1, "Форма закупки:", self.cb_purchase_form)
         self._add_row(
             grid,
@@ -380,7 +468,7 @@ class Sidebar(QWidget):
 
         extra_layout.addLayout(grid)
         self.extra_scroll.setWidget(self.extra_filters)
-        body_layout.addWidget(self.extra_scroll)
+        self.extra_scroll.setVisible(False)
 
         self.btn_toggle_extra.toggled.connect(self._set_extra_visible)
 
@@ -404,8 +492,9 @@ class Sidebar(QWidget):
         for w in text_widgets:
             w.returnPressed.connect(self.clientFiltersChanged)
             w.editingFinished.connect(self.clientFiltersChanged)
-        for w in (self.cb_trend, self.cb_step, self.cb_purchase_form):
+        for w in (self.cb_trend, self.cb_purchase_form):
             w.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.lst_steps.itemChanged.connect(lambda *_: self.clientFiltersChanged.emit())
         spin_widgets = (
             self.sb_apc_min,
             self.sb_apc_max,
@@ -432,12 +521,21 @@ class Sidebar(QWidget):
 
         self.btn_search.clicked.connect(self.searchRequested)
         self.btn_reset.clicked.connect(self.resetRequested)
+        self.btn_search_by_title.toggled.connect(self._update_search_mode)
+        self.btn_search_by_number.toggled.connect(self._update_search_mode)
         self.cb_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         self.btn_edit_keywords.clicked.connect(self.editKeywordsRequested)
 
+    def _update_search_mode(self, *_: object) -> None:
+        if self.btn_search_by_number.isChecked():
+            self.ed_quick_search.setPlaceholderText("Введите номер закупки, например РН60500552")
+        else:
+            self.ed_quick_search.setPlaceholderText("Введите слово или фразу из названия")
+        self.clientFiltersChanged.emit()
+
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
-        self.setMinimumHeight(430 if visible else 88)
+        self.setMinimumHeight(560 if visible else 88)
         self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
         self.updateGeometry()
         parent = self.parentWidget()
@@ -468,16 +566,21 @@ class Sidebar(QWidget):
     def client_filters(self) -> ClientFilters:
         keywords = tuple(load_keywords()) if self.cb_keyword_search.isChecked() else ()
         if not self.extra_scroll.isVisible():
+            quick_text = self.ed_quick_search.text().strip()
             return ClientFilters(
-                quick_search=self.ed_quick_search.text().strip(),
+                quick_search=quick_text if self.btn_search_by_title.isChecked() else "",
                 keyword_search_enabled=self.cb_keyword_search.isChecked(),
                 keywords=keywords,
+                registry_contains=quick_text if self.btn_search_by_number.isChecked() else "",
             )
+        quick_text = self.ed_quick_search.text().strip()
         return ClientFilters(
-            quick_search=self.ed_quick_search.text().strip(),
+            quick_search=quick_text if self.btn_search_by_title.isChecked() else "",
             keyword_search_enabled=self.cb_keyword_search.isChecked(),
             keywords=keywords,
-            registry_contains=self.ed_registry.text().strip(),
+            registry_contains=(
+                quick_text if self.btn_search_by_number.isChecked() else self.ed_registry.text().strip()
+            ),
             unique_number_contains=self.ed_unique_number.text().strip(),
             organizer_contains=self.ed_organizer.text().strip(),
             customer_contains=self.ed_customer.text().strip(),
@@ -490,7 +593,11 @@ class Sidebar(QWidget):
             guarantee_max=(self.sb_guarantee_max.value() or None),
             responsible_contains=self.ed_responsible.text().strip(),
             trend_pur=self.cb_trend.currentData() or "",
-            step_id=self.cb_step.currentData() or "",
+            step_ids=tuple(
+                str(self.lst_steps.item(i).data(Qt.UserRole) or "")
+                for i in range(self.lst_steps.count())
+                if self.lst_steps.item(i).checkState() == Qt.Checked
+            ),
             purchase_form=self.cb_purchase_form.currentData() or "",
             applics_min=(self.sb_apc_min.value() or None),
             applics_max=(self.sb_apc_max.value() or None),
@@ -529,6 +636,7 @@ class Sidebar(QWidget):
 
     def reset_client_filters(self) -> None:
         self.ed_quick_search.clear()
+        self.btn_search_by_title.setChecked(True)
         self.cb_keyword_search.setChecked(False)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
@@ -544,7 +652,8 @@ class Sidebar(QWidget):
         self.ed_position_name.clear()
         self.ed_national_regime.clear()
         self.cb_trend.setCurrentIndex(0)
-        self.cb_step.setCurrentIndex(0)
+        for i in range(self.lst_steps.count()):
+            self.lst_steps.item(i).setCheckState(Qt.Unchecked)
         self.cb_purchase_form.setCurrentIndex(0)
         self.sb_apc_min.setValue(0)
         self.sb_apc_max.setValue(0)

@@ -33,7 +33,7 @@ class ClientFilters:
     guarantee_max: Optional[float] = None
     responsible_contains: str = ""
     trend_pur: str = ""
-    step_id: str = ""
+    step_ids: tuple[str, ...] = ()
     purchase_form: str = ""
     applics_min: Optional[int] = None
     applics_max: Optional[int] = None

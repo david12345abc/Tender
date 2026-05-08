@@ -42,6 +42,7 @@ cache/
 output/
 exploration_results/
 exploration_results_guest/
+exploration_results_roseltorg/
 
 # Temporary/debug files
 debug_*.py

@@ -8,7 +8,7 @@ $chromeArgs = @(
     '--no-first-run',
     '--no-default-browser-check',
     '--start-maximized',
-    'https://etpgaz.gazprombank.ru/#com/procedure/index'
+    'https://rn.tektorg.ru/#com/procedure/index/type/market_survey'
 )
 Write-Output "Запускаю: $chrome"
 Write-Output "UDD: $udd"

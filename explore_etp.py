@@ -749,7 +749,7 @@ def _save_state(driver, results_dir: Path, suffix: str) -> dict[str, Any]:
 RPC_PROBE_CASES: list[dict[str, Any]] = [
     {"action": "Api", "method": "publicProcedures", "data": None},
     {"action": "Api", "method": "publicProcedures", "data": []},
-    {"action": "Api", "method": "publicProcedures", "data": [{"page": 1, "start": 0, "limit": 25}]},
+    {"action": "Api", "method": "publicProcedures", "data": [{"page": 1, "start": 0, "limit": 500}]},
     {"action": "Api", "method": "procedures", "data": None},
     {"action": "Api", "method": "procedures", "data": [{"page": 1, "start": 0, "limit": 5}]},
     {"action": "Api", "method": "privateProcedures", "data": None},
@@ -1038,7 +1038,7 @@ def setup_driver(
     if fresh_profile:
         import tempfile
 
-        user_data_dir = Path(tempfile.gettempdir()) / "chrome_etp_explore_profile"
+        user_data_dir = Path(tempfile.gettempdir()) / f"chrome_etp_explore_profile_{int(time.time())}"
         user_data_dir.mkdir(exist_ok=True)
         profile_name = "Default"
         log(f"Используется временный профиль: {user_data_dir}", level="INFO")
