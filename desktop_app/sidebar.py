@@ -46,31 +46,39 @@ class StatusMultiSelect(QWidget):
     ) -> None:
         super().__init__(parent)
         self.setMinimumWidth(190)
+        self.setObjectName("StatusMultiSelect")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        layout.setSpacing(6)
 
         self.button = QToolButton()
+        self.button.setObjectName("StatusMultiSelectButton")
         self.button.setText("Все")
-        self.button.setMinimumHeight(30)
+        self.button.setMinimumHeight(36)
         self.button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.button.setArrowType(Qt.DownArrow)
         self.button.clicked.connect(self._show_popup)
         layout.addWidget(self.button)
 
+        self.chips = QLabel("")
+        self.chips.setObjectName("StatusChips")
+        self.chips.setWordWrap(True)
+        self.chips.setVisible(False)
+        layout.addWidget(self.chips)
+
         self.popup = QWidget(self, Qt.Popup | Qt.FramelessWindowHint)
+        self.popup.setObjectName("StatusPopup")
         popup_layout = QVBoxLayout(self.popup)
-        popup_layout.setContentsMargins(1, 1, 1, 1)
-        popup_layout.setSpacing(0)
+        popup_layout.setContentsMargins(8, 8, 8, 8)
+        popup_layout.setSpacing(6)
 
         self.list_widget = QListWidget()
-        self.list_widget.setMinimumHeight(220)
-        self.list_widget.setMaximumHeight(320)
-        self.list_widget.setAlternatingRowColors(True)
-        self.list_widget.setStyleSheet(
-            "QListWidget { background: white; border: 1px solid #b9c7dc; }"
-        )
+        self.list_widget.setObjectName("StatusPopupList")
+        self.list_widget.setMinimumHeight(180)
+        self.list_widget.setMaximumHeight(280)
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setAlternatingRowColors(False)
         self.set_options(options)
         self.list_widget.itemChanged.connect(self._update_button_text)
         popup_layout.addWidget(self.list_widget)
@@ -99,8 +107,9 @@ class StatusMultiSelect(QWidget):
 
     def _show_popup(self) -> None:
         self._update_button_text()
-        width = max(self.width(), 260)
-        height = min(320, max(220, self.list_widget.sizeHintForRow(0) * self.list_widget.count() + 8))
+        width = max(self.width(), 300)
+        row_h = max(28, self.list_widget.sizeHintForRow(0))
+        height = min(300, max(210, row_h * min(self.list_widget.count(), 8) + 24))
         self.popup.resize(width, height)
         self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
         self.popup.show()
@@ -114,10 +123,20 @@ class StatusMultiSelect(QWidget):
         ]
         if not selected:
             self.button.setText("Все")
+            self.chips.setText("")
+            self.chips.setVisible(False)
         elif len(selected) == 1:
             self.button.setText(selected[0])
+            self.chips.setText(f"[{selected[0]} ×]")
+            self.chips.setVisible(True)
         else:
             self.button.setText(f"Выбрано: {len(selected)}")
+            shown = selected[:3]
+            text = "  ".join(f"[{s} ×]" for s in shown)
+            if len(selected) > len(shown):
+                text += f"  +{len(selected) - len(shown)}"
+            self.chips.setText(text)
+            self.chips.setVisible(True)
 
 class Sidebar(QWidget):
     """Подробная форма фильтров, похожая на форму на сайте ЭТП."""
@@ -141,8 +160,8 @@ class Sidebar(QWidget):
     def _make_line(self, placeholder: str = "") -> QLineEdit:
         edit = QLineEdit()
         edit.setPlaceholderText(placeholder)
-        edit.setMinimumWidth(190)
-        edit.setMinimumHeight(30)
+        edit.setMinimumWidth(220)
+        edit.setMinimumHeight(36)
         return edit
 
     def _make_money(self) -> QDoubleSpinBox:
@@ -151,22 +170,23 @@ class Sidebar(QWidget):
         spin.setRange(0, 1e13)
         spin.setGroupSeparatorShown(True)
         spin.setSpecialValueText("—")
-        spin.setMinimumWidth(115)
-        spin.setMinimumHeight(30)
+        spin.setMinimumWidth(96)
+        spin.setMinimumHeight(36)
         return spin
 
     def _make_int(self) -> QSpinBox:
         spin = QSpinBox()
         spin.setRange(0, 1_000_000)
         spin.setSpecialValueText("—")
-        spin.setMinimumWidth(90)
-        spin.setMinimumHeight(30)
+        spin.setMinimumWidth(82)
+        spin.setMinimumHeight(36)
         return spin
 
     def _make_combo(self, items: Optional[list[tuple[str, str]]] = None) -> QComboBox:
         combo = QComboBox()
-        combo.setMinimumWidth(190)
-        combo.setMinimumHeight(30)
+        combo.setMinimumWidth(220)
+        combo.setMinimumHeight(36)
+        combo.setMaxVisibleItems(8)
         combo.addItem("Все", "")
         for label, value in items or []:
             combo.addItem(label, value)
@@ -190,38 +210,40 @@ class Sidebar(QWidget):
         calendar.setStyleSheet(
             """
             QCalendarWidget {
-                background-color: #ffffff;
-                color: #1a1d22;
+                background-color: #0b1020;
+                color: #dbeafe;
             }
             QCalendarWidget QWidget {
-                alternate-background-color: #ffffff;
+                alternate-background-color: #111827;
             }
             QCalendarWidget QToolButton {
-                color: #1a1d22;
-                background-color: #eef4ff;
-                border: 1px solid #bfd0ee;
-                border-radius: 4px;
+                color: #dbeafe;
+                background-color: #111827;
+                border: 1px solid #24324f;
+                border-radius: 6px;
                 padding: 4px 8px;
                 min-width: 34px;
                 min-height: 24px;
             }
             QCalendarWidget QMenu {
-                background-color: #ffffff;
-                color: #1a1d22;
+                background-color: #0b1020;
+                color: #dbeafe;
+                border: 1px solid #24324f;
             }
             QCalendarWidget QSpinBox {
                 min-width: 72px;
                 min-height: 24px;
-                color: #1a1d22;
-                background-color: #ffffff;
+                color: #dbeafe;
+                background-color: #111827;
+                border: 1px solid #24324f;
             }
             QCalendarWidget QAbstractItemView {
                 min-width: 330px;
                 min-height: 210px;
                 font-size: 12px;
-                color: #1a1d22;
-                background-color: #ffffff;
-                selection-background-color: #3572e0;
+                color: #dbeafe;
+                background-color: #0b1020;
+                selection-background-color: #1d4ed8;
                 selection-color: #ffffff;
                 outline: 0;
             }
@@ -234,21 +256,21 @@ class Sidebar(QWidget):
         edit.setCalendarPopup(True)
         edit.setDisplayFormat("dd.MM.yyyy")
         edit.setDate(date or QDate.currentDate())
-        edit.setMinimumWidth(112)
-        edit.setMinimumHeight(30)
+        edit.setMinimumWidth(100)
+        edit.setMinimumHeight(36)
         edit.setCalendarWidget(self._make_calendar())
         return edit
 
     def _range_row(self, left: QWidget, right: QWidget, left_text: str = "с", right_text: str = "по") -> QWidget:
         row = QWidget()
         lay = QHBoxLayout(row)
-        lay.setContentsMargins(0, 2, 0, 2)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         lay.addWidget(QLabel(left_text))
         lay.addWidget(left)
         lay.addWidget(QLabel(right_text))
         lay.addWidget(right)
-        row.setMinimumHeight(34)
+        row.setMinimumHeight(36)
         return row
 
     def _add_row(
@@ -262,13 +284,13 @@ class Sidebar(QWidget):
     ) -> None:
         lbl = QLabel(label)
         lbl.setObjectName("FilterLabel")
-        lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        lbl.setMinimumHeight(30)
-        widget.setMinimumHeight(max(widget.minimumHeight(), 30))
+        lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        lbl.setMinimumHeight(18)
+        widget.setMinimumHeight(max(widget.minimumHeight(), 36))
         actual_row = getattr(self, "_next_filter_row", 0)
         self._next_filter_row = actual_row + 1
-        grid.addWidget(lbl, actual_row, 0)
-        grid.addWidget(widget, actual_row, 1)
+        grid.addWidget(lbl, actual_row * 2, 0, 1, 2)
+        grid.addWidget(widget, actual_row * 2 + 1, 0, 1, 2)
         if key:
             self._filter_rows[key] = (lbl, widget, actual_row, 0)
 
@@ -362,11 +384,12 @@ class Sidebar(QWidget):
         grid = QGridLayout()
         self._filter_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(10)
+        grid.setHorizontalSpacing(0)
+        grid.setVerticalSpacing(6)
+        grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
-        for r in range(12):
-            grid.setRowMinimumHeight(r, 36)
+        for r in range(40):
+            grid.setRowMinimumHeight(r, 0)
 
         self.ed_registry = self._make_line()
         self.ed_unique_number = self._make_line()
@@ -415,6 +438,7 @@ class Sidebar(QWidget):
         self.ed_tag_id = QSpinBox()
         self.ed_tag_id.setRange(0, 1_000_000)
         self.ed_tag_id.setSpecialValueText("— любой —")
+        self.ed_tag_id.setMinimumHeight(36)
 
         self.sb_apc_min = self._make_int()
         self.sb_apc_max = self._make_int()
@@ -637,8 +661,8 @@ class Sidebar(QWidget):
         self._filter_grid.removeWidget(label)
         self._filter_grid.removeWidget(widget)
         actual_row = row * 2 + col
-        self._filter_grid.addWidget(label, actual_row, 0)
-        self._filter_grid.addWidget(widget, actual_row, 1)
+        self._filter_grid.addWidget(label, actual_row * 2, 0, 1, 2)
+        self._filter_grid.addWidget(widget, actual_row * 2 + 1, 0, 1, 2)
         label.setVisible(visible)
         widget.setVisible(visible)
 
@@ -646,8 +670,13 @@ class Sidebar(QWidget):
         stored = self._filter_rows.get(key)
         if stored is None:
             return
-        _, _, row, col = stored
-        self._place_row(key, row, col, True)
+        label, widget, row, _ = stored
+        self._filter_grid.removeWidget(label)
+        self._filter_grid.removeWidget(widget)
+        self._filter_grid.addWidget(label, row * 2, 0, 1, 2)
+        self._filter_grid.addWidget(widget, row * 2 + 1, 0, 1, 2)
+        label.setVisible(True)
+        widget.setVisible(True)
 
     def _apply_platform_filter_visibility(self) -> None:
         if self._platform_key == "roseltorg":
@@ -661,8 +690,8 @@ class Sidebar(QWidget):
             self._set_row_label("results", "Дата выбора победителя:")
             for row in range(12):
                 self._filter_grid.setRowMinimumHeight(row, 0)
-            for row in range(4):
-                self._filter_grid.setRowMinimumHeight(row, 36)
+            for row in range(16):
+                self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._set_row_visible(key, False)
             for key, row, col in (
@@ -676,9 +705,9 @@ class Sidebar(QWidget):
                 ("price", 3, 1),
             ):
                 self._place_row(key, row, col, key in visible_keys)
-            self.extra_filters.setMinimumHeight(190)
-            self.extra_scroll.setMinimumHeight(230)
-            self.extra_scroll.setMaximumHeight(320)
+            self.extra_filters.setMinimumHeight(520)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
         else:
             visible_keys = set(self._filter_rows)
             self._set_row_label("trend", "Тип процедуры:")
@@ -688,13 +717,13 @@ class Sidebar(QWidget):
             self._set_row_label("published", "Дата публикации:")
             self._set_row_label("end", "Окончание приема заявок:")
             self._set_row_label("results", "Дата подведения итогов:")
-            for row in range(12):
-                self._filter_grid.setRowMinimumHeight(row, 36)
+            for row in range(40):
+                self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._restore_row_position(key)
-            self.extra_filters.setMinimumHeight(680)
-            self.extra_scroll.setMinimumHeight(380)
-            self.extra_scroll.setMaximumHeight(560)
+            self.extra_filters.setMinimumHeight(1040)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
         for key in self._filter_rows:
             self._set_row_visible(key, key in visible_keys)
         if self.extra_scroll.isVisible():
