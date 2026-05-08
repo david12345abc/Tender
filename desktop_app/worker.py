@@ -441,6 +441,7 @@ def make_tektorg_row_documents_task(
     client: EtpClient,
     proc: dict,
     output_root: Path = TENDER_DOCUMENTS_ROOT,
+    sink: Optional[dict] = None,
 ) -> Callable[[Worker], None]:
     """Задача: создать папку закупки и скачать документы ТЭК-Торг по клику."""
 
@@ -459,6 +460,9 @@ def make_tektorg_row_documents_task(
         folder = output_root / _safe_folder_name(registry, "procedure")
         try:
             folder.mkdir(parents=True, exist_ok=True)
+            if sink is not None:
+                sink["folder"] = str(folder)
+                sink["registry"] = registry
             removed_count = 0
             for child in folder.iterdir():
                 if child.is_dir():

@@ -55,6 +55,7 @@ from .constants import (
     TENDER_DOCUMENTS_ROOT,
     VIEW_URL,
 )
+from .document_sorter import sort_filled_documents
 from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
 from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
@@ -93,6 +94,7 @@ class MainWindow(QMainWindow):
         self._cache_save_timer.setSingleShot(True)
         self._cache_save_timer.timeout.connect(self._save_cache_now)
         self._analysis_sink: dict[str, Any] = {}
+        self._row_download_sink: dict[str, Any] = {}
 
         self._build_ui()
         self._set_platform_buttons()
@@ -1321,7 +1323,8 @@ class MainWindow(QMainWindow):
         if self.row_download_runner.is_running():
             self.status_msg.setText("Документы уже скачиваются в фоне. Дождитесь завершения.")
             return
-        fn = make_tektorg_row_documents_task(self.client, proc)
+        self._row_download_sink.clear()
+        fn = make_tektorg_row_documents_task(self.client, proc, sink=self._row_download_sink)
         try:
             self.row_download_runner.start(
                 fn,
@@ -1351,7 +1354,49 @@ class MainWindow(QMainWindow):
         btn_done = box.addButton("Готово", QMessageBox.AcceptRole)
         box.exec()
         if box.clickedButton() is btn_done:
-            QMessageBox.information(self, "Заглушка", "hello world")
+            self._sort_filled_documents_after_done()
+
+    def _sort_filled_documents_after_done(self) -> None:
+        folder_text = str(self._row_download_sink.get("folder") or "").strip()
+        if not folder_text:
+            QMessageBox.warning(
+                self,
+                "Папка закупки не найдена",
+                "Не удалось определить папку с загруженной документацией.",
+            )
+            return
+        folder = Path(folder_text)
+        try:
+            result = sort_filled_documents(folder)
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Ошибка распределения файлов",
+                f"Не удалось распределить файлы по папкам:\n{e}",
+            )
+            return
+
+        commercial_count = len(result.get("commercial") or [])
+        technical_count = len(result.get("technical") or [])
+        errors = result.get("errors") or []
+        self.status_msg.setText(
+            f"Файлы распределены. Коммерческие: {commercial_count}, технические: {technical_count}, ошибок: {len(errors)}."
+        )
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Распределение завершено с ошибками",
+                "Часть файлов не удалось переместить:\n\n" + "\n".join(str(e) for e in errors[:10]),
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Файлы распределены",
+            f"Файлы успешно распределены по папкам.\n\n"
+            f"Коммерческие: {commercial_count}\n"
+            f"Технические: {technical_count}",
+        )
+        self._bring_browser_to_front()
 
     def _bring_window_to_front(self) -> None:
         if self.isMinimized():
@@ -1367,6 +1412,61 @@ class MainWindow(QMainWindow):
     def _clear_temporary_topmost(self) -> None:
         self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         self.show()
+
+    def _bring_browser_to_front(self) -> None:
+        try:
+            driver = self.client.driver
+            if driver is None:
+                return
+            title = str(driver.title or "").strip()
+            browser_hint = str(getattr(self.client.browser, "label", "") or "").casefold()
+        except Exception:
+            return
+
+        try:
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
+            self.show()
+
+            import win32con
+            import win32gui
+
+            candidates: list[int] = []
+
+            def enum_handler(hwnd, _) -> None:
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                window_title = win32gui.GetWindowText(hwnd)
+                if not window_title:
+                    return
+                low = window_title.casefold()
+                title_match = bool(title and title.casefold() in low)
+                browser_match = bool(
+                    ("chrome" in low or "edge" in low or browser_hint and browser_hint in low)
+                    and "cursor" not in low
+                )
+                if title_match or browser_match:
+                    candidates.append(hwnd)
+
+            win32gui.EnumWindows(enum_handler, None)
+            if not candidates:
+                return
+
+            hwnd = candidates[0]
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+            win32gui.SetForegroundWindow(hwnd)
+        except Exception:
+            try:
+                self.showMinimized()
+            except Exception:
+                pass
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)
