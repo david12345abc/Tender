@@ -247,26 +247,70 @@ const callback = arguments[arguments.length - 1];
   window.scrollTo(0, 0);
   await wait(150);
 
-  function pickContainer() {
+  // Часть блоков карточки подгружается только на активной вкладке ExtJS — по очереди кликаем вкладки.
+  try {
+    const tabInners = Array.from(
+      document.querySelectorAll(".x-tab-inner, .x-tab-inner-default, .x-tab-inner-el")
+    );
+    const seenLabels = new Set();
+    for (const el of tabInners) {
+      const label = String(el.innerText || el.textContent || "").trim().slice(0, 160);
+      if (!label || seenLabels.has(label)) continue;
+      seenLabels.add(label);
+      try {
+        el.click();
+        await wait(320);
+      } catch (e) {}
+    }
+  } catch (e) {}
+
+  await wait(450);
+
+  const scrollMax2 = Math.max(
+    document.body ? document.body.scrollHeight : 0,
+    document.documentElement ? document.documentElement.scrollHeight : 0,
+    scrollMax,
+    1500
+  );
+  for (let y = 0; y <= scrollMax2; y += 450) {
+    window.scrollTo(0, y);
+    await wait(90);
+  }
+  window.scrollTo(0, scrollMax2);
+  await wait(220);
+  window.scrollTo(0, 0);
+  await wait(150);
+
+  function bestPageText() {
+    const chunks = [];
+    const pushEl = (el) => {
+      if (!el) return;
+      const t = String(el.innerText || el.textContent || "").trim();
+      if (t.length > 400) chunks.push(t);
+    };
+    pushEl(document.body);
     const sels = [
       ".x-region-center",
       ".x-border-region-center",
       ".x-panel-body-default",
+      ".x-panel-body",
       "#procedureview",
       "#procedure-view",
       "[id*=procedure][id*=view]",
+      ".x-viewport-body",
+      "[role='main']",
     ];
     for (const sel of sels) {
       try {
-        const el = document.querySelector(sel);
-        const txt = el && String(el.innerText || el.textContent || "").trim();
-        if (txt && txt.length > 500) return el;
+        document.querySelectorAll(sel).forEach((el) => pushEl(el));
       } catch (e) {}
     }
-    return document.body;
+    chunks.sort((a, b) => b.length - a.length);
+    const body = String(document.body && document.body.innerText || "").trim();
+    const richest = chunks.length ? chunks[0] : "";
+    return body.length >= richest.length ? body : richest;
   }
-  const root = pickContainer();
-  const pageText = String(root.innerText || root.textContent || "").trim();
+  const pageText = bestPageText();
 
   const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const docLinks = [];
@@ -739,7 +783,7 @@ class EtpClient:
         self,
         proc: dict[str, Any],
         progress: Optional[Callable[[str], None]] = None,
-        max_page_chars: int = 120_000,
+        max_page_chars: int = 280_000,
     ) -> dict[str, Any]:
         """Открывает карточку процедуры и собирает текст страницы + ссылки на файлы."""
         assert self.driver is not None, "Сначала вызовите connect()"

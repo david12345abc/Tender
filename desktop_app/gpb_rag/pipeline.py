@@ -38,6 +38,7 @@ def run_rag_table_analysis(
     *,
     registry: str,
     page_text: str,
+    card_url: str = "",
     unpacked_dir: Path,
     lm_base_url: str,
     lm_model: str,
@@ -48,7 +49,7 @@ def run_rag_table_analysis(
 ) -> tuple[dict[str, str], str]:
     """Строит индекс по карточке и файлам в unpacked_dir, затем извлекает поля таблицы."""
     sources: list[tuple] = []
-    card_meta = ingest_card_page_text(page_text, registry)
+    card_meta = ingest_card_page_text(page_text, registry, card_url)
     sources.append(card_meta)
 
     dir_items, notes = ingest_directory(unpacked_dir)

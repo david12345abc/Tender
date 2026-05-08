@@ -597,6 +597,14 @@ def make_analyze_procedure_task(
             unpacked_dir = ANALYSIS_DIR / "разархивированные_документы" / _safe_folder_name(registry)
             unpacked_dir.mkdir(parents=True, exist_ok=True)
             sink["unpacked_docs_by_registry"][registry] = str(unpacked_dir)
+            try:
+                snapshot = unpacked_dir / "_карточка_страницы_полный_текст.txt"
+                snapshot.write_text(
+                    f"URL карточки: {detail_url}\nРеестровый номер: {registry}\n\n{page_text}",
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
             if not isinstance(doc_list, list) or not doc_list:
                 note = "На странице карточки не найдены ссылки на документы для скачивания."
                 (unpacked_dir / "Документы_не_найдены.txt").write_text(note, encoding="utf-8")
@@ -679,6 +687,7 @@ def make_analyze_procedure_task(
                     parsed, raw_llm = run_rag_table_analysis(
                         registry=registry,
                         page_text=page_text,
+                        card_url=detail_url,
                         unpacked_dir=unpacked_dir,
                         lm_base_url=lm_base_url,
                         lm_model=lm_model,

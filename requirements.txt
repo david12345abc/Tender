@@ -37,3 +37,11 @@ sentence-transformers>=3.0
 faiss-cpu>=1.8
 pymupdf>=1.24
 numpy>=1.26
+
+# Сборка exe (Windows): pip install pyinstaller && python -m PyInstaller --clean --noconfirm ETP_GPB_Search.spec
+# Готовая программа — каталог dist/ETP_GPB_Search/ целиком (ETP_GPB_Search.exe + _internal и др.).
+#
+# Запуск с сетевого диска \\server\share часто даёт «Failed to load python313.dll / LoadLibrary»:
+#   — скопируйте всю папку на локальный диск (C:\...) или используйте один файл:
+#     python -m PyInstaller --clean --noconfirm ETP_GPB_Search_onefile.spec  → dist\ETP_GPB_Search.exe
+#   — на целевом ПК установите «Microsoft Visual C++ Redistributable 2015–2022 (x64)».

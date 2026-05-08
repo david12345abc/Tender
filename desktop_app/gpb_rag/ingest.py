@@ -113,7 +113,7 @@ def iter_analysis_files(root: Path) -> list[Path]:
         if not p.is_file():
             continue
         name = p.name.lower()
-        if name.startswith("~$"):
+        if name.startswith("~$") or name.startswith("_"):
             continue
         suf = p.suffix.lower()
         if suf in _SKIP_SUFFIXES:
@@ -157,7 +157,21 @@ def ingest_directory(root: Path) -> tuple[list[tuple[FileMetadata, list[tuple[in
     return items, notes
 
 
-def ingest_card_page_text(page_text: str, registry: str) -> tuple[FileMetadata, list[tuple[int | None, str]]]:
-    clean = normalize_whitespace(strip_repeated_headers_footers(page_text))
+def ingest_card_page_text(
+    page_text: str, registry: str, card_url: str = ""
+) -> tuple[FileMetadata, list[tuple[int | None, str]]]:
+    header_lines = [
+        "=== Текст страницы карточки процедуры на ЭТП ГПБ "
+        "(снят из браузера: ожидание загрузки, прокрутка, обход вкладок) ===",
+        f"Реестровый номер (из таблицы поиска): {registry}",
+    ]
+    url = (card_url or "").strip()
+    if url:
+        header_lines.append(f"URL карточки: {url}")
+    header_lines.append(
+        "Этот блок дополняется текстами из файлов документации в папке разархивированных документов."
+    )
+    combined = "\n".join(header_lines) + "\n\n" + (page_text or "")
+    clean = normalize_whitespace(strip_repeated_headers_footers(combined))
     meta = FileMetadata(file_name=f"карточка_этп_{registry}.txt", file_type="card_html", pages=None)
     return meta, [(None, clean)]
