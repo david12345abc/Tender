@@ -8,6 +8,7 @@ from typing import Any, Callable, Optional
 
 from desktop_app.commercial_extractor import CommercialTerms, extract_commercial_terms
 from desktop_app.params import ClientFilters
+from desktop_app.supplier_classifier import SupplierCharacteristic, classify_supplier_characteristic
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
 
@@ -387,6 +388,18 @@ class TektorgRnClient(EtpClient):
                 break
         self._remove_duplicate_uploaded_files(progress=progress)
         commercial_terms: CommercialTerms | None = None
+        supplier_characteristic: SupplierCharacteristic | None = None
+        if not errors:
+            try:
+                supplier_characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
+                if supplier_characteristic.label:
+                    if progress:
+                        progress(f"Выбираю характеристику поставщика: {supplier_characteristic.label}")
+                    self._select_supplier_characteristic(supplier_characteristic.label)
+                else:
+                    errors.append("Характеристика поставщика: не удалось определить подходящий пункт.")
+            except Exception as e:
+                errors.append(f"Характеристика поставщика: {e}")
         if not errors:
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
@@ -407,6 +420,7 @@ class TektorgRnClient(EtpClient):
             "uploaded": uploaded,
             "errors": errors,
             "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
+            "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
         }
 
     def _switch_to_application_tab(
@@ -829,6 +843,234 @@ const callback = arguments[arguments.length - 1];
         if progress:
             progress(f"Анализирую коммерческие документы: {commercial_dir}")
         return extract_commercial_terms(commercial_dir, progress=progress)
+
+    def _classify_supplier_characteristic(
+        self,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> SupplierCharacteristic:
+        return classify_supplier_characteristic(technical_dir, progress=progress)
+
+    def _select_supplier_characteristic(self, label: str) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+const targetLabel = String(arguments[0] || "");
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const norm = (value) => String(value || "")
+    .toLowerCase()
+    .replace(/mtr|mtp/g, "мтр")
+    .replace(/\s+/g, " ")
+    .trim();
+  const target = norm(targetLabel);
+  const targetCode = target.startsWith("06") ? "06" : "01";
+  const targetText = targetCode === "06" ? "исполнитель услуг" : "производитель";
+  const eachCmp = (fn) => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+    const all = Ext.ComponentMgr.all;
+    if (typeof all.each === "function") {
+      all.each(fn);
+      return;
+    }
+    const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+    for (const cmp of items) {
+      if (cmp && typeof cmp === "object") fn(cmp);
+    }
+  };
+  const labelOf = (cmp) => norm([
+    cmp.fieldLabel,
+    cmp.boxLabel,
+    cmp.name,
+    cmp.id,
+    cmp.el && cmp.el.dom && (cmp.el.dom.innerText || cmp.el.dom.textContent || cmp.el.dom.value),
+  ].filter(Boolean).join(" "));
+  const findCombo = () => {
+    let found = null;
+    eachCmp((cmp) => {
+      if (found || cmp.hidden || cmp.disabled) return;
+      const label = labelOf(cmp);
+      if (/характеристика поставщика/i.test(label) || /supplier/i.test(label)) found = cmp;
+    });
+    if (found) return found;
+    const nodes = Array.from(document.querySelectorAll("label, td, div, span"));
+    const node = nodes.find((el) => /характеристика\s+поставщика/i.test(norm(el.innerText || el.textContent || "")));
+    if (!node) return null;
+    const input = findInputNearNode(node);
+    if (!input) return null;
+    eachCmp((cmp) => {
+      if (found) return;
+      const dom = cmp.el && cmp.el.dom;
+      const inputEl = cmp.inputEl && cmp.inputEl.dom;
+      if ((inputEl && inputEl === input) || (dom && dom.contains(input))) found = cmp;
+    });
+    return found;
+  };
+  const findInputNearNode = (node) => {
+    const containers = [
+      node.closest("tr"),
+      node.parentElement,
+      node.parentElement && node.parentElement.parentElement,
+      node.parentElement && node.parentElement.parentElement && node.parentElement.parentElement.parentElement,
+    ].filter(Boolean);
+    for (const container of containers) {
+      const input = container.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled])");
+      if (input) return input;
+    }
+    const labelRect = node.getBoundingClientRect();
+    const candidates = Array.from(document.querySelectorAll("input:not([type='hidden']):not([disabled])"))
+      .filter((input) => visible(input))
+      .map((input) => {
+        const rect = input.getBoundingClientRect();
+        const sameLine = Math.abs((rect.top + rect.height / 2) - (labelRect.top + labelRect.height / 2));
+        const toRight = rect.left >= labelRect.left;
+        return { input, score: sameLine + (toRight ? 0 : 1000) + Math.max(0, labelRect.right - rect.left) };
+      })
+      .sort((a, b) => a.score - b.score);
+    return candidates.length ? candidates[0].input : null;
+  };
+  const recordText = (record, combo) => {
+    try {
+      const fields = ["full_name", combo.displayField, "name", "title", "text", "value", "label"].filter(Boolean);
+      for (const field of fields) {
+        const value = record.get ? record.get(field) : record.data && record.data[field];
+        if (value) return String(value);
+      }
+      return JSON.stringify(record.data || {});
+    } catch (e) {
+      return "";
+    }
+  };
+  const recordValue = (record, combo) => {
+    const fields = [combo.valueField, "id", "value", "code"].filter(Boolean);
+    for (const field of fields) {
+      const value = record.get ? record.get(field) : record.data && record.data[field];
+      if (value !== undefined && value !== null && value !== "") return value;
+    }
+    return recordText(record, combo);
+  };
+  const findRecord = (combo) => {
+    if (!combo || !combo.store) return null;
+    let found = null;
+    try {
+      combo.store.each((record) => {
+        const data = record.data || {};
+        const code = String(record.get ? record.get("code") || "" : data.code || "");
+        const fullName = norm(record.get ? record.get("full_name") || "" : data.full_name || "");
+        const name = norm(record.get ? record.get("name") || "" : data.name || "");
+        const text = norm(recordText(record, combo));
+        if (found) return;
+        if (
+          code === targetCode
+          || fullName.startsWith(targetCode)
+          || text.startsWith(targetCode)
+          || name.includes(targetText)
+          || text.includes(targetText)
+        ) found = record;
+      });
+    } catch (e) {}
+    return found;
+  };
+  const setComboRecord = (combo, record) => {
+    if (!combo || !record) return false;
+    const value = recordValue(record, combo);
+    const text = recordText(record, combo);
+    const oldValue = combo.getValue ? combo.getValue() : undefined;
+    if (combo.setValue) combo.setValue(value);
+    if (combo.setRawValue) combo.setRawValue(text);
+    if (combo.validate) combo.validate();
+    if (combo.clearInvalid) combo.clearInvalid();
+    if (combo.fireEvent) {
+      combo.fireEvent("select", combo, record, 0);
+      combo.fireEvent("change", combo, combo.getValue ? combo.getValue() : value, oldValue);
+      combo.fireEvent("blur", combo);
+    }
+    const input = combo.inputEl && combo.inputEl.dom || combo.el && combo.el.dom && combo.el.dom.querySelector("input");
+    if (input) {
+      input.value = text;
+      input.setAttribute("value", text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+    const raw = norm(combo.getRawValue ? combo.getRawValue() : input && input.value || "");
+    const currentValue = String(combo.getValue ? combo.getValue() || "" : "");
+    return raw.startsWith(targetCode) || raw.includes(targetText) || currentValue === String(value);
+  };
+  const setSupplierComboByName = () => {
+    let combo = null;
+    eachCmp((cmp) => {
+      if (!combo && cmp.name === "supplier_type_srm_id" && !cmp.hidden && !cmp.disabled) combo = cmp;
+    });
+    if (!combo || !combo.store) return false;
+    let record = null;
+    try {
+      combo.store.each((item) => {
+        if (record) return;
+        const data = item.data || {};
+        const code = String(item.get ? item.get("code") || "" : data.code || "");
+        const fullName = norm(item.get ? item.get("full_name") || "" : data.full_name || "");
+        const name = norm(item.get ? item.get("name") || "" : data.name || "");
+        if (code === targetCode || fullName.startsWith(targetCode) || name.includes(targetText)) record = item;
+      });
+    } catch (e) {}
+    if (!record) return false;
+    const value = recordValue(record, combo);
+    const text = record.get ? (record.get("full_name") || record.get(combo.displayField || "name") || record.get("name")) : recordText(record, combo);
+    const oldValue = combo.getValue ? combo.getValue() : undefined;
+    if (combo.setValue) combo.setValue(value);
+    if (combo.setRawValue) combo.setRawValue(text);
+    if (combo.validate) combo.validate();
+    if (combo.clearInvalid) combo.clearInvalid();
+    if (combo.fireEvent) {
+      combo.fireEvent("select", combo, record, 0);
+      combo.fireEvent("change", combo, combo.getValue ? combo.getValue() : value, oldValue);
+      combo.fireEvent("blur", combo);
+    }
+    const input = combo.inputEl && combo.inputEl.dom || combo.el && combo.el.dom && combo.el.dom.querySelector("input");
+    if (input) {
+      input.value = text;
+      input.setAttribute("value", text);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+    const raw = norm(combo.getRawValue ? combo.getRawValue() : input && input.value || "");
+    return raw.startsWith(targetCode) || raw.includes(targetText) || String(combo.getValue ? combo.getValue() || "" : "") === String(value);
+  };
+  if (setSupplierComboByName()) {
+    callback(true);
+    return;
+  }
+  for (let i = 0; i < 50; i++) {
+    const combo = findCombo();
+    if (combo) {
+      try {
+        if (combo.store && combo.store.getCount && combo.store.getCount() === 0 && combo.store.load) {
+          combo.store.load();
+          await wait(600);
+        }
+      } catch (e) {}
+      const record = findRecord(combo);
+      if (setComboRecord(combo, record)) {
+        callback(true);
+        return;
+      }
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script, label)
+        if not ok:
+            raise RuntimeError(f"Не удалось выбрать характеристику поставщика: {label}")
 
     def _fill_application_letter_commercial_terms(self, terms: CommercialTerms) -> None:
         assert self.driver is not None

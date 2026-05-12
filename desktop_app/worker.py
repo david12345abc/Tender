@@ -578,6 +578,9 @@ def make_tektorg_technical_upload_task(
             commercial_parts.append(f"действует до: {commercial['validity_date']}")
         if commercial_parts:
             details += "\n\nКоммерческие условия: " + ", ".join(commercial_parts)
+        supplier = result.get("supplier_characteristic") or {}
+        if supplier.get("label"):
+            details += f"\n\nХарактеристика поставщика: {supplier['label']}"
         if errors:
             details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
         w.session.emit(
