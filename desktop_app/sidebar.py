@@ -167,6 +167,120 @@ class StatusMultiSelect(QWidget):
             self.chips.setText(text)
             self.chips.setVisible(True)
 
+
+class QuickMultiSelect(QWidget):
+    """Compact quick-filter multiselect with a dark popup checklist."""
+
+    selectionChanged = Signal()
+
+    def __init__(
+        self,
+        options: Sequence[str | tuple[str, str]],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("QuickMultiSelect")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.button = QToolButton()
+        self.button.setObjectName("QuickMultiSelectButton")
+        self.button.setText("Все")
+        self.button.setMinimumHeight(38)
+        self.button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.button.clicked.connect(self._show_popup)
+        layout.addWidget(self.button)
+
+        self.popup = QWidget(self, Qt.Popup | Qt.FramelessWindowHint)
+        self.popup.setObjectName("StatusPopup")
+        popup_layout = QVBoxLayout(self.popup)
+        popup_layout.setContentsMargins(8, 8, 8, 8)
+
+        self.list_widget = QListWidget()
+        self.list_widget.setObjectName("StatusPopupList")
+        self.list_widget.setUniformItemSizes(True)
+        self.list_widget.setMinimumHeight(170)
+        self.list_widget.setMaximumHeight(300)
+        self.list_widget.itemChanged.connect(self._on_item_changed)
+        popup_layout.addWidget(self.list_widget)
+        self.set_options(options)
+
+    def set_options(self, options: Sequence[str | tuple[str, str]]) -> None:
+        selected = set(self.selected_values())
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
+        for option in options:
+            if isinstance(option, tuple):
+                label, value = option
+            else:
+                label = option
+                value = option
+            item = QListWidgetItem(label)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setData(Qt.UserRole, str(value))
+            item.setCheckState(Qt.Checked if str(value) in selected else Qt.Unchecked)
+            self.list_widget.addItem(item)
+        self.list_widget.blockSignals(False)
+        self._update_button_text()
+
+    def selected_values(self) -> tuple[str, ...]:
+        return tuple(
+            str(self.list_widget.item(i).data(Qt.UserRole) or "")
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        )
+
+    def selected_label_values(self) -> list[tuple[str, str]]:
+        return [
+            (
+                self.list_widget.item(i).text(),
+                str(self.list_widget.item(i).data(Qt.UserRole) or ""),
+            )
+            for i in range(self.list_widget.count())
+            if self.list_widget.item(i).checkState() == Qt.Checked
+        ]
+
+    def clear_selection(self) -> None:
+        self.list_widget.blockSignals(True)
+        for i in range(self.list_widget.count()):
+            self.list_widget.item(i).setCheckState(Qt.Unchecked)
+        self.list_widget.blockSignals(False)
+        self._update_button_text()
+        self.selectionChanged.emit()
+
+    def unselect_value(self, value: str) -> None:
+        self.list_widget.blockSignals(True)
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if str(item.data(Qt.UserRole) or "") == str(value):
+                item.setCheckState(Qt.Unchecked)
+        self.list_widget.blockSignals(False)
+        self._update_button_text()
+        self.selectionChanged.emit()
+
+    def _show_popup(self) -> None:
+        width = max(self.width(), 240)
+        row_h = max(28, self.list_widget.sizeHintForRow(0))
+        height = min(320, max(190, row_h * min(self.list_widget.count(), 9) + 24))
+        self.popup.resize(width, height)
+        self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        self.popup.show()
+        self.list_widget.setFocus()
+
+    def _on_item_changed(self, item: QListWidgetItem) -> None:
+        self._update_button_text()
+        self.selectionChanged.emit()
+
+    def _update_button_text(self) -> None:
+        count = len(self.selected_values())
+        if count == 0:
+            self.button.setText("Все  v")
+        elif count == 1:
+            self.button.setText(f"{self.selected_label_values()[0][0]}  v")
+        else:
+            self.button.setText(f"Выбрано: {count}  v")
+
 class Sidebar(QWidget):
     """Подробная форма фильтров, похожая на форму на сайте ЭТП."""
 
@@ -336,12 +450,12 @@ class Sidebar(QWidget):
         field = QWidget()
         field.setObjectName("FilterField")
         field_lay = QVBoxLayout(field)
-        field_lay.setContentsMargins(0, 12, 0, 18)
-        field_lay.setSpacing(8)
+        field_lay.setContentsMargins(0, 18, 0, 28)
+        field_lay.setSpacing(12)
         field_lay.addWidget(lbl)
         field_lay.addWidget(widget)
-        field.setMinimumHeight(max(96, lbl.minimumHeight() + widget.minimumHeight() + 42))
-        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        field.setMinimumHeight(max(124, lbl.minimumHeight() + widget.minimumHeight() + 62))
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         actual_row = getattr(self, "_next_filter_row", 0)
         self._next_filter_row = actual_row + 1
@@ -402,14 +516,11 @@ class Sidebar(QWidget):
         filters_row = QHBoxLayout()
         filters_row.setContentsMargins(0, 0, 0, 0)
         filters_row.setSpacing(8)
-        self.cb_quick_trend = self._make_combo(list(PROCEDURE_TYPE_OPTIONS))
-        self.cb_quick_trend.setObjectName("QuickFilterCombo")
+        self.cb_quick_trend = QuickMultiSelect(list(PROCEDURE_TYPE_OPTIONS))
         filters_row.addWidget(self._quick_filter_box("Тип процедуры", self.cb_quick_trend, 150))
-        self.cb_quick_status = self._make_combo(list(STATUS_OPTIONS))
-        self.cb_quick_status.setObjectName("QuickFilterCombo")
+        self.cb_quick_status = QuickMultiSelect(list(STATUS_OPTIONS))
         filters_row.addWidget(self._quick_filter_box("Статус", self.cb_quick_status, 130))
-        self.cb_quick_law = self._make_combo([("44-ФЗ", "44"), ("223-ФЗ", "223")])
-        self.cb_quick_law.setObjectName("QuickFilterCombo")
+        self.cb_quick_law = QuickMultiSelect([("44-ФЗ", "44"), ("223-ФЗ", "223")])
         filters_row.addWidget(self._quick_filter_box("Закон", self.cb_quick_law, 110))
         self.cb_quick_published = self._make_combo([("Любая", ""), ("Сегодня", "today"), ("За неделю", "week")])
         self.cb_quick_published.setObjectName("QuickFilterCombo")
@@ -443,6 +554,16 @@ class Sidebar(QWidget):
         body_layout.addLayout(keyword_row)
         self.refresh_keywords_count()
 
+        self.active_filters_row = QHBoxLayout()
+        self.active_filters_row.setContentsMargins(0, 0, 0, 0)
+        self.active_filters_row.setSpacing(6)
+        self.active_filters_label = QLabel("Активные фильтры:")
+        self.active_filters_label.setObjectName("QuickFilterLabel")
+        self.active_filters_row.addWidget(self.active_filters_label)
+        self.active_filters_row.addStretch(1)
+        body_layout.addLayout(self.active_filters_row)
+        self._refresh_quick_filter_chips()
+
         self.extra_scroll = QScrollArea()
         self.extra_scroll.setObjectName("ExtraFiltersPanel")
         self.extra_scroll.setVisible(False)
@@ -475,7 +596,7 @@ class Sidebar(QWidget):
         self._filter_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(0)
-        grid.setVerticalSpacing(10)
+        grid.setVerticalSpacing(18)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         for r in range(40):
@@ -664,9 +785,9 @@ class Sidebar(QWidget):
             w.editingFinished.connect(self.clientFiltersChanged)
         for w in (self.cb_trend, self.cb_purchase_form):
             w.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
-        self.cb_quick_trend.currentIndexChanged.connect(self._sync_quick_trend)
-        self.cb_quick_status.currentIndexChanged.connect(self._sync_quick_status)
-        self.cb_quick_law.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.cb_quick_trend.selectionChanged.connect(self._sync_quick_trend)
+        self.cb_quick_status.selectionChanged.connect(self._sync_quick_status)
+        self.cb_quick_law.selectionChanged.connect(self._sync_quick_law)
         self.cb_quick_published.currentIndexChanged.connect(self._sync_quick_published)
         self.lst_steps.itemChanged.connect(lambda *_: self.clientFiltersChanged.emit())
         spin_widgets = (
@@ -709,18 +830,25 @@ class Sidebar(QWidget):
             parent.updateGeometry()
 
     def _sync_quick_trend(self) -> None:
-        idx = self.cb_trend.findData(self.cb_quick_trend.currentData())
+        values = self.cb_quick_trend.selected_values()
+        idx = self.cb_trend.findData(values[0]) if len(values) == 1 else -1
         self.cb_trend.setCurrentIndex(idx if idx >= 0 else 0)
+        self._refresh_quick_filter_chips()
         self.clientFiltersChanged.emit()
 
     def _sync_quick_status(self) -> None:
-        value = str(self.cb_quick_status.currentData() or "")
+        values = set(self.cb_quick_status.selected_values())
         self.lst_steps.blockSignals(True)
         for i in range(self.lst_steps.count()):
             item = self.lst_steps.item(i)
-            item.setCheckState(Qt.Checked if value and str(item.data(Qt.UserRole) or "") == value else Qt.Unchecked)
+            item.setCheckState(Qt.Checked if str(item.data(Qt.UserRole) or "") in values else Qt.Unchecked)
         self.lst_steps.blockSignals(False)
         self.status_selector._update_button_text()
+        self._refresh_quick_filter_chips()
+        self.clientFiltersChanged.emit()
+
+    def _sync_quick_law(self) -> None:
+        self._refresh_quick_filter_chips()
         self.clientFiltersChanged.emit()
 
     def _sync_quick_published(self) -> None:
@@ -737,6 +865,37 @@ class Sidebar(QWidget):
         else:
             self.cb_published_enabled.setChecked(False)
         self.clientFiltersChanged.emit()
+
+    def _refresh_quick_filter_chips(self) -> None:
+        if not hasattr(self, "active_filters_row"):
+            return
+        while self.active_filters_row.count() > 1:
+            item = self.active_filters_row.takeAt(1)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        chips: list[tuple[str, str, str]] = []
+        chips.extend(("Тип", label, value) for label, value in self.cb_quick_trend.selected_label_values())
+        chips.extend(("Статус", label, value) for label, value in self.cb_quick_status.selected_label_values())
+        chips.extend(("Закон", label, value) for label, value in self.cb_quick_law.selected_label_values())
+
+        self.active_filters_label.setVisible(bool(chips))
+        insert_index = 1
+        for group, label, value in chips:
+            chip = QToolButton()
+            chip.setObjectName("ActiveFilterChip")
+            chip.setText(f"{group}: {label} ×")
+            chip.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            if group == "Тип":
+                chip.clicked.connect(lambda checked=False, v=value: self.cb_quick_trend.unselect_value(v))
+            elif group == "Статус":
+                chip.clicked.connect(lambda checked=False, v=value: self.cb_quick_status.unselect_value(v))
+            else:
+                chip.clicked.connect(lambda checked=False, v=value: self.cb_quick_law.unselect_value(v))
+            self.active_filters_row.insertWidget(insert_index, chip)
+            insert_index += 1
+        self.active_filters_row.addStretch(1)
 
     def _expanded_min_height(self) -> int:
         return 360 if self._platform_key == "roseltorg" else 560
@@ -756,36 +915,23 @@ class Sidebar(QWidget):
         self._platform_key = platform_key
         current_trend = self.cb_trend.currentData()
         self.cb_trend.blockSignals(True)
-        self.cb_quick_trend.blockSignals(True)
         self.cb_trend.clear()
-        self.cb_quick_trend.clear()
         self.cb_trend.addItem("Все", "")
-        self.cb_quick_trend.addItem("Все", "")
         for label, value in procedure_type_options:
             self.cb_trend.addItem(label, value)
-            self.cb_quick_trend.addItem(label, value)
         trend_idx = self.cb_trend.findData(current_trend)
         self.cb_trend.setCurrentIndex(trend_idx if trend_idx >= 0 else 0)
-        quick_trend_idx = self.cb_quick_trend.findData(current_trend)
-        self.cb_quick_trend.setCurrentIndex(quick_trend_idx if quick_trend_idx >= 0 else 0)
         self.cb_trend.blockSignals(False)
+        self.cb_quick_trend.blockSignals(True)
+        self.cb_quick_trend.set_options(procedure_type_options)
         self.cb_quick_trend.blockSignals(False)
 
         self.status_selector.set_options(status_options)
-        current_quick_status = self.cb_quick_status.currentData()
         self.cb_quick_status.blockSignals(True)
-        self.cb_quick_status.clear()
-        self.cb_quick_status.addItem("Все", "")
-        for option in status_options:
-            if isinstance(option, tuple):
-                label, value = option
-            else:
-                label = option
-                value = option
-            self.cb_quick_status.addItem(label, value)
-        quick_status_idx = self.cb_quick_status.findData(current_quick_status)
-        self.cb_quick_status.setCurrentIndex(quick_status_idx if quick_status_idx >= 0 else 0)
+        self.cb_quick_status.set_options(status_options)
         self.cb_quick_status.blockSignals(False)
+        self._sync_quick_trend()
+        self._sync_quick_status()
 
         current_search_by = self.cb_purchase_form.currentData()
         self.cb_purchase_form.blockSignals(True)
@@ -862,7 +1008,7 @@ class Sidebar(QWidget):
                 ("price", 3, 1),
             ):
                 self._place_row(key, row, col, key in visible_keys)
-            self.extra_filters.setMinimumHeight(720)
+            self.extra_filters.setMinimumHeight(980)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         else:
@@ -878,7 +1024,7 @@ class Sidebar(QWidget):
                 self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._restore_row_position(key)
-            self.extra_filters.setMinimumHeight(1760)
+            self.extra_filters.setMinimumHeight(2600)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         for key in self._filter_rows:
@@ -907,18 +1053,22 @@ class Sidebar(QWidget):
 
     def client_filters(self) -> ClientFilters:
         keywords = tuple(load_keywords()) if self.cb_keyword_search.isChecked() else ()
+        quick_trends = self.cb_quick_trend.selected_values()
+        quick_laws = self.cb_quick_law.selected_values()
         if self._platform_key == "roseltorg":
             return ClientFilters(
                 quick_search=self.ed_quick_search.text().strip(),
                 keyword_search_enabled=self.cb_keyword_search.isChecked(),
                 keywords=keywords,
                 organizer_contains=self.ed_organizer.text().strip(),
-                trend_pur=self.cb_trend.currentData() or "",
+                trend_pur=quick_trends[0] if len(quick_trends) == 1 else (self.cb_trend.currentData() or ""),
+                trend_pur_values=quick_trends,
                 step_ids=tuple(
                     str(self.lst_steps.item(i).data(Qt.UserRole) or "")
                     for i in range(self.lst_steps.count())
                     if self.lst_steps.item(i).checkState() == Qt.Checked
                 ),
+                law_values=quick_laws,
                 purchase_form=self.cb_purchase_form.currentData() or "",
                 price_min=(self.sb_price_min.value() or None),
                 price_max=(self.sb_price_max.value() or None),
@@ -963,12 +1113,14 @@ class Sidebar(QWidget):
             guarantee_min=(self.sb_guarantee_min.value() or None),
             guarantee_max=(self.sb_guarantee_max.value() or None),
             responsible_contains=self.ed_responsible.text().strip(),
-            trend_pur=self.cb_trend.currentData() or "",
+            trend_pur=quick_trends[0] if len(quick_trends) == 1 else (self.cb_trend.currentData() or ""),
+            trend_pur_values=quick_trends,
             step_ids=tuple(
                 str(self.lst_steps.item(i).data(Qt.UserRole) or "")
                 for i in range(self.lst_steps.count())
                 if self.lst_steps.item(i).checkState() == Qt.Checked
             ),
+            law_values=quick_laws,
             purchase_form=self.cb_purchase_form.currentData() or "",
             applics_min=(self.sb_apc_min.value() or None),
             applics_max=(self.sb_apc_max.value() or None),
@@ -1021,9 +1173,9 @@ class Sidebar(QWidget):
         self.ed_special_features.clear()
         self.ed_position_name.clear()
         self.ed_national_regime.clear()
-        self.cb_quick_trend.setCurrentIndex(0)
-        self.cb_quick_status.setCurrentIndex(0)
-        self.cb_quick_law.setCurrentIndex(0)
+        self.cb_quick_trend.clear_selection()
+        self.cb_quick_status.clear_selection()
+        self.cb_quick_law.clear_selection()
         self.cb_quick_published.setCurrentIndex(0)
         self.cb_trend.setCurrentIndex(0)
         for i in range(self.lst_steps.count()):

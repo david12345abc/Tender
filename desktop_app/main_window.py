@@ -188,7 +188,8 @@ class MainWindow(QMainWindow):
         self._cache_save_enabled: bool = True
         self._platform_key: str = "gpb"
         self._api_debug_chunks: list[str] = []
-        self._deleted_tender_keys: set[str] = self._load_deleted_tender_keys()
+        self._deleted_tender_records: dict[str, dict[str, Any]] = self._load_deleted_tenders()
+        self._deleted_tender_keys: set[str] = set(self._deleted_tender_records)
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -374,13 +375,20 @@ class MainWindow(QMainWindow):
         self.btn_show_analysis.setEnabled(False)
         bottom_layout.addWidget(self.btn_show_analysis)
 
+        bottom_layout.addStretch(1)
+
+        self.btn_blacklist = QPushButton("Черный список")
+        self.btn_blacklist.setToolTip("Показать удалённые тендеры и восстановить выбранные")
+        self.btn_blacklist.clicked.connect(self._show_blacklist_dialog)
+        bottom_layout.addWidget(self.btn_blacklist)
+        self._update_blacklist_button()
+
         self.btn_stop = QPushButton("Стоп")
         self.btn_stop.setObjectName("Danger")
         self.btn_stop.clicked.connect(self._on_stop)
         self.btn_stop.setEnabled(False)
         bottom_layout.addWidget(self.btn_stop)
 
-        bottom_layout.addStretch(1)
         main_area_layout.addWidget(bottom_bar)
 
         # Центральный виджет: фильтры сверху, таблица слева, дополнительные фильтры справа.
@@ -1602,30 +1610,66 @@ class MainWindow(QMainWindow):
         organizer = str(proc.get("organizer") or proc.get("org_name") or "").strip()
         return f"{self._platform_key}:fallback:{title}|{organizer}"
 
-    def _load_deleted_tender_keys(self) -> set[str]:
+    def _deleted_record_title(self, record: dict[str, Any]) -> str:
+        proc = record.get("procedure")
+        if not isinstance(proc, dict):
+            proc = {}
+        registry = str(record.get("registry") or proc.get("registry_number") or proc.get("procedure_number") or "").strip()
+        title = str(record.get("title") or proc.get("title") or proc.get("name") or "").strip()
+        if registry and title:
+            return f"{registry} — {title}"
+        return registry or title or str(record.get("key") or "Удалённый тендер")
+
+    def _deleted_record_for_proc(self, key: str, proc: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "key": key,
+            "platform": self._platform_key,
+            "deleted_at": datetime.now().isoformat(timespec="seconds"),
+            "registry": str(proc.get("registry_number") or proc.get("procedure_number") or ""),
+            "title": str(proc.get("title") or proc.get("name") or ""),
+            "organizer": str(proc.get("organizer") or proc.get("short_name") or proc.get("full_name") or ""),
+            "procedure": proc,
+        }
+
+    def _load_deleted_tenders(self) -> dict[str, dict[str, Any]]:
         try:
             if not DELETED_TENDERS_FILE.exists():
-                return set()
+                return {}
             data = json.loads(DELETED_TENDERS_FILE.read_text(encoding="utf-8"))
+            records: dict[str, dict[str, Any]] = {}
             if isinstance(data, dict):
-                values = data.get("deleted") or []
+                values = data.get("items") or data.get("deleted") or []
             else:
                 values = data
-            return {str(value) for value in values if str(value).strip()}
+            for value in values:
+                if isinstance(value, dict):
+                    key = str(value.get("key") or "").strip()
+                    if key:
+                        records[key] = value
+                else:
+                    key = str(value).strip()
+                    if key:
+                        records[key] = {"key": key, "title": key, "procedure": {}}
+            return records
         except Exception:
             traceback.print_exc()
-            return set()
+            return {}
 
-    def _save_deleted_tender_keys(self) -> bool:
+    def _save_deleted_tenders(self) -> bool:
         try:
             payload = {
                 "saved_at": datetime.now().isoformat(timespec="seconds"),
-                "deleted": sorted(self._deleted_tender_keys),
+                "items": [
+                    self._deleted_tender_records[key]
+                    for key in sorted(self._deleted_tender_records)
+                ],
             }
             DELETED_TENDERS_FILE.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
                 encoding="utf-8",
             )
+            self._deleted_tender_keys = set(self._deleted_tender_records)
+            self._update_blacklist_button()
             return True
         except Exception as e:
             QMessageBox.warning(
@@ -1654,8 +1698,11 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        self._deleted_tender_keys.add(key)
-        if not self._save_deleted_tender_keys():
+        self._deleted_tender_records[key] = self._deleted_record_for_proc(key, proc)
+        self._deleted_tender_keys = set(self._deleted_tender_records)
+        if not self._save_deleted_tenders():
+            self._deleted_tender_records.pop(key, None)
+            self._deleted_tender_keys = set(self._deleted_tender_records)
             return
         self.model.set_rows(self._filter_deleted_procedures(self.model.rows()))
         self.proxy.refresh_page()
@@ -1663,6 +1710,69 @@ class MainWindow(QMainWindow):
         self._schedule_table_row_resize()
         self._schedule_cache_save()
         self.status_msg.setText(f"Тендер удалён. Список удалённых сохранён: {DELETED_TENDERS_FILE}")
+
+    def _update_blacklist_button(self) -> None:
+        if hasattr(self, "btn_blacklist"):
+            count = len(self._deleted_tender_records)
+            self.btn_blacklist.setText(f"Черный список ({count})" if count else "Черный список")
+
+    def _show_blacklist_dialog(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Черный список")
+        dlg.resize(760, 480)
+        layout = QVBoxLayout(dlg)
+
+        info = QLabel(f"Удалённые тендеры сохраняются здесь:\n{DELETED_TENDERS_FILE}")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        deleted_list = QListWidget()
+        deleted_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        for key, record in sorted(
+            self._deleted_tender_records.items(),
+            key=lambda item: self._deleted_record_title(item[1]).casefold(),
+        ):
+            item = QListWidgetItem(self._deleted_record_title(record))
+            item.setData(Qt.UserRole, key)
+            item.setToolTip(key)
+            deleted_list.addItem(item)
+        layout.addWidget(deleted_list, 1)
+
+        buttons = QDialogButtonBox()
+        btn_restore = buttons.addButton("Восстановить выбранные", QDialogButtonBox.ButtonRole.ActionRole)
+        btn_close = buttons.addButton("Закрыть", QDialogButtonBox.ButtonRole.RejectRole)
+        layout.addWidget(buttons)
+
+        def restore_selected() -> None:
+            selected = deleted_list.selectedItems()
+            if not selected:
+                QMessageBox.information(dlg, "Ничего не выбрано", "Выберите одну или несколько строк для восстановления.")
+                return
+            restored: list[dict[str, Any]] = []
+            for item in selected:
+                key = str(item.data(Qt.UserRole) or "")
+                record = self._deleted_tender_records.pop(key, None)
+                proc = record.get("procedure") if isinstance(record, dict) else None
+                if isinstance(proc, dict) and proc:
+                    restored.append(proc)
+                deleted_list.takeItem(deleted_list.row(item))
+            self._deleted_tender_keys = set(self._deleted_tender_records)
+            if not self._save_deleted_tenders():
+                return
+            if restored:
+                existing_keys = {self._procedure_delete_key(row) for row in self.model.rows()}
+                to_add = [proc for proc in restored if self._procedure_delete_key(proc) not in existing_keys]
+                self.model.append_rows(to_add)
+            self.proxy.refresh_page()
+            self._refresh_counter()
+            self._schedule_table_row_resize()
+            self._schedule_cache_save()
+            self.status_msg.setText(f"Восстановлено: {len(selected)}.")
+
+        btn_restore.clicked.connect(restore_selected)
+        btn_close.clicked.connect(dlg.reject)
+        dlg.exec()
+        self._update_blacklist_button()
 
     def _open_in_browser(self, proc: Optional[dict[str, Any]]) -> None:
         if not proc:

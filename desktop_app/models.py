@@ -780,7 +780,18 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ):
                 return False
 
-        if f.trend_pur and not selected_matches(
+        trend_values = tuple(getattr(f, "trend_pur_values", ()) or ())
+        if trend_values:
+            if not any(
+                selected_matches(
+                    trend,
+                    ("trend_pur", "procedure_type", "type"),
+                    ("trend_pur_name", "trend_pur_label", "procedure_type_name", "type_name"),
+                )
+                for trend in trend_values
+            ):
+                return False
+        elif f.trend_pur and not selected_matches(
             f.trend_pur,
             ("trend_pur", "procedure_type", "type"),
             ("trend_pur_name", "trend_pur_label", "procedure_type_name", "type_name"),
@@ -806,6 +817,18 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             if effective_step_ids and not any(
                 self._status_matches(proc, step_id, display_status)
                 for step_id in effective_step_ids
+            ):
+                return False
+        law_values = tuple(getattr(f, "law_values", ()) or ())
+        if law_values:
+            if not any(
+                self._contains(
+                    proc,
+                    law,
+                    ("law", "law_name", "fz", "federal_law", "purchase_law"),
+                    ("law", "fz", "фз", "закон"),
+                )
+                for law in law_values
             ):
                 return False
         if f.purchase_form:

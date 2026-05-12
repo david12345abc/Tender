@@ -356,6 +356,33 @@ QToolButton#StatusMultiSelectButton:hover {
     border-color: #3b82f6;
     background-color: #132033;
 }
+QToolButton#QuickMultiSelectButton {
+    text-align: left;
+    border: 1px solid #27365f;
+    border-radius: 6px;
+    background-color: #111827;
+    color: #e9edff;
+    padding: 9px 28px 9px 10px;
+    min-height: 36px;
+}
+QToolButton#QuickMultiSelectButton:hover {
+    border-color: #3b82f6;
+    background-color: #132033;
+}
+QToolButton#ActiveFilterChip {
+    border: 1px solid #26365f;
+    border-radius: 7px;
+    background-color: #121936;
+    color: #dbeafe;
+    padding: 5px 9px;
+    min-height: 24px;
+    font-size: 11px;
+}
+QToolButton#ActiveFilterChip:hover {
+    background-color: #1d2a55;
+    border-color: #3b82f6;
+    color: #ffffff;
+}
 #StatusChips {
     color: #bfdbfe;
     background-color: transparent;
