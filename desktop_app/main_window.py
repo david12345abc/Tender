@@ -64,6 +64,7 @@ from .constants import (
     LM_STUDIO_BASE_URL,
     LM_STUDIO_MODEL,
     VIEW_URL,
+    user_writable_root,
 )
 from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
 from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
@@ -79,7 +80,7 @@ from .worker import (
 )
 
 
-DELETED_TENDERS_FILE = Path("C:/ETP_GPB_Search_deleted_tenders.json")
+DELETED_TENDERS_FILE = user_writable_root() / "deleted_tenders.json"
 
 
 class LimitedWrapDelegate(QStyledItemDelegate):
@@ -1685,6 +1686,7 @@ class MainWindow(QMainWindow):
                     for key in sorted(self._deleted_tender_records)
                 ],
             }
+            DELETED_TENDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
             DELETED_TENDERS_FILE.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2, default=str),
                 encoding="utf-8",
@@ -1696,7 +1698,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Не удалось сохранить удаление",
-                f"Список удалённых тендеров не удалось записать на диск C:/.\n\n"
+                f"Список удалённых тендеров не удалось записать на диск.\n\n"
                 f"Путь: {DELETED_TENDERS_FILE}\n\n"
                 f"Подробности: {e}",
             )

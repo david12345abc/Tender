@@ -429,53 +429,89 @@ def prepare_documents_for_analysis(
     registry: str = "",
 ) -> tuple[str, Path]:
     """Сохраняет разархивированные документы в output_dir и читает все файлы рекурсивно."""
-    if output_dir.exists():
-        shutil.rmtree(output_dir, ignore_errors=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    queue = [Path(p) for p in files if Path(p).is_file()]
-    seen: set[Path] = set()
-    archive_count = 0
-
-    while queue and len(seen) < MAX_DOCUMENT_FILES:
-        source = queue.pop(0).resolve()
-        if source in seen or not source.is_file():
-            continue
-        seen.add(source)
-
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=f"{output_dir.name}_source_", dir=output_dir.parent)
+    )
+    staged_files: list[Path] = []
+    for source in files:
+        source = Path(source)
         try:
-            is_inside_output = str(source).startswith(str(output_dir.resolve()))
-        except Exception:
-            is_inside_output = False
-
-        if _is_archive(source):
-            archive_count += 1
-            extract_parent = source.parent if is_inside_output else output_dir
-            extract_dir = _unique_path(extract_parent / f"{source.stem}_разархивировано")
-            if progress:
-                progress(f"Распаковываю архив: {source.name}")
-            try:
-                _extract_archive(source, extract_dir)
-                queue.extend(_walk_files([extract_dir]))
-            except Exception as e:
-                marker = extract_dir / "ОШИБКА_РАСПАКОВКИ.txt"
-                extract_dir.mkdir(parents=True, exist_ok=True)
-                marker.write_text(f"Не удалось распаковать {source.name}: {e}", encoding="utf-8")
+            if not source.is_file():
                 if issues is not None:
                     issues.append(
                         {
                             "severity": "critical",
                             "registry": registry,
                             "file": source.name,
-                            "message": f"Не удалось распаковать архив: {e}",
+                            "message": f"Файл документа недоступен перед обработкой: {source}",
                         }
                     )
-            continue
-
-        if not is_inside_output:
-            target = _unique_path(output_dir / source.name)
-            target.parent.mkdir(parents=True, exist_ok=True)
+                continue
+            target = _unique_path(staging_dir / source.name)
             shutil.copy2(source, target)
+            staged_files.append(target)
+        except Exception as e:
+            if issues is not None:
+                issues.append(
+                    {
+                        "severity": "critical",
+                        "registry": registry,
+                        "file": source.name,
+                        "message": f"Не удалось подготовить файл документа к обработке: {e}",
+                    }
+                )
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        queue = staged_files
+        seen: set[Path] = set()
+        archive_count = 0
+
+        while queue and len(seen) < MAX_DOCUMENT_FILES:
+            source = queue.pop(0).resolve()
+            if source in seen or not source.is_file():
+                continue
+            seen.add(source)
+
+            try:
+                is_inside_output = str(source).startswith(str(output_dir.resolve()))
+            except Exception:
+                is_inside_output = False
+
+            if _is_archive(source):
+                archive_count += 1
+                extract_parent = source.parent if is_inside_output else output_dir
+                extract_dir = _unique_path(extract_parent / f"{source.stem}_разархивировано")
+                if progress:
+                    progress(f"Распаковываю архив: {source.name}")
+                try:
+                    _extract_archive(source, extract_dir)
+                    queue.extend(_walk_files([extract_dir]))
+                except Exception as e:
+                    marker = extract_dir / "ОШИБКА_РАСПАКОВКИ.txt"
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+                    marker.write_text(f"Не удалось распаковать {source.name}: {e}", encoding="utf-8")
+                    if issues is not None:
+                        issues.append(
+                            {
+                                "severity": "critical",
+                                "registry": registry,
+                                "file": source.name,
+                                "message": f"Не удалось распаковать архив: {e}",
+                            }
+                        )
+                continue
+
+            if not is_inside_output:
+                target = _unique_path(output_dir / source.name)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
 
     readable_files = sorted(
         (p for p in output_dir.rglob("*") if p.is_file()),

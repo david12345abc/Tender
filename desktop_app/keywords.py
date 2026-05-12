@@ -4,9 +4,9 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-from .constants import KEYWORDS_FILE, bundled_keywords_template_path
+from .constants import KEYWORDS_FILE, bundled_keywords_template_path, user_writable_root
 
-USER_KEYWORDS_FILE = Path("C:/ETP_GPB_Search_keywords.txt")
+USER_KEYWORDS_FILE = user_writable_root() / "keywords.txt"
 
 
 def _resolve_path(path: Path | None) -> Path:
