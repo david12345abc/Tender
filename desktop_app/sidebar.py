@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableView,
     QToolButton,
@@ -154,6 +155,7 @@ class Sidebar(QWidget):
         self.setObjectName("Sidebar")
         self.setMinimumHeight(88)
         self._filter_rows: dict[str, tuple[QLabel, QWidget, int, int]] = {}
+        self._filter_controls: dict[str, QWidget] = {}
         self._platform_key = "gpb"
         self._build_ui()
 
@@ -162,6 +164,7 @@ class Sidebar(QWidget):
         edit.setPlaceholderText(placeholder)
         edit.setMinimumWidth(220)
         edit.setMinimumHeight(36)
+        edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return edit
 
     def _make_money(self) -> QDoubleSpinBox:
@@ -172,6 +175,7 @@ class Sidebar(QWidget):
         spin.setSpecialValueText("—")
         spin.setMinimumWidth(96)
         spin.setMinimumHeight(36)
+        spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return spin
 
     def _make_int(self) -> QSpinBox:
@@ -180,6 +184,7 @@ class Sidebar(QWidget):
         spin.setSpecialValueText("—")
         spin.setMinimumWidth(82)
         spin.setMinimumHeight(36)
+        spin.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return spin
 
     def _make_combo(self, items: Optional[list[tuple[str, str]]] = None) -> QComboBox:
@@ -187,6 +192,7 @@ class Sidebar(QWidget):
         combo.setMinimumWidth(220)
         combo.setMinimumHeight(36)
         combo.setMaxVisibleItems(8)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         combo.addItem("Все", "")
         for label, value in items or []:
             combo.addItem(label, value)
@@ -258,6 +264,7 @@ class Sidebar(QWidget):
         edit.setDate(date or QDate.currentDate())
         edit.setMinimumWidth(100)
         edit.setMinimumHeight(36)
+        edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         edit.setCalendarWidget(self._make_calendar())
         return edit
 
@@ -270,7 +277,8 @@ class Sidebar(QWidget):
         lay.addWidget(left)
         lay.addWidget(QLabel(right_text))
         lay.addWidget(right)
-        row.setMinimumHeight(36)
+        row.setMinimumHeight(44)
+        row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         return row
 
     def _add_row(
@@ -285,19 +293,47 @@ class Sidebar(QWidget):
         lbl = QLabel(label)
         lbl.setObjectName("FilterLabel")
         lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        lbl.setMinimumHeight(18)
+        lbl.setMinimumHeight(20)
         widget.setMinimumHeight(max(widget.minimumHeight(), 36))
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        field = QWidget()
+        field.setObjectName("FilterField")
+        field_lay = QVBoxLayout(field)
+        field_lay.setContentsMargins(0, 10, 0, 16)
+        field_lay.setSpacing(7)
+        field_lay.addWidget(lbl)
+        field_lay.addWidget(widget)
+        field.setMinimumHeight(max(82, lbl.minimumHeight() + widget.minimumHeight() + 34))
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
         actual_row = getattr(self, "_next_filter_row", 0)
         self._next_filter_row = actual_row + 1
-        grid.addWidget(lbl, actual_row * 2, 0, 1, 2)
-        grid.addWidget(widget, actual_row * 2 + 1, 0, 1, 2)
+        grid.addWidget(field, actual_row, 0, 1, 2)
         if key:
-            self._filter_rows[key] = (lbl, widget, actual_row, 0)
+            self._filter_rows[key] = (lbl, field, actual_row, 0)
+            self._filter_controls[key] = widget
+
+    def _quick_filter_box(self, label: str, widget: QWidget, min_width: int = 120) -> QWidget:
+        box = QWidget()
+        box.setObjectName("QuickFilterBox")
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(3)
+        lbl = QLabel(label)
+        lbl.setObjectName("QuickFilterLabel")
+        widget.setMinimumWidth(min_width)
+        widget.setMinimumHeight(38)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        lay.addWidget(lbl)
+        lay.addWidget(widget)
+        box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        return box
 
     def _build_ui(self) -> None:
         body_layout = QVBoxLayout(self)
         body_layout.setContentsMargins(14, 12, 14, 12)
-        body_layout.setSpacing(9)
+        body_layout.setSpacing(10)
 
         quick_row = QHBoxLayout()
         quick_row.setContentsMargins(0, 0, 0, 0)
@@ -309,16 +345,14 @@ class Sidebar(QWidget):
         self.ed_quick_search.setMinimumHeight(38)
         quick_row.addWidget(quick_lbl)
         quick_row.addWidget(self.ed_quick_search, 1)
-        quick_row.addWidget(QLabel("Браузер:"))
-        self.cb_browser = QComboBox()
-        self.cb_browser.setMinimumWidth(180)
-        self.cb_browser.setMinimumHeight(38)
-        self.cb_browser.setIconSize(QSize(20, 20))
-        self._browsers = available_browsers()
-        for browser in self._browsers:
-            icon = QIcon(str(asset_path(f"{browser.key}.png")))
-            self.cb_browser.addItem(icon, browser.label, browser)
-        quick_row.addWidget(self.cb_browser)
+        self.btn_toggle_extra = QToolButton()
+        self.btn_toggle_extra.setObjectName("MoreFiltersButton")
+        self.btn_toggle_extra.setText("Еще фильтры ▸")
+        self.btn_toggle_extra.setCheckable(True)
+        self.btn_toggle_extra.setChecked(False)
+        self.btn_toggle_extra.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.btn_toggle_extra.setArrowType(Qt.NoArrow)
+        quick_row.addWidget(self.btn_toggle_extra)
         self.btn_search = QPushButton("Искать")
         self.btn_search.setObjectName("Primary")
         self.btn_search.setMinimumWidth(110)
@@ -328,6 +362,34 @@ class Sidebar(QWidget):
         self.btn_reset.setMinimumHeight(38)
         quick_row.addWidget(self.btn_reset)
         body_layout.addLayout(quick_row)
+
+        filters_row = QHBoxLayout()
+        filters_row.setContentsMargins(0, 0, 0, 0)
+        filters_row.setSpacing(8)
+        self.cb_quick_trend = self._make_combo(list(PROCEDURE_TYPE_OPTIONS))
+        self.cb_quick_trend.setObjectName("QuickFilterCombo")
+        filters_row.addWidget(self._quick_filter_box("Тип процедуры", self.cb_quick_trend, 150))
+        self.cb_quick_status = self._make_combo(list(STATUS_OPTIONS))
+        self.cb_quick_status.setObjectName("QuickFilterCombo")
+        filters_row.addWidget(self._quick_filter_box("Статус", self.cb_quick_status, 130))
+        self.cb_quick_law = self._make_combo([("44-ФЗ", "44"), ("223-ФЗ", "223")])
+        self.cb_quick_law.setObjectName("QuickFilterCombo")
+        filters_row.addWidget(self._quick_filter_box("Закон", self.cb_quick_law, 110))
+        self.cb_quick_published = self._make_combo([("Любая", ""), ("Сегодня", "today"), ("За неделю", "week")])
+        self.cb_quick_published.setObjectName("QuickFilterCombo")
+        filters_row.addWidget(self._quick_filter_box("Дата публикации", self.cb_quick_published, 140))
+        self.cb_browser = QComboBox()
+        self.cb_browser.setObjectName("QuickFilterCombo")
+        self.cb_browser.setMinimumWidth(180)
+        self.cb_browser.setMinimumHeight(38)
+        self.cb_browser.setIconSize(QSize(20, 20))
+        self._browsers = available_browsers()
+        for browser in self._browsers:
+            icon = QIcon(str(asset_path(f"{browser.key}.png")))
+            self.cb_browser.addItem(icon, browser.label, browser)
+        filters_row.addWidget(self._quick_filter_box("Браузер", self.cb_browser, 180))
+        filters_row.addStretch(1)
+        body_layout.addLayout(filters_row)
 
         keyword_row = QHBoxLayout()
         keyword_row.setContentsMargins(0, 0, 0, 0)
@@ -342,14 +404,6 @@ class Sidebar(QWidget):
         self.lbl_keywords_count = QLabel()
         keyword_row.addWidget(self.lbl_keywords_count)
         keyword_row.addStretch(1)
-        self.btn_toggle_extra = QToolButton()
-        self.btn_toggle_extra.setObjectName("MoreFiltersButton")
-        self.btn_toggle_extra.setText("Еще фильтры")
-        self.btn_toggle_extra.setCheckable(True)
-        self.btn_toggle_extra.setChecked(False)
-        self.btn_toggle_extra.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.btn_toggle_extra.setArrowType(Qt.RightArrow)
-        keyword_row.addWidget(self.btn_toggle_extra)
         body_layout.addLayout(keyword_row)
         self.refresh_keywords_count()
 
@@ -385,7 +439,7 @@ class Sidebar(QWidget):
         self._filter_grid = grid
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(0)
-        grid.setVerticalSpacing(6)
+        grid.setVerticalSpacing(10)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         for r in range(40):
@@ -439,6 +493,7 @@ class Sidebar(QWidget):
         self.ed_tag_id.setRange(0, 1_000_000)
         self.ed_tag_id.setSpecialValueText("— любой —")
         self.ed_tag_id.setMinimumHeight(36)
+        self.ed_tag_id.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.sb_apc_min = self._make_int()
         self.sb_apc_max = self._make_int()
@@ -492,7 +547,8 @@ class Sidebar(QWidget):
         published_lay.addWidget(self.ed_date_from)
         published_lay.addWidget(QLabel("по"))
         published_lay.addWidget(self.ed_date_to)
-        published_row.setMinimumHeight(34)
+        published_row.setMinimumHeight(44)
+        published_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._add_row(grid, 9, 0, "Дата публикации:", published_row, "published")
 
         end_row = QWidget()
@@ -504,7 +560,8 @@ class Sidebar(QWidget):
         end_lay.addWidget(self.de_end_from)
         end_lay.addWidget(QLabel("по"))
         end_lay.addWidget(self.de_end_to)
-        end_row.setMinimumHeight(34)
+        end_row.setMinimumHeight(44)
+        end_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._add_row(grid, 10, 0, "Окончание приема заявок:", end_row, "end")
         results_row = QWidget()
         results_lay = QHBoxLayout(results_row)
@@ -515,6 +572,8 @@ class Sidebar(QWidget):
         results_lay.addWidget(self.de_results_from)
         results_lay.addWidget(QLabel("по"))
         results_lay.addWidget(self.de_results_to)
+        results_row.setMinimumHeight(44)
+        results_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._add_row(grid, 8, 1, "Дата подведения итогов:", results_row, "results")
         self._add_row(
             grid,
@@ -556,6 +615,10 @@ class Sidebar(QWidget):
             w.editingFinished.connect(self.clientFiltersChanged)
         for w in (self.cb_trend, self.cb_purchase_form):
             w.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.cb_quick_trend.currentIndexChanged.connect(self._sync_quick_trend)
+        self.cb_quick_status.currentIndexChanged.connect(self._sync_quick_status)
+        self.cb_quick_law.currentIndexChanged.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.cb_quick_published.currentIndexChanged.connect(self._sync_quick_published)
         self.lst_steps.itemChanged.connect(lambda *_: self.clientFiltersChanged.emit())
         spin_widgets = (
             self.sb_apc_min,
@@ -589,12 +652,42 @@ class Sidebar(QWidget):
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
         self.setMinimumHeight(88)
-        self.btn_toggle_extra.setArrowType(Qt.DownArrow if visible else Qt.RightArrow)
-        self.btn_toggle_extra.setText("Скрыть фильтры" if visible else "Еще фильтры")
+        self.btn_toggle_extra.setArrowType(Qt.NoArrow)
+        self.btn_toggle_extra.setText("Скрыть фильтры ▴" if visible else "Еще фильтры ▸")
         self.updateGeometry()
         parent = self.parentWidget()
         if parent is not None:
             parent.updateGeometry()
+
+    def _sync_quick_trend(self) -> None:
+        idx = self.cb_trend.findData(self.cb_quick_trend.currentData())
+        self.cb_trend.setCurrentIndex(idx if idx >= 0 else 0)
+        self.clientFiltersChanged.emit()
+
+    def _sync_quick_status(self) -> None:
+        value = str(self.cb_quick_status.currentData() or "")
+        self.lst_steps.blockSignals(True)
+        for i in range(self.lst_steps.count()):
+            item = self.lst_steps.item(i)
+            item.setCheckState(Qt.Checked if value and str(item.data(Qt.UserRole) or "") == value else Qt.Unchecked)
+        self.lst_steps.blockSignals(False)
+        self.status_selector._update_button_text()
+        self.clientFiltersChanged.emit()
+
+    def _sync_quick_published(self) -> None:
+        mode = str(self.cb_quick_published.currentData() or "")
+        today = QDate.currentDate()
+        if mode == "today":
+            self.cb_published_enabled.setChecked(True)
+            self.ed_date_from.setDate(today)
+            self.ed_date_to.setDate(today)
+        elif mode == "week":
+            self.cb_published_enabled.setChecked(True)
+            self.ed_date_from.setDate(today.addDays(-7))
+            self.ed_date_to.setDate(today)
+        else:
+            self.cb_published_enabled.setChecked(False)
+        self.clientFiltersChanged.emit()
 
     def _expanded_min_height(self) -> int:
         return 360 if self._platform_key == "roseltorg" else 560
@@ -614,15 +707,36 @@ class Sidebar(QWidget):
         self._platform_key = platform_key
         current_trend = self.cb_trend.currentData()
         self.cb_trend.blockSignals(True)
+        self.cb_quick_trend.blockSignals(True)
         self.cb_trend.clear()
+        self.cb_quick_trend.clear()
         self.cb_trend.addItem("Все", "")
+        self.cb_quick_trend.addItem("Все", "")
         for label, value in procedure_type_options:
             self.cb_trend.addItem(label, value)
+            self.cb_quick_trend.addItem(label, value)
         trend_idx = self.cb_trend.findData(current_trend)
         self.cb_trend.setCurrentIndex(trend_idx if trend_idx >= 0 else 0)
+        quick_trend_idx = self.cb_quick_trend.findData(current_trend)
+        self.cb_quick_trend.setCurrentIndex(quick_trend_idx if quick_trend_idx >= 0 else 0)
         self.cb_trend.blockSignals(False)
+        self.cb_quick_trend.blockSignals(False)
 
         self.status_selector.set_options(status_options)
+        current_quick_status = self.cb_quick_status.currentData()
+        self.cb_quick_status.blockSignals(True)
+        self.cb_quick_status.clear()
+        self.cb_quick_status.addItem("Все", "")
+        for option in status_options:
+            if isinstance(option, tuple):
+                label, value = option
+            else:
+                label = option
+                value = option
+            self.cb_quick_status.addItem(label, value)
+        quick_status_idx = self.cb_quick_status.findData(current_quick_status)
+        self.cb_quick_status.setCurrentIndex(quick_status_idx if quick_status_idx >= 0 else 0)
+        self.cb_quick_status.blockSignals(False)
 
         current_search_by = self.cb_purchase_form.currentData()
         self.cb_purchase_form.blockSignals(True)
@@ -643,9 +757,9 @@ class Sidebar(QWidget):
         row = self._filter_rows.get(key)
         if row is None:
             return
-        label, widget, _, _ = row
+        label, field, _, _ = row
         label.setVisible(visible)
-        widget.setVisible(visible)
+        field.setVisible(visible)
 
     def _set_row_label(self, key: str, text: str) -> None:
         row = self._filter_rows.get(key)
@@ -657,26 +771,22 @@ class Sidebar(QWidget):
         stored = self._filter_rows.get(key)
         if stored is None:
             return
-        label, widget, _, _ = stored
-        self._filter_grid.removeWidget(label)
-        self._filter_grid.removeWidget(widget)
+        label, field, _, _ = stored
+        self._filter_grid.removeWidget(field)
         actual_row = row * 2 + col
-        self._filter_grid.addWidget(label, actual_row * 2, 0, 1, 2)
-        self._filter_grid.addWidget(widget, actual_row * 2 + 1, 0, 1, 2)
+        self._filter_grid.addWidget(field, actual_row, 0, 1, 2)
         label.setVisible(visible)
-        widget.setVisible(visible)
+        field.setVisible(visible)
 
     def _restore_row_position(self, key: str) -> None:
         stored = self._filter_rows.get(key)
         if stored is None:
             return
-        label, widget, row, _ = stored
-        self._filter_grid.removeWidget(label)
-        self._filter_grid.removeWidget(widget)
-        self._filter_grid.addWidget(label, row * 2, 0, 1, 2)
-        self._filter_grid.addWidget(widget, row * 2 + 1, 0, 1, 2)
+        label, field, row, _ = stored
+        self._filter_grid.removeWidget(field)
+        self._filter_grid.addWidget(field, row, 0, 1, 2)
         label.setVisible(True)
-        widget.setVisible(True)
+        field.setVisible(True)
 
     def _apply_platform_filter_visibility(self) -> None:
         if self._platform_key == "roseltorg":
@@ -688,9 +798,7 @@ class Sidebar(QWidget):
             self._set_row_label("published", "Дата публикации:")
             self._set_row_label("end", "Дата окончания приема предложений:")
             self._set_row_label("results", "Дата выбора победителя:")
-            for row in range(12):
-                self._filter_grid.setRowMinimumHeight(row, 0)
-            for row in range(16):
+            for row in range(40):
                 self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._set_row_visible(key, False)
@@ -705,7 +813,7 @@ class Sidebar(QWidget):
                 ("price", 3, 1),
             ):
                 self._place_row(key, row, col, key in visible_keys)
-            self.extra_filters.setMinimumHeight(520)
+            self.extra_filters.setMinimumHeight(720)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         else:
@@ -721,7 +829,7 @@ class Sidebar(QWidget):
                 self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._restore_row_position(key)
-            self.extra_filters.setMinimumHeight(1040)
+            self.extra_filters.setMinimumHeight(1760)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         for key in self._filter_rows:
@@ -864,6 +972,10 @@ class Sidebar(QWidget):
         self.ed_special_features.clear()
         self.ed_position_name.clear()
         self.ed_national_regime.clear()
+        self.cb_quick_trend.setCurrentIndex(0)
+        self.cb_quick_status.setCurrentIndex(0)
+        self.cb_quick_law.setCurrentIndex(0)
+        self.cb_quick_published.setCurrentIndex(0)
         self.cb_trend.setCurrentIndex(0)
         for i in range(self.lst_steps.count()):
             self.lst_steps.item(i).setCheckState(Qt.Unchecked)

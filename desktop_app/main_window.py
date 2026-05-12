@@ -435,6 +435,7 @@ class MainWindow(QMainWindow):
         act_focus_query.triggered.connect(lambda: self.sidebar.ed_query.setFocus())
         self.addAction(act_focus_query)
 
+        self._apply_platform_ui()
         QTimer.singleShot(0, self._apply_table_column_widths)
 
     def _apply_table_column_widths(self) -> None:

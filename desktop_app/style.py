@@ -106,10 +106,21 @@ QToolButton#MoreFiltersButton {
     background-color: #121936;
     color: #dfe6ff;
     padding: 7px 12px;
+    min-height: 30px;
+    font-weight: 600;
 }
 QToolButton#MoreFiltersButton:checked {
     background-color: #10213d;
     border-color: #3b82f6;
+}
+QWidget#QuickFilterBox {
+    background-color: transparent;
+}
+QLabel#QuickFilterLabel {
+    color: #7f8ab7;
+    font-size: 10px;
+    font-weight: 600;
+    padding-left: 2px;
 }
 
 QLabel {
@@ -137,6 +148,9 @@ QLineEdit:disabled, QComboBox:disabled, QDateEdit:disabled, QSpinBox:disabled, Q
 QComboBox {
     padding-right: 28px;
 }
+QComboBox#QuickFilterCombo {
+    min-height: 36px;
+}
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
@@ -147,11 +161,11 @@ QComboBox::drop-down {
     background: #0f172a;
 }
 QComboBox::down-arrow {
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #94a3b8;
+    image: none;
+    width: 8px;
+    height: 8px;
+    border: 0;
+    background-color: #94a3b8;
     margin-right: 10px;
 }
 QComboBox QAbstractItemView {
