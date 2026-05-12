@@ -115,10 +115,12 @@ QToolButton#MoreFiltersButton:checked {
 }
 QWidget#QuickFilterBox {
     background-color: transparent;
+    min-height: 44px;
+    max-height: 48px;
 }
 QLabel#QuickFilterLabel {
     color: #7f8ab7;
-    font-size: 10px;
+    font-size: 9px;
     font-weight: 600;
     padding-left: 2px;
 }
@@ -149,7 +151,9 @@ QComboBox {
     padding-right: 28px;
 }
 QComboBox#QuickFilterCombo {
-    min-height: 36px;
+    min-height: 26px;
+    max-height: 30px;
+    padding: 3px 24px 3px 8px;
 }
 QComboBox::drop-down {
     subcontrol-origin: padding;
@@ -362,8 +366,9 @@ QToolButton#QuickMultiSelectButton {
     border-radius: 6px;
     background-color: #111827;
     color: #e9edff;
-    padding: 9px 28px 9px 10px;
-    min-height: 36px;
+    padding: 3px 24px 3px 8px;
+    min-height: 26px;
+    max-height: 30px;
 }
 QToolButton#QuickMultiSelectButton:hover {
     border-color: #3b82f6;
