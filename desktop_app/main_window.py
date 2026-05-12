@@ -1509,20 +1509,30 @@ class MainWindow(QMainWindow):
             import win32con
             import win32gui
 
+            def press_key(vk: int) -> None:
+                win32api.keybd_event(vk, 0, 0, 0)
+                time.sleep(0.03)
+                win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+            def press_ctrl_key(vk: int) -> None:
+                win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+                time.sleep(0.03)
+                win32api.keybd_event(vk, 0, 0, 0)
+                time.sleep(0.03)
+                win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.03)
+                win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+
             win32gui.SetForegroundWindow(hwnd)
             time.sleep(0.1)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-            win32api.keybd_event(ord("T"), 0, 0, 0)
-            win32api.keybd_event(ord("T"), 0, win32con.KEYEVENTF_KEYUP, 0)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-            time.sleep(0.25)
+            press_ctrl_key(ord("T"))
+            time.sleep(0.6)
+            press_ctrl_key(ord("L"))
+            time.sleep(0.15)
             QApplication.clipboard().setText(url)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-            win32api.keybd_event(ord("V"), 0, 0, 0)
-            win32api.keybd_event(ord("V"), 0, win32con.KEYEVENTF_KEYUP, 0)
-            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-            win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
-            win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+            press_ctrl_key(ord("V"))
+            time.sleep(0.25)
+            press_key(win32con.VK_RETURN)
         except Exception:
             pass
 
