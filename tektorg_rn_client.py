@@ -389,6 +389,9 @@ class TektorgRnClient(EtpClient):
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
             self._ensure_commercial_tab_active()
+            if progress:
+                progress("Открываю окно формирования письма о подаче заявки...")
+            self._open_application_letter_modal()
         return {"uploaded": uploaded, "errors": errors}
 
     def _switch_to_application_tab(
@@ -606,6 +609,101 @@ const callback = arguments[arguments.length - 1];
         ok = self.driver.execute_async_script(script)
         if not ok:
             raise RuntimeError("Не удалось открыть вкладку коммерческой части предложения.")
+
+    def _open_application_letter_modal(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const target = /Сформировать\s+письмо\s+о\s+подаче\s+заявки/i;
+  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const findLetterButtonCmp = () => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return null;
+    let found = null;
+    Ext.ComponentMgr.all.each(function(cmp) {
+      if (found || cmp.hidden || cmp.disabled) return;
+      const text = String(cmp.text || "");
+      if (cmp.xtype === "button" && target.test(text)) {
+        const el = cmp.el && cmp.el.dom;
+        if (!el || visible(el)) found = cmp;
+      }
+    });
+    return found;
+  };
+  const clickByExt = () => {
+    const cmp = findLetterButtonCmp();
+    if (!cmp) return false;
+    try {
+      if (cmp.handler) {
+        cmp.handler.call(cmp.scope || cmp, cmp);
+        return true;
+      }
+      if (cmp.fireEvent) {
+        cmp.fireEvent("click", cmp);
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+  const modalOpened = () => {
+    const windows = Array.from(document.querySelectorAll(".x-window, .x-window-dlg, .x-window-body"));
+    return windows.some((el) => {
+      if (!visible(el)) return false;
+      const text = textOf(el);
+      return /письм|подач|заявк/i.test(text) && !target.test(text);
+    });
+  };
+  const clickElement = (el) => {
+    const chain = [el, el && el.parentElement, el && el.parentElement && el.parentElement.parentElement];
+    for (const node of chain) {
+      if (!node || !visible(node)) continue;
+      try {
+        node.scrollIntoView({ block: "center", inline: "center" });
+        node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  };
+  for (let i = 0; i < 60; i++) {
+    if (modalOpened()) {
+      callback(true);
+      return;
+    }
+    if (clickByExt()) {
+      await wait(700);
+      if (modalOpened()) {
+        callback(true);
+        return;
+      }
+    }
+    const nodes = Array.from(document.querySelectorAll("button, input[type='button'], a, span, div, td, em"));
+    const button = nodes.find((el) => visible(el) && target.test(textOf(el)));
+    if (button) {
+      clickElement(button);
+      await wait(600);
+      if (modalOpened()) {
+        callback(true);
+        return;
+      }
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script)
+        if not ok:
+            raise RuntimeError("Не удалось открыть окно формирования письма о подаче заявки.")
 
     def _upload_one_file(
         self,
