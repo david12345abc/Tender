@@ -618,6 +618,15 @@ class TektorgRnClient(EtpClient):
             or ""
         )
         proc_id = self._first_value(item, "id", "procedureId", "procedure_id", "procedure")
+        lot_id = self._first_value(
+            active_lot,
+            "id",
+            "lotId",
+            "lot_id",
+            "lot",
+            "lotNumber",
+            "lot_number",
+        )
         total_price = self._first_value(
             item,
             "total_price",
@@ -699,6 +708,8 @@ class TektorgRnClient(EtpClient):
         return {
             **item,
             "source": "tektorg_rn",
+            "procedure_id": proc_id,
+            "lot_id": lot_id,
             "registry_number": registry_number or "",
             "procedure_number": registry_number or "",
             "title": title or "",

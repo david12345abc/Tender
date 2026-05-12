@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import traceback
 import webbrowser
 from datetime import datetime
@@ -1324,6 +1325,7 @@ class MainWindow(QMainWindow):
             self.status_msg.setText("Документы уже скачиваются в фоне. Дождитесь завершения.")
             return
         self._row_download_sink.clear()
+        self._row_download_sink["proc"] = dict(proc)
         fn = make_tektorg_row_documents_task(self.client, proc, sink=self._row_download_sink)
         try:
             self.row_download_runner.start(
@@ -1396,7 +1398,7 @@ class MainWindow(QMainWindow):
             f"Коммерческие: {commercial_count}\n"
             f"Технические: {technical_count}",
         )
-        self._bring_browser_to_front()
+        self._open_application_create_tab()
 
     def _bring_window_to_front(self) -> None:
         if self.isMinimized():
@@ -1413,15 +1415,15 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         self.show()
 
-    def _bring_browser_to_front(self) -> None:
+    def _bring_browser_to_front(self) -> Optional[int]:
         try:
             driver = self.client.driver
             if driver is None:
-                return
+                return None
             title = str(driver.title or "").strip()
             browser_hint = str(getattr(self.client.browser, "label", "") or "").casefold()
         except Exception:
-            return
+            return None
 
         try:
             self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
@@ -1449,7 +1451,7 @@ class MainWindow(QMainWindow):
 
             win32gui.EnumWindows(enum_handler, None)
             if not candidates:
-                return
+                return None
 
             hwnd = candidates[0]
             win32gui.SetWindowPos(
@@ -1462,11 +1464,67 @@ class MainWindow(QMainWindow):
                 win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
             )
             win32gui.SetForegroundWindow(hwnd)
+            return hwnd
         except Exception:
             try:
                 self.showMinimized()
             except Exception:
                 pass
+        return None
+
+    def _application_create_url(self) -> str:
+        proc = self._row_download_sink.get("proc") or {}
+        proc_id = (
+            proc.get("procedure_id")
+            or proc.get("procedureId")
+            or proc.get("id")
+            or proc.get("procedure")
+        )
+        lot_id = (
+            proc.get("lot_id")
+            or proc.get("lotId")
+            or proc.get("lot")
+            or proc.get("active_lot_id")
+        )
+        if not proc_id or not lot_id:
+            return ""
+        return f"https://rn.tektorg.ru/index.php#com/applic/create/lot/{lot_id}/procedure/{proc_id}"
+
+    def _open_application_create_tab(self) -> None:
+        try:
+            url = self._application_create_url()
+            if not url:
+                QMessageBox.warning(
+                    self,
+                    "Не удалось открыть заявку",
+                    "Не найден id процедуры или id лота для формирования ссылки на подачу заявки.",
+                )
+                return
+            hwnd = self._bring_browser_to_front()
+            if hwnd is None:
+                return
+            time.sleep(0.35)
+
+            import win32api
+            import win32con
+            import win32gui
+
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.1)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            win32api.keybd_event(ord("T"), 0, 0, 0)
+            win32api.keybd_event(ord("T"), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.25)
+            QApplication.clipboard().setText(url)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
+            win32api.keybd_event(ord("V"), 0, 0, 0)
+            win32api.keybd_event(ord("V"), 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
+            win32api.keybd_event(win32con.VK_RETURN, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)
