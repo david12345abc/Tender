@@ -368,32 +368,23 @@ class TektorgRnClient(EtpClient):
         if progress:
             progress("Ожидаю блок технической части заявки...")
         self._ensure_technical_tab_active()
+        self._clear_uploaded_files(progress=progress)
 
         uploaded: list[str] = []
         errors: list[str] = []
         for index, path in enumerate(files, start=1):
-            if self._is_uploaded_file_listed(path):
-                if progress:
-                    progress(f"Файл уже есть в заявке, пропускаю повторную загрузку: {path.name}")
+            if progress:
+                progress(f"Загружаю технический файл {index}/{len(files)}: {path.name}")
+            try:
+                self._upload_one_file(path, progress=progress)
+                self._remove_duplicate_uploaded_files(progress=progress)
+                if not self._is_uploaded_file_listed(path):
+                    raise RuntimeError("файл не появился в списке загруженных документов")
                 uploaded.append(str(path))
-                continue
-
-            last_error = ""
-            for attempt in range(1, 4):
-                before_count = len(self._uploaded_file_names())
-                if progress:
-                    progress(f"Загружаю технический файл {index}/{len(files)}, попытка {attempt}/3: {path.name}")
-                try:
-                    self._upload_one_file(path, before_count=before_count, progress=progress)
-                    if self._is_uploaded_file_listed(path) or len(self._uploaded_file_names()) > before_count:
-                        uploaded.append(str(path))
-                        break
-                    last_error = "файл не появился в списке загруженных документов"
-                except Exception as e:
-                    last_error = str(e)
-                time.sleep(1.0)
-            else:
-                errors.append(f"{path.name}: {last_error or 'сайт не подтвердил загрузку'}")
+            except Exception as e:
+                errors.append(f"{path.name}: {e}")
+                break
+        self._remove_duplicate_uploaded_files(progress=progress)
         return {"uploaded": uploaded, "errors": errors}
 
     def _switch_to_application_tab(
@@ -418,7 +409,7 @@ class TektorgRnClient(EtpClient):
 
         deadline = time.time() + 18
         while time.time() < deadline:
-            for handle in list(self.driver.window_handles):
+            for handle in reversed(list(self.driver.window_handles)):
                 try:
                     self.driver.switch_to.window(handle)
                     current = self.driver.current_url or ""
@@ -526,15 +517,27 @@ const callback = arguments[arguments.length - 1];
     def _upload_one_file(
         self,
         path: Path,
-        before_count: int = 0,
         progress: Optional[Callable[[str], None]] = None,
     ) -> None:
         assert self.driver is not None
 
+        dialog_error: Exception | None = None
+        if progress:
+            progress(f"Открываю штатный выбор файла: {path.name}")
+        try:
+            self._upload_one_file_via_dialog(path)
+            if self._wait_after_file_selection(path):
+                return
+            raise RuntimeError("файл не появился в списке после штатной загрузки")
+        except Exception as e:
+            dialog_error = e
+            if progress:
+                progress(f"Штатная загрузка не подтвердилась для {path.name}: {e}")
+
         direct_error: Exception | None = None
         try:
             if progress:
-                progress(f"Ищу поле выбора файла для {path.name}...")
+                progress(f"Пробую резервную загрузку через input: {path.name}")
             input_element = self._find_tektorg_file_input()
             self.driver.execute_script(
                 """
@@ -566,7 +569,7 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
                     progress(f"DevTools-загрузка не сработала, пробую Selenium send_keys: {cdp_error}")
                 input_element.send_keys(str(path))
             self._dispatch_file_input_events(input_element)
-            if self._wait_after_file_selection(path, before_count=before_count):
+            if self._wait_after_file_selection(path):
                 return
             raise RuntimeError("Сайт не показал файл в списке после выбора через input.")
         except Exception as e:
@@ -574,11 +577,7 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
             if progress:
                 progress(f"Прямая загрузка через input не сработала для {path.name}: {e}")
 
-        if progress:
-            progress(f"Пробую загрузку через системный диалог: {path.name}")
-        self._upload_one_file_via_dialog(path)
-        if not self._wait_after_file_selection(path, before_count=before_count):
-            raise RuntimeError(f"Файл выбран через диалог, но сайт не подтвердил загрузку. Ошибка input: {direct_error}")
+        raise RuntimeError(f"Файл не загрузился. Ошибка штатной загрузки: {dialog_error}. Ошибка input: {direct_error}")
 
     def _find_tektorg_file_input(self):
         assert self.driver is not None
@@ -684,7 +683,7 @@ if (window.Ext) {
             input_element,
         )
 
-    def _wait_after_file_selection(self, path: Path, before_count: int = 0) -> bool:
+    def _wait_after_file_selection(self, path: Path) -> bool:
         assert self.driver is not None
         marker = self._normalize_uploaded_filename(path.name)
         deadline = time.time() + 18
@@ -693,23 +692,19 @@ if (window.Ext) {
                 info = self.driver.execute_script(
                     r"""
 const bodyText = String(document.body && document.body.innerText || "");
-const fileValues = Array.from(document.querySelectorAll("input[type='file']")).map((input) => input.value || "");
 const masks = Array.from(document.querySelectorAll(".x-mask-loading, .x-mask-msg, .x-mask"))
   .filter((el) => {
     const style = window.getComputedStyle(el);
     return style.display !== "none" && style.visibility !== "hidden";
   })
   .map((el) => String(el.innerText || el.textContent || ""));
-return { bodyText, fileValues, masks };
+return { bodyText, masks };
 """
                 )
                 if isinstance(info, dict):
                     body_text = str(info.get("bodyText") or "")
-                    values = " ".join(str(value or "") for value in info.get("fileValues") or [])
-                    text_marker = self._normalize_uploaded_filename(f"{body_text}\n{values}")
+                    text_marker = self._normalize_uploaded_filename(body_text)
                     if marker and marker in text_marker:
-                        return True
-                    if len(self._uploaded_file_names()) > before_count:
                         return True
                     masks = info.get("masks") or []
                     if masks:
@@ -718,7 +713,7 @@ return { bodyText, fileValues, masks };
             except Exception:
                 pass
             time.sleep(0.4)
-        return self._is_uploaded_file_listed(path) or len(self._uploaded_file_names()) > before_count
+        return self._is_uploaded_file_listed(path)
 
     def _is_uploaded_file_listed(self, path: Path) -> bool:
         marker = self._normalize_uploaded_filename(path.name)
@@ -727,6 +722,9 @@ return { bodyText, fileValues, masks };
         return marker in {self._normalize_uploaded_filename(name) for name in self._uploaded_file_names()}
 
     def _uploaded_file_names(self) -> list[str]:
+        items = self._uploaded_file_items()
+        if items:
+            return [str(item.get("name") or "") for item in items if str(item.get("name") or "").strip()]
         assert self.driver is not None
         try:
             names = self.driver.execute_script(
@@ -748,6 +746,185 @@ return anchors
         value = re.sub(r"\s+", "", value)
         value = re.sub(r"[_\W]+", "", value, flags=re.UNICODE)
         return value
+
+    def _uploaded_file_items(self) -> list[dict[str, Any]]:
+        assert self.driver is not None
+        try:
+            items = self.driver.execute_script(
+                r"""
+const upload = Ext && Ext.getCmp ? Ext.getCmp("application_docs_tech_1") : null;
+const panel = upload && upload.ids ? Ext.getCmp(upload.ids.uploaded_files_id) : null;
+if (!panel || !panel.items) return [];
+const result = [];
+panel.items.each(function(item) {
+  const file = item.file || {};
+  const name = String(file.original_name || file.name || "").trim();
+  if (!name) return;
+  result.push({
+    componentId: item.id,
+    fileId: file.id || null,
+    name: name,
+    date: file.date || "",
+    size: file.size || null
+  });
+});
+return result;
+"""
+            )
+        except Exception:
+            return []
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)]
+
+    def _remove_duplicate_uploaded_files(
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        assert self.driver is not None
+        removed = 0
+        while True:
+            duplicate = self._next_duplicate_uploaded_file()
+            if not duplicate:
+                break
+            name = str(duplicate.get("name") or "файл")
+            component_id = str(duplicate.get("componentId") or "")
+            if not component_id:
+                break
+            if progress:
+                progress(f"Удаляю дубль загруженного файла: {name}")
+            before_count = len(self._uploaded_file_names())
+            deleted = self._delete_uploaded_file_component(component_id)
+            if not deleted:
+                break
+            if not self._wait_uploaded_count_less_than(before_count):
+                raise RuntimeError(f"Сайт не удалил дубль файла: {name}")
+            removed += 1
+        if removed and progress:
+            progress(f"Удалено дублей технических документов: {removed}")
+        return removed
+
+    def _clear_uploaded_files(
+        self,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> int:
+        assert self.driver is not None
+        removed = 0
+        while True:
+            item = self._first_uploaded_file()
+            if not item:
+                break
+            name = str(item.get("name") or "файл")
+            component_id = str(item.get("componentId") or "")
+            if not component_id:
+                break
+            if progress:
+                progress(f"Очищаю ранее загруженный технический файл: {name}")
+            before_count = len(self._uploaded_file_names())
+            deleted = self._delete_uploaded_file_component(component_id)
+            if not deleted:
+                break
+            if not self._wait_uploaded_count_less_than(before_count):
+                raise RuntimeError(f"Сайт не удалил ранее загруженный файл: {name}")
+            removed += 1
+        if removed and progress:
+            progress(f"Очищено ранее загруженных технических файлов: {removed}")
+        return removed
+
+    def _next_duplicate_uploaded_file(self) -> Optional[dict[str, str]]:
+        items = self._uploaded_file_items()
+        grouped: dict[str, list[dict[str, str]]] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            key = self._normalize_uploaded_filename(name)
+            if not key:
+                continue
+            grouped.setdefault(key, []).append(
+                {
+                    "name": name,
+                    "componentId": str(item.get("componentId") or ""),
+                }
+            )
+        for duplicates in grouped.values():
+            if len(duplicates) > 1:
+                # Оставляем последнюю запись: обычно это самый свежий загруженный файл.
+                return duplicates[0]
+        return None
+
+    def _first_uploaded_file(self) -> Optional[dict[str, str]]:
+        items = self._uploaded_file_items()
+        if not items:
+            return None
+        first = items[0]
+        if not isinstance(first, dict):
+            return None
+        return {
+            "name": str(first.get("name") or ""),
+            "componentId": str(first.get("componentId") or ""),
+        }
+
+    def _delete_uploaded_file_component(self, component_id: str) -> bool:
+        assert self.driver is not None
+        try:
+            return bool(
+                self.driver.execute_script(
+                    r"""
+const componentId = arguments[0];
+const upload = Ext && Ext.getCmp ? Ext.getCmp("application_docs_tech_1") : null;
+const item = Ext && Ext.getCmp ? Ext.getCmp(componentId) : null;
+if (!upload || !item || !item.file || !upload.deleteFile) return false;
+upload.deleteFile(item.file);
+return true;
+""",
+                    component_id,
+                )
+            )
+        except Exception:
+            return False
+
+    def _confirm_delete_dialog(self) -> None:
+        assert self.driver is not None
+        time.sleep(0.3)
+        try:
+            alert = self.driver.switch_to.alert
+            alert.accept()
+            return
+        except Exception:
+            pass
+        try:
+            self.driver.execute_async_script(
+                r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let i = 0; i < 20; i++) {
+    const buttons = Array.from(document.querySelectorAll("button, .x-btn-text, td.x-btn-mc"));
+    const yes = buttons.find((el) => /^(да|yes|ok|удалить)$/i.test(String(el.innerText || el.textContent || el.value || "").trim()));
+    if (yes) {
+      try {
+        yes.click();
+        callback(true);
+        return;
+      } catch (e) {}
+    }
+    await wait(200);
+  }
+  callback(false);
+})();
+"""
+            )
+        except Exception:
+            pass
+
+    def _wait_uploaded_count_less_than(self, before_count: int) -> bool:
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            if len(self._uploaded_file_names()) < before_count:
+                return True
+            time.sleep(0.3)
+        return False
 
     def _upload_one_file_via_dialog(self, path: Path) -> None:
         assert self.driver is not None

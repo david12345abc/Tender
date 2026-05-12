@@ -1504,39 +1504,8 @@ class MainWindow(QMainWindow):
                     "Не найден id процедуры или id лота для формирования ссылки на подачу заявки.",
                 )
                 return ""
-            hwnd = self._bring_browser_to_front()
-            if hwnd is None:
+            if not self._open_url_in_managed_browser(url, new_tab=True):
                 return ""
-            time.sleep(0.35)
-
-            import win32api
-            import win32con
-            import win32gui
-
-            def press_key(vk: int) -> None:
-                win32api.keybd_event(vk, 0, 0, 0)
-                time.sleep(0.03)
-                win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
-
-            def press_ctrl_key(vk: int) -> None:
-                win32api.keybd_event(win32con.VK_CONTROL, 0, 0, 0)
-                time.sleep(0.03)
-                win32api.keybd_event(vk, 0, 0, 0)
-                time.sleep(0.03)
-                win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
-                time.sleep(0.03)
-                win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
-
-            win32gui.SetForegroundWindow(hwnd)
-            time.sleep(0.1)
-            press_ctrl_key(ord("T"))
-            time.sleep(0.6)
-            press_ctrl_key(ord("L"))
-            time.sleep(0.15)
-            QApplication.clipboard().setText(url)
-            press_ctrl_key(ord("V"))
-            time.sleep(0.25)
-            press_key(win32con.VK_RETURN)
             return url
         except Exception:
             return ""
@@ -1592,10 +1561,40 @@ class MainWindow(QMainWindow):
         pid = proc.get("id")
         if not pid:
             return
-        if proc.get("url"):
-            webbrowser.open(str(proc["url"]))
+        url = str(proc.get("url") or VIEW_URL.format(pid=pid))
+        if self._open_url_in_managed_browser(url, new_tab=False):
             return
-        webbrowser.open(VIEW_URL.format(pid=pid))
+        webbrowser.open(url)
+
+    def _open_url_in_managed_browser(self, url: str, new_tab: bool = True) -> bool:
+        try:
+            if not self.client.is_chrome_running():
+                self.status_msg.setText(f"Запускаю {self.client.browser.label} для открытия страницы...")
+                self.client.ensure_chrome(timeout=45)
+            if self.client.driver is None:
+                self.client.connect()
+            driver = self.client.driver
+            if driver is None:
+                return False
+            if new_tab:
+                handles_before = set(driver.window_handles)
+                driver.execute_script("window.open(arguments[0], '_blank');", url)
+                deadline = time.time() + 8
+                while time.time() < deadline:
+                    new_handles = [handle for handle in driver.window_handles if handle not in handles_before]
+                    if new_handles:
+                        driver.switch_to.window(new_handles[-1])
+                        break
+                    time.sleep(0.2)
+                else:
+                    driver.get(url)
+            else:
+                driver.get(url)
+            self._bring_browser_to_front()
+            return True
+        except Exception as e:
+            self.status_msg.setText(f"Не удалось открыть страницу в управляемом браузере: {e}")
+            return False
 
     # --------------- экспорт
     def _on_export(self) -> None:
