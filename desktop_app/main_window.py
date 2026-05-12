@@ -449,7 +449,7 @@ class MainWindow(QMainWindow):
         self._schedule_table_row_resize()
 
     def _build_empty_state(self) -> None:
-        self.empty_state = QFrame(self.table.viewport())
+        self.empty_state = QFrame(self.table)
         self.empty_state.setObjectName("EmptyState")
         self.empty_state.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         box = QVBoxLayout(self.empty_state)
@@ -479,6 +479,8 @@ class MainWindow(QMainWindow):
         box.addWidget(self.empty_icon)
         box.addWidget(self.empty_title)
         box.addWidget(self.empty_text)
+        self.table.horizontalScrollBar().valueChanged.connect(lambda *_: self._position_empty_state())
+        self.table.verticalScrollBar().valueChanged.connect(lambda *_: self._position_empty_state())
         self._position_empty_state()
         self._update_empty_state()
 
@@ -486,13 +488,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "empty_state"):
             return
         margin = 24
-        rect = self.table.viewport().rect()
+        rect = self.table.viewport().geometry()
         self.empty_state.setGeometry(
             rect.x() + margin,
             rect.y() + margin,
             max(0, rect.width() - margin * 2),
             max(0, rect.height() - margin * 2),
         )
+        self.empty_state.raise_()
 
     def _update_empty_state(self) -> None:
         if hasattr(self, "empty_state"):

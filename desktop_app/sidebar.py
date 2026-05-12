@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 from PySide6.QtCore import QDate, QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPainter
 from PySide6.QtWidgets import (
     QCalendarWidget,
     QCheckBox,
@@ -35,6 +35,34 @@ from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
+
+
+class ChevronComboBox(QComboBox):
+    """QComboBox with a plain text v marker instead of the platform arrow."""
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(QColor("#94a3b8"))
+        painter.drawText(
+            self.rect().adjusted(0, 0, -10, 0),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            "v",
+        )
+
+
+class NoWheelSpinBox(QSpinBox):
+    """Numeric filter input that does not change value on accidental scroll."""
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    """Money filter input that does not change value on accidental scroll."""
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        event.ignore()
 
 
 class StatusMultiSelect(QWidget):
@@ -168,7 +196,8 @@ class Sidebar(QWidget):
         return edit
 
     def _make_money(self) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
+        spin = NoWheelDoubleSpinBox()
+        spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         spin.setDecimals(2)
         spin.setRange(0, 1e13)
         spin.setGroupSeparatorShown(True)
@@ -179,7 +208,8 @@ class Sidebar(QWidget):
         return spin
 
     def _make_int(self) -> QSpinBox:
-        spin = QSpinBox()
+        spin = NoWheelSpinBox()
+        spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         spin.setRange(0, 1_000_000)
         spin.setSpecialValueText("—")
         spin.setMinimumWidth(82)
@@ -188,7 +218,7 @@ class Sidebar(QWidget):
         return spin
 
     def _make_combo(self, items: Optional[list[tuple[str, str]]] = None) -> QComboBox:
-        combo = QComboBox()
+        combo = ChevronComboBox()
         combo.setMinimumWidth(220)
         combo.setMinimumHeight(36)
         combo.setMaxVisibleItems(8)
@@ -378,7 +408,7 @@ class Sidebar(QWidget):
         self.cb_quick_published = self._make_combo([("Любая", ""), ("Сегодня", "today"), ("За неделю", "week")])
         self.cb_quick_published.setObjectName("QuickFilterCombo")
         filters_row.addWidget(self._quick_filter_box("Дата публикации", self.cb_quick_published, 140))
-        self.cb_browser = QComboBox()
+        self.cb_browser = ChevronComboBox()
         self.cb_browser.setObjectName("QuickFilterCombo")
         self.cb_browser.setMinimumWidth(180)
         self.cb_browser.setMinimumHeight(38)
@@ -489,7 +519,8 @@ class Sidebar(QWidget):
         self.ed_national_regime = self._make_line()
 
         self.ed_query = self.ed_quick_search
-        self.ed_tag_id = QSpinBox()
+        self.ed_tag_id = NoWheelSpinBox()
+        self.ed_tag_id.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.ed_tag_id.setRange(0, 1_000_000)
         self.ed_tag_id.setSpecialValueText("— любой —")
         self.ed_tag_id.setMinimumHeight(36)
