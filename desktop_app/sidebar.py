@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional, Sequence
 
-from PySide6.QtCore import QDate, QSize, Qt, Signal
+from PySide6.QtCore import QDate, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter
 from PySide6.QtWidgets import (
     QCalendarWidget,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -36,6 +37,80 @@ from .keywords import load_keyword_items, load_keywords
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
+
+
+class FlowLayout(QLayout):
+    """Layout that arranges widgets left-to-right and wraps to the next row."""
+
+    def __init__(self, parent: Optional[QWidget] = None, margin: int = 0, spacing: int = 8) -> None:
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+        self._items: list = []
+
+    def __del__(self) -> None:
+        while self.count():
+            self.takeAt(0)
+
+    def addItem(self, item) -> None:  # type: ignore[override]
+        self._items.append(item)
+
+    def count(self) -> int:  # type: ignore[override]
+        return len(self._items)
+
+    def itemAt(self, index: int):  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int):  # type: ignore[override]
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self):  # type: ignore[override]
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:  # type: ignore[override]
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect: QRect) -> None:  # type: ignore[override]
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # type: ignore[override]
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        x = rect.x()
+        y = rect.y()
+        line_height = 0
+        spacing = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + spacing
+            if next_x - spacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + spacing
+                next_x = x + hint.width() + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y()
 
 
 class ChevronComboBox(QComboBox):
@@ -512,59 +587,37 @@ class Sidebar(QWidget):
         toolbar_layout.setContentsMargins(20, 18, 20, 18)
         toolbar_layout.setSpacing(14)
 
-        sections_row = QHBoxLayout()
-        sections_row.setContentsMargins(0, 0, 0, 0)
-        sections_row.setSpacing(8)
-        sections_row.setAlignment(Qt.AlignTop)
+        flow_host = QWidget()
+        flow_host.setObjectName("FilterFlowHost")
+        flow_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        sections_row = FlowLayout(flow_host, margin=0, spacing=8)
 
         self.ed_quick_search = self._make_line("Введите ключевые слова для поиска…")
         self.ed_quick_search.setObjectName("QuickSearchInput")
-        self.ed_quick_search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        search_box = self._quick_filter_box("Поиск по ключевым словам", self.ed_quick_search, 320)
-        search_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        search_box.setMaximumWidth(16777215)
-        sections_row.addWidget(search_box, 1)
-
-        sep1 = QFrame()
-        sep1.setObjectName("FilterSeparator")
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setFixedHeight(56)
-        sections_row.addWidget(sep1)
-
-        main_group = QWidget()
-        main_group.setObjectName("MainFiltersGroup")
-        main_group_lay = QHBoxLayout(main_group)
-        main_group_lay.setContentsMargins(0, 0, 0, 0)
-        main_group_lay.setSpacing(4)
-        main_group_lay.setAlignment(Qt.AlignTop)
+        self.ed_quick_search.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        search_box = self._quick_filter_box("Поиск по ключевым словам", self.ed_quick_search, 240)
+        sections_row.addWidget(search_box)
 
         self.cb_quick_trend = QuickMultiSelect(list(PROCEDURE_TYPE_OPTIONS))
-        main_group_lay.addWidget(self._quick_filter_box("Тип процедуры", self.cb_quick_trend, 150))
+        sections_row.addWidget(self._quick_filter_box("Тип процедуры", self.cb_quick_trend, 150))
         self.cb_quick_status = QuickMultiSelect(list(STATUS_OPTIONS))
-        main_group_lay.addWidget(self._quick_filter_box("Статус", self.cb_quick_status, 150))
+        sections_row.addWidget(self._quick_filter_box("Статус", self.cb_quick_status, 150))
         self.cb_quick_law = QuickMultiSelect([("44-ФЗ", "44"), ("223-ФЗ", "223")])
-        main_group_lay.addWidget(self._quick_filter_box("Закон", self.cb_quick_law, 130))
+        sections_row.addWidget(self._quick_filter_box("Закон", self.cb_quick_law, 130))
         self.cb_quick_published = self._make_combo(
             [("Любая", ""), ("Сегодня", "today"), ("За неделю", "week")]
         )
         self.cb_quick_published.setObjectName("QuickFilterCombo")
-        main_group_lay.addWidget(self._quick_filter_box("Дата публикации", self.cb_quick_published, 180))
+        sections_row.addWidget(self._quick_filter_box("Дата публикации", self.cb_quick_published, 170))
         self.cb_browser = ChevronComboBox()
         self.cb_browser.setObjectName("QuickFilterCombo")
-        self.cb_browser.setMinimumWidth(200)
+        self.cb_browser.setMinimumWidth(190)
         self.cb_browser.setIconSize(QSize(20, 20))
         self._browsers = available_browsers()
         for browser in self._browsers:
             icon = QIcon(str(asset_path(f"{browser.key}.png")))
             self.cb_browser.addItem(icon, browser.label, browser)
-        main_group_lay.addWidget(self._quick_filter_box("Браузер", self.cb_browser, 200))
-        sections_row.addWidget(main_group, 0)
-
-        sep2 = QFrame()
-        sep2.setObjectName("FilterSeparator")
-        sep2.setFrameShape(QFrame.VLine)
-        sep2.setFixedHeight(56)
-        sections_row.addWidget(sep2)
+        sections_row.addWidget(self._quick_filter_box("Браузер", self.cb_browser, 190))
 
         self.btn_toggle_extra = QToolButton()
         self.btn_toggle_extra.setObjectName("MoreFiltersButton")
@@ -575,11 +628,11 @@ class Sidebar(QWidget):
         self.btn_toggle_extra.setArrowType(Qt.NoArrow)
         self.btn_toggle_extra.setMinimumHeight(44)
         self.btn_toggle_extra.setMaximumHeight(46)
-        self.btn_toggle_extra.setMinimumWidth(170)
-        extra_box = self._quick_filter_box("Дополнительно", self.btn_toggle_extra, 170)
-        sections_row.addWidget(extra_box, 0)
+        self.btn_toggle_extra.setMinimumWidth(160)
+        extra_box = self._quick_filter_box("Дополнительно", self.btn_toggle_extra, 160)
+        sections_row.addWidget(extra_box)
 
-        toolbar_layout.addLayout(sections_row)
+        toolbar_layout.addWidget(flow_host)
 
         actions_row = QHBoxLayout()
         actions_row.setContentsMargins(0, 0, 0, 0)
@@ -886,7 +939,7 @@ class Sidebar(QWidget):
         self.extra_scroll.setVisible(visible)
         self.setMinimumHeight(220)
         self.btn_toggle_extra.setArrowType(Qt.NoArrow)
-        self.btn_toggle_extra.setText("Скрыть фильтры ▴" if visible else "Еще фильтры ▸")
+        self.btn_toggle_extra.setText("⚙  Скрыть фильтры" if visible else "⚙  Еще фильтры")
         self.updateGeometry()
         parent = self.parentWidget()
         if parent is not None:
