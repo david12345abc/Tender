@@ -385,6 +385,10 @@ class TektorgRnClient(EtpClient):
                 errors.append(f"{path.name}: {e}")
                 break
         self._remove_duplicate_uploaded_files(progress=progress)
+        if not errors:
+            if progress:
+                progress("Перехожу на вкладку коммерческой части предложения...")
+            self._ensure_commercial_tab_active()
         return {"uploaded": uploaded, "errors": errors}
 
     def _switch_to_application_tab(
@@ -513,6 +517,95 @@ const callback = arguments[arguments.length - 1];
         ok = self.driver.execute_async_script(script)
         if not ok:
             raise RuntimeError("Не удалось открыть блок технической части заявки.")
+
+    def _ensure_commercial_tab_active(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+  const commercialTitle = "Коммерческая часть предложения";
+  const isCommercialCmp = (cmp) => String(cmp && cmp.title || "").trim() === commercialTitle;
+  const findCommercialCmp = () => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return null;
+    let found = null;
+    Ext.ComponentMgr.all.each(function(cmp) {
+      if (!found && isCommercialCmp(cmp)) found = cmp;
+    });
+    return found;
+  };
+  const activateByExt = () => {
+    const cmp = findCommercialCmp();
+    if (!cmp) return false;
+    try {
+      if (cmp.ownerCt && cmp.ownerCt.setActiveTab) {
+        cmp.ownerCt.setActiveTab(cmp);
+        return true;
+      }
+      if (cmp.show) {
+        cmp.show();
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+  const isCommercialActive = () => {
+    const cmp = findCommercialCmp();
+    if (cmp && cmp.ownerCt && cmp.ownerCt.activeTab === cmp) return true;
+    const nodes = Array.from(document.querySelectorAll("a, button, span, div, td, em, li"));
+    return nodes.some((el) => {
+      const text = textOf(el);
+      if (!/Коммерческая\s+часть\s+предложения/i.test(text)) return false;
+      const cls = String(el.className || "");
+      const parentCls = String(el.parentElement && el.parentElement.className || "");
+      return /active|x-tab-strip-active|selected|current/i.test(`${cls} ${parentCls}`);
+    });
+  };
+  const clickBest = (node) => {
+    const chain = [node, node && node.parentElement, node && node.parentElement && node.parentElement.parentElement];
+    for (const el of chain) {
+      if (!el) continue;
+      try {
+        el.scrollIntoView({ block: "center", inline: "center" });
+        el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+        el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  };
+  for (let i = 0; i < 50; i++) {
+    if (isCommercialActive()) {
+      callback(true);
+      return;
+    }
+    if (activateByExt()) {
+      await wait(350);
+      if (isCommercialActive()) {
+        callback(true);
+        return;
+      }
+    }
+    const nodes = Array.from(document.querySelectorAll("a, button, span, div, td, em, li"));
+    const tab = nodes.find((el) => /Коммерческая\s+часть\s+предложения/i.test(textOf(el)));
+    if (tab) {
+      clickBest(tab);
+      await wait(350);
+      if (isCommercialActive()) {
+        callback(true);
+        return;
+      }
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script)
+        if not ok:
+            raise RuntimeError("Не удалось открыть вкладку коммерческой части предложения.")
 
     def _upload_one_file(
         self,
