@@ -568,8 +568,18 @@ def make_tektorg_technical_upload_task(
         uploaded = len(result.get("uploaded") or [])
         errors = result.get("errors") or []
         details = ""
+        commercial = result.get("commercial_terms") or {}
+        commercial_parts = []
+        if commercial.get("price_with_vat"):
+            commercial_parts.append(f"итог с НДС: {commercial['price_with_vat']}")
+        if commercial.get("price_without_vat"):
+            commercial_parts.append(f"без НДС: {commercial['price_without_vat']}")
+        if commercial.get("validity_date"):
+            commercial_parts.append(f"действует до: {commercial['validity_date']}")
+        if commercial_parts:
+            details += "\n\nКоммерческие условия: " + ", ".join(commercial_parts)
         if errors:
-            details = "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
+            details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
         w.session.emit(
             uploaded > 0 and not errors,
             f"Технические файлы обработаны. Загружено: {uploaded}, ошибок: {len(errors)}.{details}",

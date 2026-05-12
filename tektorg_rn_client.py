@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 
+from desktop_app.commercial_extractor import CommercialTerms, extract_commercial_terms
 from desktop_app.params import ClientFilters
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
@@ -385,6 +386,7 @@ class TektorgRnClient(EtpClient):
                 errors.append(f"{path.name}: {e}")
                 break
         self._remove_duplicate_uploaded_files(progress=progress)
+        commercial_terms: CommercialTerms | None = None
         if not errors:
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
@@ -393,7 +395,19 @@ class TektorgRnClient(EtpClient):
                 progress("Открываю окно формирования письма о подаче заявки...")
             self._open_application_letter_modal()
             self._fill_application_letter_defaults()
-        return {"uploaded": uploaded, "errors": errors}
+            try:
+                commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
+                if commercial_terms.price_with_vat or commercial_terms.price_without_vat or commercial_terms.validity_date:
+                    self._fill_application_letter_commercial_terms(commercial_terms)
+                else:
+                    errors.append("Коммерческая часть: не удалось уверенно найти итоговую стоимость или срок действия предложения.")
+            except Exception as e:
+                errors.append(f"Коммерческая часть: {e}")
+        return {
+            "uploaded": uploaded,
+            "errors": errors,
+            "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
+        }
 
     def _switch_to_application_tab(
         self,
@@ -805,6 +819,255 @@ const callback = arguments[arguments.length - 1];
         ok = self.driver.execute_async_script(script)
         if not ok:
             raise RuntimeError("Не удалось заполнить поля письма о подаче заявки.")
+
+    def _extract_commercial_terms_for_application(
+        self,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> CommercialTerms:
+        commercial_dir = technical_dir.parent / "Коммерческие"
+        if progress:
+            progress(f"Анализирую коммерческие документы: {commercial_dir}")
+        return extract_commercial_terms(commercial_dir, progress=progress)
+
+    def _fill_application_letter_commercial_terms(self, terms: CommercialTerms) -> None:
+        assert self.driver is not None
+
+        def ui_price(value: str) -> str:
+            return value.replace(".", ",") if value else ""
+
+        values = {
+            "price_with_vat": ui_price(terms.as_dict().get("price_with_vat", "")),
+            "price_without_vat": ui_price(terms.as_dict().get("price_without_vat", "")),
+            "validity_date": terms.validity_date,
+        }
+        script = r"""
+const callback = arguments[arguments.length - 1];
+const values = arguments[0] || {};
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const letterText = /Письмо\s+о\s+подаче\s+заявки/i;
+  const inLetterWindow = (cmp) => {
+    const el = cmp && cmp.el && cmp.el.dom;
+    const win = el && el.closest && el.closest(".x-window");
+    return !!(win && visible(win) && letterText.test(String(win.innerText || win.textContent || "")));
+  };
+  const eachCmp = (fn) => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+    const all = Ext.ComponentMgr.all;
+    if (typeof all.each === "function") {
+      all.each(fn);
+      return;
+    }
+    const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+    for (const cmp of items) {
+      if (cmp && typeof cmp === "object") fn(cmp);
+    }
+  };
+  const norm = (value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const labelOf = (cmp) => norm([
+    cmp.fieldLabel,
+    cmp.boxLabel,
+    cmp.name,
+    cmp.id,
+    cmp.el && cmp.el.dom && (cmp.el.dom.innerText || cmp.el.dom.textContent || cmp.el.dom.value),
+  ].filter(Boolean).join(" "));
+  const findField = (names, labelPatterns) => {
+    let found = null;
+    eachCmp((cmp) => {
+      if (found || cmp.hidden || cmp.disabled || !inLetterWindow(cmp)) return;
+      const name = norm(cmp.name);
+      const label = labelOf(cmp);
+      if (names.some((item) => name === norm(item))) {
+        found = cmp;
+        return;
+      }
+      if (labelPatterns.some((pattern) => pattern.test(label))) found = cmp;
+    });
+    return found;
+  };
+  const letterWindow = () => Array.from(document.querySelectorAll(".x-window"))
+    .find((el) => visible(el) && letterText.test(String(el.innerText || el.textContent || "")));
+  const setDomValue = (input, value) => {
+    if (!input || !value) return false;
+    input.scrollIntoView({ block: "center", inline: "nearest" });
+    input.focus && input.focus();
+    input.value = value;
+    input.setAttribute("value", value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    let cmp = null;
+    eachCmp((item) => {
+      if (cmp || !inLetterWindow(item)) return;
+      const dom = item.el && item.el.dom;
+      if (dom && (dom === input || dom.contains(input))) cmp = item;
+    });
+    if (cmp) {
+      if (cmp.setValue) cmp.setValue(value);
+      if (cmp.setRawValue) cmp.setRawValue(value);
+      fire(cmp, value);
+    }
+    const actual = String(input.value || "").replace(/\s+/g, "").replace(".", ",");
+    const expected = String(value || "").replace(/\s+/g, "").replace(".", ",");
+    return actual === expected;
+  };
+  const normalizeMoney = (value) => String(value || "")
+    .replace(/\s+/g, "")
+    .replace(/\u00a0/g, "")
+    .replace(",", ".")
+    .replace(/[^\d.]/g, "");
+  const normalizeText = (value) => String(value || "").replace(/\s+/g, "").trim();
+  const setByInputName = (name, value, isMoney = false) => {
+    if (!value) return false;
+    let changed = false;
+    eachCmp((cmp) => {
+      try {
+        if (cmp.name !== name) return;
+        if (cmp.setValue) cmp.setValue(value);
+        if (cmp.setRawValue) cmp.setRawValue(value);
+        if (cmp.validate) cmp.validate();
+        fire(cmp, value);
+      } catch (e) {}
+    });
+    const inputs = Array.from(document.querySelectorAll(`input[name="${name}"], textarea[name="${name}"]`))
+      .filter((input) => !input.disabled && visible(input));
+    for (const input of inputs) {
+      input.classList.remove("x-form-empty-field");
+      input.value = value;
+      input.setAttribute("value", value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new Event("blur", { bubbles: true }));
+      changed = true;
+    }
+    const expected = isMoney ? normalizeMoney(value) : normalizeText(value);
+    return changed && inputs.some((input) => {
+      const actual = isMoney ? normalizeMoney(input.value) : normalizeText(input.value);
+      return actual === expected;
+    });
+  };
+  const findInputNearLabel = (labelPattern) => {
+    const win = letterWindow();
+    if (!win) return null;
+    const nodes = Array.from(win.querySelectorAll("label, td, div, span"));
+    for (const node of nodes) {
+      const text = norm(node.innerText || node.textContent || "");
+      if (!labelPattern.test(text)) continue;
+      const containers = [
+        node.closest("tr"),
+        node.parentElement,
+        node.parentElement && node.parentElement.parentElement,
+        node.parentElement && node.parentElement.parentElement && node.parentElement.parentElement.parentElement,
+      ].filter(Boolean);
+      for (const container of containers) {
+        const input = container.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled])");
+        if (input) return input;
+      }
+      let cursor = node;
+      for (let i = 0; i < 8 && cursor; i++) {
+        cursor = cursor.nextElementSibling;
+        const input = cursor && cursor.querySelector && cursor.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled])");
+        if (input) return input;
+      }
+      const labelRect = node.getBoundingClientRect();
+      const candidates = Array.from(win.querySelectorAll("input:not([type='hidden']):not([disabled]), textarea:not([disabled])"))
+        .filter((input) => visible(input))
+        .map((input) => {
+          const rect = input.getBoundingClientRect();
+          const sameLine = Math.abs((rect.top + rect.height / 2) - (labelRect.top + labelRect.height / 2));
+          const toRight = rect.left >= labelRect.left;
+          return { input, score: sameLine + (toRight ? 0 : 1000) + Math.max(0, labelRect.right - rect.left) };
+        })
+        .sort((a, b) => a.score - b.score);
+      if (candidates.length) return candidates[0].input;
+    }
+    return null;
+  };
+  const fire = (cmp, value) => {
+    if (cmp.fireEvent) {
+      cmp.fireEvent("change", cmp, value);
+      cmp.fireEvent("blur", cmp);
+    }
+    const dom = cmp.el && cmp.el.dom;
+    if (dom) {
+      dom.dispatchEvent(new Event("input", { bubbles: true }));
+      dom.dispatchEvent(new Event("change", { bubbles: true }));
+      dom.dispatchEvent(new Event("blur", { bubbles: true }));
+    }
+  };
+  const setField = (cmp, value) => {
+    if (!cmp || !value) return false;
+    let usedSetter = false;
+    if (cmp.setValue) cmp.setValue(value);
+    if (cmp.setValue) usedSetter = true;
+    if (cmp.setRawValue && /date|дата|срок|действ/i.test(labelOf(cmp))) {
+      cmp.setRawValue(value);
+      usedSetter = true;
+    }
+    if (!usedSetter) return false;
+    fire(cmp, value);
+    const actual = String(cmp.getRawValue ? cmp.getRawValue() : cmp.getValue ? cmp.getValue() : "").replace(/\s+/g, "").replace(".", ",");
+    const expected = String(value || "").replace(/\s+/g, "").replace(".", ",");
+    return actual === expected;
+  };
+  const setByCmpOrLabel = (cmp, labelPattern, value) => {
+    if (!value) return false;
+    if (setDomValue(findInputNearLabel(labelPattern), value)) return true;
+    return setField(cmp, value);
+  };
+  const result = { price_with_vat: false, validity_date: false };
+  for (let i = 0; i < 40; i++) {
+    if (!Array.from(document.querySelectorAll(".x-window, .x-window-body")).some((el) => visible(el) && letterText.test(String(el.innerText || el.textContent || "")))) {
+      await wait(250);
+      continue;
+    }
+    if (values.price_with_vat) {
+      const field = findField(
+        ["price", "price_nds", "price_with_nds", "price_with_vat", "total_price", "amount"],
+        [
+          /итогов.*цен.*с\s+ндс/i,
+          /стоимост.*с\s+ндс/i,
+          /цен.*предлож.*с\s+ндс/i,
+          /^price$|price_with/i,
+        ]
+      );
+      result.price_with_vat = setByInputName("price", values.price_with_vat, true)
+        || setByCmpOrLabel(field, /итоговая\s+цена,\s*с\s+ндс/i, values.price_with_vat);
+    }
+    if (values.validity_date) {
+      const field = findField(
+        ["validity_date", "valid_until", "date_valid", "date_end", "offer_valid_until", "offer_date"],
+        [
+          /настоящая\s+заявка.*действует\s+до/i,
+          /срок.*действ/i,
+          /действ.*до/i,
+          /оферт.*до/i,
+          /valid/i,
+        ]
+      );
+      result.validity_date = setByInputName("offer_valid", values.validity_date, false)
+        || setByCmpOrLabel(field, /настоящая\s+заявка\s+на\s+участие\s+в\s+опросе\s+действует\s+до/i, values.validity_date);
+    }
+    if ((!values.price_with_vat || result.price_with_vat)
+      && (!values.validity_date || result.validity_date)) {
+      callback({ ok: true, result });
+      return;
+    }
+    await wait(250);
+  }
+  callback({ ok: false, result });
+})();
+"""
+        result = self.driver.execute_async_script(script, values)
+        if not (isinstance(result, dict) and result.get("ok")):
+            raise RuntimeError(f"Не удалось заполнить коммерческие поля письма: {result}")
 
     def _upload_one_file(
         self,
