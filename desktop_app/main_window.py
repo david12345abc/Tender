@@ -78,6 +78,9 @@ from .worker import (
 )
 
 
+DELETED_TENDERS_FILE = Path("C:/ETP_GPB_Search_deleted_tenders.json")
+
+
 class LimitedWrapDelegate(QStyledItemDelegate):
     """Переносит длинный текст в таблице, но не даёт строкам занять весь экран."""
 
@@ -185,6 +188,7 @@ class MainWindow(QMainWindow):
         self._cache_save_enabled: bool = True
         self._platform_key: str = "gpb"
         self._api_debug_chunks: list[str] = []
+        self._deleted_tender_keys: set[str] = self._load_deleted_tender_keys()
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -923,7 +927,7 @@ class MainWindow(QMainWindow):
                 filters=self.sidebar.client_filters(),
             )
             return
-        procs = data.get("procedures") or []
+        procs = self._filter_deleted_procedures(data.get("procedures") or [])
         self.model.set_rows(procs)
         self._last_total = int(data.get("total") or len(procs))
         self._current_start = len(procs)
@@ -1482,6 +1486,7 @@ class MainWindow(QMainWindow):
     @Slot(list, int, int)
     def _on_batch_loaded(self, procs: list, start: int, total: int) -> None:
         self._last_total = total or self._last_total
+        procs = self._filter_deleted_procedures(procs)
         if total:
             processed = min(max(start, 0), total)
             self.progress.setRange(0, total)
@@ -1583,7 +1588,81 @@ class MainWindow(QMainWindow):
             "Копировать ИНН организатора",
             lambda: QApplication.clipboard().setText(str((proc or {}).get("org_inn") or "")),
         )
+        menu.addSeparator()
+        delete_action = menu.addAction("Удалить тендер")
+        delete_action.triggered.connect(lambda checked=False, p=proc: self._delete_tender(p))
         menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _procedure_delete_key(self, proc: dict[str, Any]) -> str:
+        for key in ("id", "procedure_id", "registry_number", "procedure_number", "procedure_number2"):
+            value = str(proc.get(key) or "").strip()
+            if value:
+                return f"{self._platform_key}:{key}:{value}"
+        title = str(proc.get("title") or proc.get("name") or "").strip()
+        organizer = str(proc.get("organizer") or proc.get("org_name") or "").strip()
+        return f"{self._platform_key}:fallback:{title}|{organizer}"
+
+    def _load_deleted_tender_keys(self) -> set[str]:
+        try:
+            if not DELETED_TENDERS_FILE.exists():
+                return set()
+            data = json.loads(DELETED_TENDERS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                values = data.get("deleted") or []
+            else:
+                values = data
+            return {str(value) for value in values if str(value).strip()}
+        except Exception:
+            traceback.print_exc()
+            return set()
+
+    def _save_deleted_tender_keys(self) -> bool:
+        try:
+            payload = {
+                "saved_at": datetime.now().isoformat(timespec="seconds"),
+                "deleted": sorted(self._deleted_tender_keys),
+            }
+            DELETED_TENDERS_FILE.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            return True
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Не удалось сохранить удаление",
+                f"Список удалённых тендеров не удалось записать на диск C:/.\n\n"
+                f"Путь: {DELETED_TENDERS_FILE}\n\n"
+                f"Подробности: {e}",
+            )
+            return False
+
+    def _filter_deleted_procedures(self, procs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not self._deleted_tender_keys:
+            return procs
+        return [proc for proc in procs if self._procedure_delete_key(proc) not in self._deleted_tender_keys]
+
+    def _delete_tender(self, proc: dict[str, Any]) -> None:
+        key = self._procedure_delete_key(proc)
+        title = str(proc.get("title") or proc.get("name") or proc.get("registry_number") or "этот тендер")
+        answer = QMessageBox.question(
+            self,
+            "Удалить тендер",
+            f"Удалить тендер из таблицы и скрывать его при следующих поисках?\n\n{title}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._deleted_tender_keys.add(key)
+        if not self._save_deleted_tender_keys():
+            return
+        self.model.set_rows(self._filter_deleted_procedures(self.model.rows()))
+        self.proxy.refresh_page()
+        self._refresh_counter()
+        self._schedule_table_row_resize()
+        self._schedule_cache_save()
+        self.status_msg.setText(f"Тендер удалён. Список удалённых сохранён: {DELETED_TENDERS_FILE}")
 
     def _open_in_browser(self, proc: Optional[dict[str, Any]]) -> None:
         if not proc:

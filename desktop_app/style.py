@@ -128,14 +128,14 @@ QLabel {
 }
 
 QLineEdit, QComboBox, QDateEdit, QSpinBox, QDoubleSpinBox {
-    padding: 7px 9px;
+    padding: 9px 10px;
     border: 1px solid #27365f;
     border-radius: 6px;
     background-color: #111827;
     color: #e9edff;
     selection-background-color: #1d4ed8;
     selection-color: #ffffff;
-    min-height: 32px;
+    min-height: 38px;
 }
 QLineEdit:focus, QComboBox:focus, QDateEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #3b82f6;
