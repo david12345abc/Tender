@@ -6,6 +6,16 @@ from typing import Iterable
 
 from .constants import KEYWORDS_FILE, bundled_keywords_template_path
 
+USER_KEYWORDS_FILE = Path("C:/ETP_GPB_Search_keywords.txt")
+
+
+def _resolve_path(path: Path | None) -> Path:
+    """Каталог для записи ключевых слов всегда локальный (C:/),
+    чтобы не требовать доступа к сетевой папке приложения."""
+    if path is None:
+        return USER_KEYWORDS_FILE
+    return path
+
 DEFAULT_KEYWORDS_TEXT = """[x] ультразвуковой
 [x] кориолисовый
 [x] массовый
@@ -193,15 +203,22 @@ def parse_keyword_items(text: str) -> list[tuple[bool, str]]:
     return items
 
 
-def _read_keywords_text(path: Path = KEYWORDS_FILE) -> str:
-    """Читает внешний файл, шаблон из сборки или встроенный список."""
-    if path.exists():
-        try:
-            return path.read_text(encoding="utf-8")
-        except OSError:
-            pass
+def _read_keywords_text(path: Path | None = None) -> str:
+    """Читает локальный файл пользователя, общий файл рядом с приложением,
+    шаблон из сборки или встроенный список."""
+    candidates: list[Path] = []
+    user_path = _resolve_path(path)
+    candidates.append(user_path)
+    if user_path != KEYWORDS_FILE:
+        candidates.append(KEYWORDS_FILE)
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                return candidate.read_text(encoding="utf-8")
+            except OSError:
+                continue
     template = bundled_keywords_template_path()
-    if template is not None and template.resolve() != path.resolve():
+    if template is not None:
         try:
             return template.read_text(encoding="utf-8")
         except OSError:
@@ -209,30 +226,35 @@ def _read_keywords_text(path: Path = KEYWORDS_FILE) -> str:
     return DEFAULT_KEYWORDS_TEXT
 
 
-def load_keywords(path: Path = KEYWORDS_FILE) -> list[str]:
+def load_keywords(path: Path | None = None) -> list[str]:
     return parse_keywords(_read_keywords_text(path))
 
 
-def load_keyword_items(path: Path = KEYWORDS_FILE) -> list[tuple[bool, str]]:
+def load_keyword_items(path: Path | None = None) -> list[tuple[bool, str]]:
     return parse_keyword_items(_read_keywords_text(path))
 
 
-def save_keywords(keywords: Iterable[str], path: Path = KEYWORDS_FILE) -> None:
+def save_keywords(keywords: Iterable[str], path: Path | None = None) -> None:
     clean = [(True, keyword) for keyword in parse_keywords("\n".join(keywords))]
     save_keyword_items(clean, path)
 
 
 def save_keyword_items(
     items: Iterable[tuple[bool, str]],
-    path: Path = KEYWORDS_FILE,
+    path: Path | None = None,
 ) -> None:
+    target = _resolve_path(path)
     clean = parse_keyword_items(
         "\n".join(f"[{'x' if enabled else ' '}] {keyword}" for enabled, keyword in items)
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
     lines = [f"[{'x' if enabled else ' '}] {keyword}" for enabled, keyword in clean]
-    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
-def keywords_as_text(path: Path = KEYWORDS_FILE) -> str:
+def keywords_as_text(path: Path | None = None) -> str:
     return _read_keywords_text(path)
+
+
+def user_keywords_path() -> Path:
+    return USER_KEYWORDS_FILE

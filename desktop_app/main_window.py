@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QStyle,
     QStyledItemDelegate,
+    QToolButton,
     QStyleOptionViewItem,
     QVBoxLayout,
     QWidget,
@@ -265,27 +266,44 @@ class MainWindow(QMainWindow):
         main_area_layout.setContentsMargins(14, 12, 14, 10)
         main_area_layout.setSpacing(10)
 
-        # Верхняя полоска со счётчиком
+        self.cache_banner = QFrame()
+        self.cache_banner.setObjectName("CacheBanner")
+        cache_layout = QHBoxLayout(self.cache_banner)
+        cache_layout.setContentsMargins(16, 10, 10, 10)
+        cache_layout.setSpacing(10)
+        self.cache_banner_icon = QLabel("ⓘ")
+        self.cache_banner_icon.setObjectName("CacheBannerIcon")
+        cache_layout.addWidget(self.cache_banner_icon)
+        self.lbl_counter = QLabel("Данных нет. Нажмите «Поиск».")
+        self.lbl_counter.setObjectName("CacheBannerText")
+        cache_layout.addWidget(self.lbl_counter, 1)
+        self.btn_cache_dismiss = QToolButton()
+        self.btn_cache_dismiss.setObjectName("CacheBannerClose")
+        self.btn_cache_dismiss.setText("×")
+        self.btn_cache_dismiss.setCursor(Qt.PointingHandCursor)
+        self.btn_cache_dismiss.clicked.connect(lambda: self.cache_banner.setVisible(False))
+        cache_layout.addWidget(self.btn_cache_dismiss)
+        self.cache_banner.setVisible(False)
+        main_area_layout.addWidget(self.cache_banner)
+
         actions = QFrame()
         actions.setObjectName("ActionsBar")
         actions_layout = QHBoxLayout(actions)
-        actions_layout.setContentsMargins(12, 9, 12, 9)
+        actions_layout.setContentsMargins(2, 4, 2, 4)
         actions_layout.setSpacing(8)
-
-        self.lbl_counter = QLabel("Данных нет. Нажмите «Поиск».")
-        self.lbl_counter.setStyleSheet("color: #dce4ff; font-weight: 600;")
-        actions_layout.addWidget(self.lbl_counter)
         actions_layout.addStretch(1)
 
-        self.btn_export = QPushButton("Экспорт в XLSX…")
+        self.btn_export = QPushButton("Экспорт в XLSX")
+        self.btn_export.setObjectName("Ghost")
         self.btn_export.setIcon(QIcon(str(asset_path("xls.png"))))
-        self.btn_export.setIconSize(QSize(18, 18))
+        self.btn_export.setIconSize(QSize(16, 16))
         self.btn_export.clicked.connect(self._on_export)
         actions_layout.addWidget(self.btn_export)
 
-        self.btn_save_api_debug = QPushButton("Сохранить API-логи…")
+        self.btn_save_api_debug = QPushButton("Сохранить API-логи")
+        self.btn_save_api_debug.setObjectName("Ghost")
         self.btn_save_api_debug.setIcon(QIcon(str(asset_path("log.png"))))
-        self.btn_save_api_debug.setIconSize(QSize(18, 18))
+        self.btn_save_api_debug.setIconSize(QSize(16, 16))
         self.btn_save_api_debug.setToolTip("Сохранить запросы, headers, body, token и ответы API в файл")
         self.btn_save_api_debug.clicked.connect(self._save_api_debug)
         self.btn_save_api_debug.setEnabled(False)
@@ -403,6 +421,8 @@ class MainWindow(QMainWindow):
         content_layout.setSpacing(10)
 
         left = QWidget()
+        left.setMinimumWidth(0)
+        left.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
@@ -413,6 +433,7 @@ class MainWindow(QMainWindow):
         if hasattr(self.sidebar, "extra_scroll"):
             self.sidebar.layout().removeWidget(self.sidebar.extra_scroll)
             self.sidebar.extra_scroll.setParent(content)
+            self.sidebar.extra_scroll.setFixedWidth(410)
             content_layout.addWidget(self.sidebar.extra_scroll, 0)
 
         cl.addWidget(content, 1)
@@ -1879,6 +1900,8 @@ class MainWindow(QMainWindow):
                 f"Найдено {found}. Показано {visible} на странице."
             )
             self.lbl_page.setText(f"Страница {current_page} из {page_count}")
+        if loaded > 0 and hasattr(self, "cache_banner"):
+            self.cache_banner.setVisible(False)
         self._update_empty_state()
         self._update_controls()
 
@@ -1942,10 +1965,12 @@ class MainWindow(QMainWindow):
                 f"Есть сохранённый результат: {meta['count']} процедур от {saved_at}. "
                 "Нажмите «Поиск», чтобы выбрать действие."
             )
+            self.cache_banner.setVisible(True)
             self.status_msg.setText(
                 "Готов. Найден кэш — выбор предложат при нажатии «Поиск»."
             )
         else:
+            self.cache_banner.setVisible(False)
             self.status_msg.setText("Готов. Нажмите «Поиск».")
 
     # --------------- закрытие
