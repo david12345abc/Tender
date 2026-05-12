@@ -389,6 +389,7 @@ class TektorgRnClient(EtpClient):
         self._remove_duplicate_uploaded_files(progress=progress)
         commercial_terms: CommercialTerms | None = None
         supplier_characteristic: SupplierCharacteristic | None = None
+        commercial_upload: dict[str, Any] = {}
         if not errors:
             try:
                 supplier_characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
@@ -404,6 +405,13 @@ class TektorgRnClient(EtpClient):
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
             self._ensure_commercial_tab_active()
+            try:
+                commercial_upload = self._upload_commercial_documents(technical_dir, progress=progress)
+                if commercial_upload.get("errors"):
+                    errors.extend(str(error) for error in commercial_upload.get("errors") or [])
+            except Exception as e:
+                errors.append(f"Коммерческие документы: {e}")
+        if not errors:
             if progress:
                 progress("Открываю окно формирования письма о подаче заявки...")
             self._open_application_letter_modal()
@@ -421,6 +429,7 @@ class TektorgRnClient(EtpClient):
             "errors": errors,
             "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
             "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
+            "commercial_upload": commercial_upload,
         }
 
     def _switch_to_application_tab(
@@ -850,6 +859,56 @@ const callback = arguments[arguments.length - 1];
         progress: Optional[Callable[[str], None]] = None,
     ) -> SupplierCharacteristic:
         return classify_supplier_characteristic(technical_dir, progress=progress)
+
+    def _upload_commercial_documents(
+        self,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        commercial_dir = technical_dir.parent / "Коммерческие"
+        files = [
+            path for path in sorted(commercial_dir.iterdir(), key=lambda item: item.name.casefold())
+            if path.is_file() and not path.name.startswith("~$")
+        ] if commercial_dir.exists() else []
+        if not files:
+            return {"uploaded": [], "errors": [f"В папке нет коммерческих файлов: {commercial_dir}"]}
+
+        panel_id = "application_docs_com_1"
+        self._clear_uploaded_files(
+            progress=progress,
+            upload_panel_id=panel_id,
+            description="коммерческий",
+        )
+
+        uploaded: list[str] = []
+        errors: list[str] = []
+        for index, path in enumerate(files, start=1):
+            if progress:
+                progress(f"Загружаю коммерческий файл {index}/{len(files)}: {path.name}")
+            try:
+                self._upload_one_file(
+                    path,
+                    progress=progress,
+                    upload_panel_id=panel_id,
+                    area_name="коммерческой части заявки",
+                )
+                self._remove_duplicate_uploaded_files(
+                    progress=progress,
+                    upload_panel_id=panel_id,
+                    description="коммерческих документов",
+                )
+                if not self._is_uploaded_file_listed(path, upload_panel_id=panel_id):
+                    raise RuntimeError("файл не появился в списке коммерческих документов")
+                uploaded.append(str(path))
+            except Exception as e:
+                errors.append(f"{path.name}: {e}")
+                break
+        self._remove_duplicate_uploaded_files(
+            progress=progress,
+            upload_panel_id=panel_id,
+            description="коммерческих документов",
+        )
+        return {"uploaded": uploaded, "errors": errors}
 
     def _select_supplier_characteristic(self, label: str) -> None:
         assert self.driver is not None
@@ -1315,6 +1374,8 @@ const values = arguments[0] || {};
         self,
         path: Path,
         progress: Optional[Callable[[str], None]] = None,
+        upload_panel_id: str = "application_docs_tech_1",
+        area_name: str = "технической части заявки",
     ) -> None:
         assert self.driver is not None
 
@@ -1322,8 +1383,8 @@ const values = arguments[0] || {};
         if progress:
             progress(f"Открываю штатный выбор файла: {path.name}")
         try:
-            self._upload_one_file_via_dialog(path)
-            if self._wait_after_file_selection(path):
+            self._upload_one_file_via_dialog(path, upload_panel_id=upload_panel_id)
+            if self._wait_after_file_selection(path, upload_panel_id=upload_panel_id):
                 return
             raise RuntimeError("файл не появился в списке после штатной загрузки")
         except Exception as e:
@@ -1335,7 +1396,7 @@ const values = arguments[0] || {};
         try:
             if progress:
                 progress(f"Пробую резервную загрузку через input: {path.name}")
-            input_element = self._find_tektorg_file_input()
+            input_element = self._find_tektorg_file_input(upload_panel_id=upload_panel_id, area_name=area_name)
             self.driver.execute_script(
                 """
 const input = arguments[0];
@@ -1366,7 +1427,7 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
                     progress(f"DevTools-загрузка не сработала, пробую Selenium send_keys: {cdp_error}")
                 input_element.send_keys(str(path))
             self._dispatch_file_input_events(input_element)
-            if self._wait_after_file_selection(path):
+            if self._wait_after_file_selection(path, upload_panel_id=upload_panel_id):
                 return
             raise RuntimeError("Сайт не показал файл в списке после выбора через input.")
         except Exception as e:
@@ -1376,15 +1437,27 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
 
         raise RuntimeError(f"Файл не загрузился. Ошибка штатной загрузки: {dialog_error}. Ошибка input: {direct_error}")
 
-    def _find_tektorg_file_input(self):
+    def _find_tektorg_file_input(
+        self,
+        upload_panel_id: str = "application_docs_tech_1",
+        area_name: str = "технической части заявки",
+    ):
         assert self.driver is not None
 
         deadline = time.time() + 25
         while time.time() < deadline:
             input_element = self.driver.execute_script(
                 r"""
+const uploadPanelId = arguments[0];
 const inputs = Array.from(document.querySelectorAll("input.x-form-file[type='file'], input[type='file']"));
 if (!inputs.length) return null;
+if (window.Ext && Ext.getCmp) {
+  const upload = Ext.getCmp(uploadPanelId);
+  const uploadPanel = upload && upload.ids ? Ext.getCmp(upload.ids.upload_panel_id) : null;
+  const uploadDom = uploadPanel && uploadPanel.el && uploadPanel.el.dom;
+  const direct = uploadDom && uploadDom.querySelector("input.x-form-file[type='file'], input[type='file']");
+  if (direct && !direct.disabled) return direct;
+}
 const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "");
 const visible = (el) => {
   if (!el) return false;
@@ -1405,8 +1478,10 @@ let bestScore = -1;
 for (const input of inputs) {
   const text = ancestorText(input);
   let score = 0;
-  if (/Документы\s+технической\s+части\s+заявки/i.test(text)) score += 100;
-  if (/Техническая\s+часть/i.test(text)) score += 60;
+  if (/Документы\s+технической\s+части\s+заявки/i.test(text) && uploadPanelId.includes("tech")) score += 100;
+  if (/Документы\s+коммерческой\s+части\s+заявки/i.test(text) && uploadPanelId.includes("com")) score += 100;
+  if (/Техническая\s+часть/i.test(text) && uploadPanelId.includes("tech")) score += 60;
+  if (/Коммерческая\s+часть/i.test(text) && uploadPanelId.includes("com")) score += 60;
   if (/Выбрать\s+и\s+загрузить\s+файл/i.test(text)) score += 40;
   if ((input.className || "").toString().includes("x-form-file")) score += 20;
   if (visible(input)) score += 10;
@@ -1417,12 +1492,13 @@ for (const input of inputs) {
   }
 }
 return best;
-"""
+""",
+                upload_panel_id,
             )
             if input_element is not None:
                 return input_element
             time.sleep(0.3)
-        raise RuntimeError("На странице не найдено поле выбора файла input.x-form-file.")
+        raise RuntimeError(f"На странице не найдено поле выбора файла для {area_name}.")
 
     def _set_file_input_files_with_cdp(self, input_element, path: Path) -> None:
         assert self.driver is not None
@@ -1480,7 +1556,11 @@ if (window.Ext) {
             input_element,
         )
 
-    def _wait_after_file_selection(self, path: Path) -> bool:
+    def _wait_after_file_selection(
+        self,
+        path: Path,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> bool:
         assert self.driver is not None
         marker = self._normalize_uploaded_filename(path.name)
         deadline = time.time() + 18
@@ -1488,7 +1568,14 @@ if (window.Ext) {
             try:
                 info = self.driver.execute_script(
                     r"""
-const bodyText = String(document.body && document.body.innerText || "");
+const uploadPanelId = arguments[0];
+let root = document.body;
+if (window.Ext && Ext.getCmp) {
+  const upload = Ext.getCmp(uploadPanelId);
+  const panel = upload && upload.ids ? Ext.getCmp(upload.ids.uploaded_files_id) : null;
+  if (panel && panel.el && panel.el.dom) root = panel.el.dom;
+}
+const bodyText = String(root && root.innerText || root && root.textContent || "");
 const masks = Array.from(document.querySelectorAll(".x-mask-loading, .x-mask-msg, .x-mask"))
   .filter((el) => {
     const style = window.getComputedStyle(el);
@@ -1496,7 +1583,8 @@ const masks = Array.from(document.querySelectorAll(".x-mask-loading, .x-mask-msg
   })
   .map((el) => String(el.innerText || el.textContent || ""));
 return { bodyText, masks };
-"""
+""",
+                    upload_panel_id,
                 )
                 if isinstance(info, dict):
                     body_text = str(info.get("bodyText") or "")
@@ -1510,27 +1598,45 @@ return { bodyText, masks };
             except Exception:
                 pass
             time.sleep(0.4)
-        return self._is_uploaded_file_listed(path)
+        return self._is_uploaded_file_listed(path, upload_panel_id=upload_panel_id)
 
-    def _is_uploaded_file_listed(self, path: Path) -> bool:
+    def _is_uploaded_file_listed(
+        self,
+        path: Path,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> bool:
         marker = self._normalize_uploaded_filename(path.name)
         if not marker:
             return False
-        return marker in {self._normalize_uploaded_filename(name) for name in self._uploaded_file_names()}
+        return marker in {
+            self._normalize_uploaded_filename(name)
+            for name in self._uploaded_file_names(upload_panel_id=upload_panel_id)
+        }
 
-    def _uploaded_file_names(self) -> list[str]:
-        items = self._uploaded_file_items()
+    def _uploaded_file_names(
+        self,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> list[str]:
+        items = self._uploaded_file_items(upload_panel_id=upload_panel_id)
         if items:
             return [str(item.get("name") or "") for item in items if str(item.get("name") or "").strip()]
         assert self.driver is not None
         try:
             names = self.driver.execute_script(
                 r"""
-const anchors = Array.from(document.querySelectorAll("a"));
+const uploadPanelId = arguments[0];
+let root = document;
+if (window.Ext && Ext.getCmp) {
+  const upload = Ext.getCmp(uploadPanelId);
+  const panel = upload && upload.ids ? Ext.getCmp(upload.ids.uploaded_files_id) : null;
+  if (panel && panel.el && panel.el.dom) root = panel.el.dom;
+}
+const anchors = Array.from(root.querySelectorAll("a"));
 return anchors
   .map((a) => String(a.innerText || a.textContent || "").trim())
   .filter((text) => /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)$/i.test(text));
-"""
+""",
+                upload_panel_id,
             )
         except Exception:
             return []
@@ -1544,12 +1650,16 @@ return anchors
         value = re.sub(r"[_\W]+", "", value, flags=re.UNICODE)
         return value
 
-    def _uploaded_file_items(self) -> list[dict[str, Any]]:
+    def _uploaded_file_items(
+        self,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> list[dict[str, Any]]:
         assert self.driver is not None
         try:
             items = self.driver.execute_script(
                 r"""
-const upload = Ext && Ext.getCmp ? Ext.getCmp("application_docs_tech_1") : null;
+const uploadPanelId = arguments[0];
+const upload = Ext && Ext.getCmp ? Ext.getCmp(uploadPanelId) : null;
 const panel = upload && upload.ids ? Ext.getCmp(upload.ids.uploaded_files_id) : null;
 if (!panel || !panel.items) return [];
 const result = [];
@@ -1566,7 +1676,8 @@ panel.items.each(function(item) {
   });
 });
 return result;
-"""
+""",
+                upload_panel_id,
             )
         except Exception:
             return []
@@ -1577,11 +1688,13 @@ return result;
     def _remove_duplicate_uploaded_files(
         self,
         progress: Optional[Callable[[str], None]] = None,
+        upload_panel_id: str = "application_docs_tech_1",
+        description: str = "технических документов",
     ) -> int:
         assert self.driver is not None
         removed = 0
         while True:
-            duplicate = self._next_duplicate_uploaded_file()
+            duplicate = self._next_duplicate_uploaded_file(upload_panel_id=upload_panel_id)
             if not duplicate:
                 break
             name = str(duplicate.get("name") or "файл")
@@ -1590,25 +1703,27 @@ return result;
                 break
             if progress:
                 progress(f"Удаляю дубль загруженного файла: {name}")
-            before_count = len(self._uploaded_file_names())
-            deleted = self._delete_uploaded_file_component(component_id)
+            before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
+            deleted = self._delete_uploaded_file_component(component_id, upload_panel_id=upload_panel_id)
             if not deleted:
                 break
-            if not self._wait_uploaded_count_less_than(before_count):
+            if not self._wait_uploaded_count_less_than(before_count, upload_panel_id=upload_panel_id):
                 raise RuntimeError(f"Сайт не удалил дубль файла: {name}")
             removed += 1
         if removed and progress:
-            progress(f"Удалено дублей технических документов: {removed}")
+            progress(f"Удалено дублей {description}: {removed}")
         return removed
 
     def _clear_uploaded_files(
         self,
         progress: Optional[Callable[[str], None]] = None,
+        upload_panel_id: str = "application_docs_tech_1",
+        description: str = "технический",
     ) -> int:
         assert self.driver is not None
         removed = 0
         while True:
-            item = self._first_uploaded_file()
+            item = self._first_uploaded_file(upload_panel_id=upload_panel_id)
             if not item:
                 break
             name = str(item.get("name") or "файл")
@@ -1616,20 +1731,23 @@ return result;
             if not component_id:
                 break
             if progress:
-                progress(f"Очищаю ранее загруженный технический файл: {name}")
-            before_count = len(self._uploaded_file_names())
-            deleted = self._delete_uploaded_file_component(component_id)
+                progress(f"Очищаю ранее загруженный {description} файл: {name}")
+            before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
+            deleted = self._delete_uploaded_file_component(component_id, upload_panel_id=upload_panel_id)
             if not deleted:
                 break
-            if not self._wait_uploaded_count_less_than(before_count):
+            if not self._wait_uploaded_count_less_than(before_count, upload_panel_id=upload_panel_id):
                 raise RuntimeError(f"Сайт не удалил ранее загруженный файл: {name}")
             removed += 1
         if removed and progress:
-            progress(f"Очищено ранее загруженных технических файлов: {removed}")
+            progress(f"Очищено ранее загруженных файлов ({description}): {removed}")
         return removed
 
-    def _next_duplicate_uploaded_file(self) -> Optional[dict[str, str]]:
-        items = self._uploaded_file_items()
+    def _next_duplicate_uploaded_file(
+        self,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> Optional[dict[str, str]]:
+        items = self._uploaded_file_items(upload_panel_id=upload_panel_id)
         grouped: dict[str, list[dict[str, str]]] = {}
         for item in items:
             if not isinstance(item, dict):
@@ -1650,8 +1768,11 @@ return result;
                 return duplicates[0]
         return None
 
-    def _first_uploaded_file(self) -> Optional[dict[str, str]]:
-        items = self._uploaded_file_items()
+    def _first_uploaded_file(
+        self,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> Optional[dict[str, str]]:
+        items = self._uploaded_file_items(upload_panel_id=upload_panel_id)
         if not items:
             return None
         first = items[0]
@@ -1662,20 +1783,26 @@ return result;
             "componentId": str(first.get("componentId") or ""),
         }
 
-    def _delete_uploaded_file_component(self, component_id: str) -> bool:
+    def _delete_uploaded_file_component(
+        self,
+        component_id: str,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> bool:
         assert self.driver is not None
         try:
             return bool(
                 self.driver.execute_script(
                     r"""
 const componentId = arguments[0];
-const upload = Ext && Ext.getCmp ? Ext.getCmp("application_docs_tech_1") : null;
+const uploadPanelId = arguments[1];
+const upload = Ext && Ext.getCmp ? Ext.getCmp(uploadPanelId) : null;
 const item = Ext && Ext.getCmp ? Ext.getCmp(componentId) : null;
 if (!upload || !item || !item.file || !upload.deleteFile) return false;
 upload.deleteFile(item.file);
 return true;
 """,
                     component_id,
+                    upload_panel_id,
                 )
             )
         except Exception:
@@ -1715,21 +1842,46 @@ const callback = arguments[arguments.length - 1];
         except Exception:
             pass
 
-    def _wait_uploaded_count_less_than(self, before_count: int) -> bool:
+    def _wait_uploaded_count_less_than(
+        self,
+        before_count: int,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> bool:
         deadline = time.time() + 12
         while time.time() < deadline:
-            if len(self._uploaded_file_names()) < before_count:
+            if len(self._uploaded_file_names(upload_panel_id=upload_panel_id)) < before_count:
                 return True
             time.sleep(0.3)
         return False
 
-    def _upload_one_file_via_dialog(self, path: Path) -> None:
+    def _upload_one_file_via_dialog(
+        self,
+        path: Path,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> None:
         assert self.driver is not None
         clicked = self.driver.execute_async_script(
             r"""
 const callback = arguments[arguments.length - 1];
+const uploadPanelId = arguments[0];
 (async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const upload = window.Ext && Ext.getCmp ? Ext.getCmp(uploadPanelId) : null;
+  const uploadPanel = upload && upload.ids ? Ext.getCmp(upload.ids.upload_panel_id) : null;
+  const uploadDom = uploadPanel && uploadPanel.el && uploadPanel.el.dom;
+  if (uploadDom) {
+    const button = Array.from(uploadDom.querySelectorAll("button, input[type=button], a, span, div"))
+      .find((el) => /Выбрать\s+и\s+загрузить\s+файл/i.test(String(el.innerText || el.value || el.textContent || "")));
+    if (button) {
+      try {
+        button.scrollIntoView({ block: "center", inline: "center" });
+        button.click();
+        await wait(700);
+        callback(true);
+        return;
+      } catch (e) {}
+    }
+  }
   for (let i = 0; i < 40; i++) {
     const nodes = Array.from(document.querySelectorAll("button, input[type=button], a, span, div"));
     const button = nodes.find((el) => /Выбрать\s+и\s+загрузить\s+файл/i.test(String(el.innerText || el.value || el.textContent || "")));
@@ -1748,7 +1900,8 @@ const callback = arguments[arguments.length - 1];
   }
   callback(false);
 })();
-"""
+""",
+            upload_panel_id,
         )
         if not clicked:
             raise RuntimeError("Не найдена кнопка «Выбрать и загрузить файл».")

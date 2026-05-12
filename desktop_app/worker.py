@@ -581,6 +581,10 @@ def make_tektorg_technical_upload_task(
         supplier = result.get("supplier_characteristic") or {}
         if supplier.get("label"):
             details += f"\n\nХарактеристика поставщика: {supplier['label']}"
+        commercial_upload = result.get("commercial_upload") or {}
+        commercial_uploaded = len(commercial_upload.get("uploaded") or [])
+        if commercial_uploaded:
+            details += f"\n\nКоммерческие файлы загружены: {commercial_uploaded}"
         if errors:
             details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
         w.session.emit(
