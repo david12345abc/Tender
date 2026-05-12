@@ -392,6 +392,7 @@ class TektorgRnClient(EtpClient):
             if progress:
                 progress("Открываю окно формирования письма о подаче заявки...")
             self._open_application_letter_modal()
+            self._fill_application_letter_defaults()
         return {"uploaded": uploaded, "errors": errors}
 
     def _switch_to_application_tab(
@@ -704,6 +705,106 @@ const callback = arguments[arguments.length - 1];
         ok = self.driver.execute_async_script(script)
         if not ok:
             raise RuntimeError("Не удалось открыть окно формирования письма о подаче заявки.")
+
+    def _fill_application_letter_defaults(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const values = {
+    number: "1",
+    nds_name: "22%",
+    other_price_text: "Доставка, упаковка, таможенные платежи, другие обязательные расходы.",
+  };
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const modalOpened = () => Array.from(document.querySelectorAll(".x-window, .x-window-body"))
+    .some((el) => visible(el) && /Письмо\s+о\s+подаче\s+заявки/i.test(String(el.innerText || el.textContent || "")));
+  const inLetterWindow = (cmp) => {
+    const el = cmp && cmp.el && cmp.el.dom;
+    const win = el && el.closest && el.closest(".x-window");
+    return !!(win && visible(win) && /Письмо\s+о\s+подаче\s+заявки/i.test(String(win.innerText || win.textContent || "")));
+  };
+  const findField = (name) => {
+    if (window.Ext && Ext.ComponentMgr && Ext.ComponentMgr.all) {
+      let found = null;
+      Ext.ComponentMgr.all.each(function(cmp) {
+        if (!found && cmp.name === name && !cmp.hidden && !cmp.disabled && inLetterWindow(cmp)) found = cmp;
+      });
+      if (found) return found;
+    }
+    return null;
+  };
+  const setComboByDisplayName = (name, displayValue) => {
+    const cmp = findField(name);
+    if (!cmp || !cmp.store) return false;
+    let record = null;
+    try {
+      cmp.store.each(function(item) {
+        const value = String(item.get ? item.get(cmp.displayField || "name") : item.data && item.data.name || "");
+        if (!record && value === displayValue) record = item;
+      });
+    } catch (e) {}
+    if (!record) return false;
+    const value = record.get ? record.get(cmp.valueField || "id") : record.data && record.data.id;
+    if (cmp.setValue) cmp.setValue(value);
+    if (cmp.setRawValue) cmp.setRawValue(displayValue);
+    if (cmp.fireEvent) {
+      cmp.fireEvent("select", cmp, record, 0);
+      cmp.fireEvent("change", cmp, value);
+      cmp.fireEvent("blur", cmp);
+    }
+    if (cmp.el && cmp.el.dom) {
+      cmp.el.dom.dispatchEvent(new Event("input", { bubbles: true }));
+      cmp.el.dom.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return String(cmp.getRawValue ? cmp.getRawValue() : displayValue) === displayValue;
+  };
+  const setField = (name, value) => {
+    const cmp = findField(name);
+    if (cmp) {
+      if (cmp.setValue) cmp.setValue(value);
+      if (cmp.fireEvent) {
+        cmp.fireEvent("change", cmp, value);
+        cmp.fireEvent("blur", cmp);
+      }
+      if (cmp.el && cmp.el.dom) {
+        cmp.el.dom.dispatchEvent(new Event("input", { bubbles: true }));
+        cmp.el.dom.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return true;
+    }
+    const input = document.querySelector(`[name="${name}"]`);
+    if (!input) return false;
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    return true;
+  };
+  for (let i = 0; i < 40; i++) {
+    if (modalOpened()) {
+      const numberOk = setField("number", values.number);
+      const ndsOk = setComboByDisplayName("nds_id", values.nds_name);
+      const expensesOk = setField("other_price_text", values.other_price_text);
+      if (numberOk && ndsOk && expensesOk) {
+        callback(true);
+        return;
+      }
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script)
+        if not ok:
+            raise RuntimeError("Не удалось заполнить поля письма о подаче заявки.")
 
     def _upload_one_file(
         self,
