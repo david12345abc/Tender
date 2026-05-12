@@ -69,6 +69,7 @@ from .worker import (
     make_download_documents_task,
     make_search_task,
     make_tektorg_row_documents_task,
+    make_tektorg_technical_upload_task,
 )
 
 class MainWindow(QMainWindow):
@@ -80,6 +81,7 @@ class MainWindow(QMainWindow):
         self.client = TektorgRnClient()
         self.runner = TaskRunner(self)
         self.row_download_runner = TaskRunner(self)
+        self.technical_upload_runner = TaskRunner(self)
         self.model = ProcedureTableModel(self)
         self.proxy = ProcedureFilterProxy(self)
         self.proxy.setSourceModel(self.model)
@@ -1398,7 +1400,9 @@ class MainWindow(QMainWindow):
             f"Коммерческие: {commercial_count}\n"
             f"Технические: {technical_count}",
         )
-        self._open_application_create_tab()
+        application_url = self._open_application_create_tab()
+        if application_url:
+            self._start_technical_upload(application_url, folder / "Технические")
 
     def _bring_window_to_front(self) -> None:
         if self.isMinimized():
@@ -1490,7 +1494,7 @@ class MainWindow(QMainWindow):
             return ""
         return f"https://rn.tektorg.ru/index.php#com/applic/create/lot/{lot_id}/procedure/{proc_id}"
 
-    def _open_application_create_tab(self) -> None:
+    def _open_application_create_tab(self) -> str:
         try:
             url = self._application_create_url()
             if not url:
@@ -1499,10 +1503,10 @@ class MainWindow(QMainWindow):
                     "Не удалось открыть заявку",
                     "Не найден id процедуры или id лота для формирования ссылки на подачу заявки.",
                 )
-                return
+                return ""
             hwnd = self._bring_browser_to_front()
             if hwnd is None:
-                return
+                return ""
             time.sleep(0.35)
 
             import win32api
@@ -1533,8 +1537,30 @@ class MainWindow(QMainWindow):
             press_ctrl_key(ord("V"))
             time.sleep(0.25)
             press_key(win32con.VK_RETURN)
+            return url
         except Exception:
-            pass
+            return ""
+
+    def _start_technical_upload(self, application_url: str, technical_dir: Path) -> None:
+        if self.technical_upload_runner.is_running():
+            self.status_msg.setText("Технические файлы уже загружаются в форму заявки.")
+            return
+        fn = make_tektorg_technical_upload_task(self.client, application_url, technical_dir)
+        try:
+            self.technical_upload_runner.start(
+                fn,
+                on_progress=self._on_progress,
+                on_session=self._on_technical_upload_status,
+                on_error=self._on_error,
+            )
+        except Exception as e:
+            self._on_error(f"Не удалось запустить загрузку технических файлов: {e}")
+
+    @Slot(bool, str)
+    def _on_technical_upload_status(self, ok: bool, message: str) -> None:
+        self.status_msg.setText(message)
+        if not ok:
+            QMessageBox.warning(self, "Загрузка технических файлов", message)
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)
@@ -1715,6 +1741,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.row_download_runner.shutdown(wait_ms=2000)
+        except Exception:
+            pass
+        try:
+            self.technical_upload_runner.shutdown(wait_ms=2000)
         except Exception:
             pass
         try:

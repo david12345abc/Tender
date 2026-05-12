@@ -523,6 +523,61 @@ def make_tektorg_row_documents_task(
     return _run
 
 
+def make_tektorg_technical_upload_task(
+    client: EtpClient,
+    application_url: str,
+    technical_dir: Path,
+) -> Callable[[Worker], None]:
+    """Задача: загрузить технические файлы в форму заявки ТЭК-Торг."""
+
+    def _run(w: Worker) -> None:
+        if not application_url:
+            w.error.emit("Не сформирована ссылка на страницу подачи заявки.")
+            return
+        if not technical_dir.exists():
+            w.error.emit(f"Папка технических документов не найдена:\n{technical_dir}")
+            return
+
+        if not client.is_chrome_running():
+            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
+            try:
+                client.ensure_chrome(timeout=45)
+            except Exception as e:
+                w.error.emit(f"Не удалось запустить Chrome: {e}")
+                return
+
+        if client.driver is None:
+            w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        upload_fn = getattr(client, "upload_technical_documents", None)
+        if not callable(upload_fn):
+            w.error.emit("Для текущей площадки не подключена загрузка технических файлов.")
+            return
+
+        try:
+            result = upload_fn(application_url, technical_dir, progress=w.progress.emit)
+        except Exception as e:
+            w.error.emit(f"Не удалось загрузить технические файлы: {e}")
+            return
+
+        uploaded = len(result.get("uploaded") or [])
+        errors = result.get("errors") or []
+        details = ""
+        if errors:
+            details = "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
+        w.session.emit(
+            uploaded > 0 and not errors,
+            f"Технические файлы обработаны. Загружено: {uploaded}, ошибок: {len(errors)}.{details}",
+        )
+
+    return _run
+
+
 def make_analyze_procedure_task(
     client: EtpClient,
     procedures: list[dict],

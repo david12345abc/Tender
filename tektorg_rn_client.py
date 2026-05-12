@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable, Optional
 
@@ -345,6 +346,458 @@ class TektorgRnClient(EtpClient):
             "saved": saved,
             "errors": errors,
         }
+
+    def upload_technical_documents(
+        self,
+        application_url: str,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        """Загружает файлы технической части на странице создания заявки."""
+        assert self.driver is not None, "Сначала вызовите connect()"
+        files = [
+            path for path in sorted(technical_dir.iterdir(), key=lambda item: item.name.casefold())
+            if path.is_file() and not path.name.startswith("~$")
+        ]
+        if not files:
+            return {"uploaded": [], "errors": [f"В папке нет файлов: {technical_dir}"]}
+
+        if progress:
+            progress("Открываю вкладку подачи заявки для загрузки технических файлов...")
+        self._switch_to_application_tab(application_url, progress=progress)
+        if progress:
+            progress("Ожидаю блок технической части заявки...")
+        self._ensure_technical_tab_active()
+
+        uploaded: list[str] = []
+        errors: list[str] = []
+        for index, path in enumerate(files, start=1):
+            if self._is_uploaded_file_listed(path):
+                if progress:
+                    progress(f"Файл уже есть в заявке, пропускаю повторную загрузку: {path.name}")
+                uploaded.append(str(path))
+                continue
+
+            last_error = ""
+            for attempt in range(1, 4):
+                before_count = len(self._uploaded_file_names())
+                if progress:
+                    progress(f"Загружаю технический файл {index}/{len(files)}, попытка {attempt}/3: {path.name}")
+                try:
+                    self._upload_one_file(path, before_count=before_count, progress=progress)
+                    if self._is_uploaded_file_listed(path) or len(self._uploaded_file_names()) > before_count:
+                        uploaded.append(str(path))
+                        break
+                    last_error = "файл не появился в списке загруженных документов"
+                except Exception as e:
+                    last_error = str(e)
+                time.sleep(1.0)
+            else:
+                errors.append(f"{path.name}: {last_error or 'сайт не подтвердил загрузку'}")
+        return {"uploaded": uploaded, "errors": errors}
+
+    def _switch_to_application_tab(
+        self,
+        application_url: str,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        assert self.driver is not None
+        normalized = self._normalize_tektorg_url(application_url)
+
+        def is_target_url(url: str) -> bool:
+            current = self._normalize_tektorg_url(url)
+            return (
+                bool(current)
+                and (
+                    current == normalized
+                    or normalized in current
+                    or "/#com/applic/create/" in current
+                    or "#com/applic/create/" in current
+                )
+            )
+
+        deadline = time.time() + 18
+        while time.time() < deadline:
+            for handle in list(self.driver.window_handles):
+                try:
+                    self.driver.switch_to.window(handle)
+                    current = self.driver.current_url or ""
+                    if is_target_url(current):
+                        if progress:
+                            progress(f"Найдена вкладка заявки: {current}")
+                        return
+                except Exception:
+                    continue
+            time.sleep(0.3)
+
+        if progress:
+            progress("Вкладка заявки не найдена Selenium, открываю её через WebDriver...")
+        handles_before = set(self.driver.window_handles)
+        try:
+            self.driver.execute_script("window.open(arguments[0], '_blank');", application_url)
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                handles_after = set(self.driver.window_handles)
+                new_handles = [handle for handle in handles_after - handles_before]
+                if new_handles:
+                    self.driver.switch_to.window(new_handles[-1])
+                    break
+                time.sleep(0.2)
+            else:
+                self.driver.get(application_url)
+        except Exception:
+            self.driver.get(application_url)
+
+        if not is_target_url(self.driver.current_url or ""):
+            self.driver.get(application_url)
+        self._wait_for_application_url()
+
+    def _normalize_tektorg_url(self, url: str) -> str:
+        value = str(url or "").strip()
+        value = value.replace("https://rn.tektorg.ru/index.php", "https://rn.tektorg.ru")
+        value = value.replace("https://rn.tektorg.ru/#", "https://rn.tektorg.ru/#")
+        return value.rstrip("/")
+
+    def _wait_for_application_url(self) -> None:
+        assert self.driver is not None
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            try:
+                current = self.driver.current_url or ""
+                ready = self.driver.execute_script("return document.readyState") in {"interactive", "complete"}
+                if ready and "applic/create" in current:
+                    return
+            except Exception:
+                pass
+            time.sleep(0.3)
+        raise RuntimeError("Страница подачи заявки не открылась в браузере.")
+
+    def _ensure_technical_tab_active(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const clickBest = (node) => {
+    const chain = [node, node && node.parentElement, node && node.parentElement && node.parentElement.parentElement];
+    for (const el of chain) {
+      if (!el) continue;
+      try {
+        el.scrollIntoView({ block: "center", inline: "center" });
+        el.click();
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  };
+  for (let i = 0; i < 90; i++) {
+    const bodyText = String(document.body && document.body.innerText || "");
+    const hasTechnicalBlock = /Документы\s+технической\s+части\s+заявки/i.test(bodyText);
+    const hasFileInput = Array.from(document.querySelectorAll("input[type='file']")).some(visible);
+    if (hasTechnicalBlock && hasFileInput) {
+      callback(true);
+      return;
+    }
+    if (hasTechnicalBlock && document.querySelector("input[type='file']")) {
+      callback(true);
+      return;
+    }
+    const nodes = Array.from(document.querySelectorAll("a, button, span, div, td, em"));
+    const tab = nodes.find((el) => /Техническая\s+часть\s+предложения/i.test(textOf(el)));
+    if (tab) {
+      clickBest(tab);
+    }
+    await wait(400);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script)
+        if not ok:
+            raise RuntimeError("Не удалось открыть блок технической части заявки.")
+
+    def _upload_one_file(
+        self,
+        path: Path,
+        before_count: int = 0,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        assert self.driver is not None
+
+        direct_error: Exception | None = None
+        try:
+            if progress:
+                progress(f"Ищу поле выбора файла для {path.name}...")
+            input_element = self._find_tektorg_file_input()
+            self.driver.execute_script(
+                """
+const input = arguments[0];
+let node = input;
+while (node && node !== document.body) {
+  node.style.display = node.style.display === 'none' ? 'block' : node.style.display;
+  node.style.visibility = 'visible';
+  node = node.parentElement;
+}
+input.style.display = 'block';
+input.style.visibility = 'visible';
+input.style.opacity = 1;
+input.style.position = 'relative';
+input.style.zIndex = 999999;
+input.style.width = '520px';
+input.style.height = '30px';
+input.removeAttribute('disabled');
+input.scrollIntoView({ block: 'center', inline: 'center' });
+""",
+                input_element,
+            )
+            if progress:
+                progress(f"Передаю файл в поле загрузки через DevTools: {path.name}")
+            try:
+                self._set_file_input_files_with_cdp(input_element, path)
+            except Exception as cdp_error:
+                if progress:
+                    progress(f"DevTools-загрузка не сработала, пробую Selenium send_keys: {cdp_error}")
+                input_element.send_keys(str(path))
+            self._dispatch_file_input_events(input_element)
+            if self._wait_after_file_selection(path, before_count=before_count):
+                return
+            raise RuntimeError("Сайт не показал файл в списке после выбора через input.")
+        except Exception as e:
+            direct_error = e
+            if progress:
+                progress(f"Прямая загрузка через input не сработала для {path.name}: {e}")
+
+        if progress:
+            progress(f"Пробую загрузку через системный диалог: {path.name}")
+        self._upload_one_file_via_dialog(path)
+        if not self._wait_after_file_selection(path, before_count=before_count):
+            raise RuntimeError(f"Файл выбран через диалог, но сайт не подтвердил загрузку. Ошибка input: {direct_error}")
+
+    def _find_tektorg_file_input(self):
+        assert self.driver is not None
+
+        deadline = time.time() + 25
+        while time.time() < deadline:
+            input_element = self.driver.execute_script(
+                r"""
+const inputs = Array.from(document.querySelectorAll("input.x-form-file[type='file'], input[type='file']"));
+if (!inputs.length) return null;
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "");
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+};
+const ancestorText = (el) => {
+  const chunks = [];
+  let node = el;
+  for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+    chunks.push(textOf(node));
+  }
+  return chunks.join("\n");
+};
+let best = null;
+let bestScore = -1;
+for (const input of inputs) {
+  const text = ancestorText(input);
+  let score = 0;
+  if (/Документы\s+технической\s+части\s+заявки/i.test(text)) score += 100;
+  if (/Техническая\s+часть/i.test(text)) score += 60;
+  if (/Выбрать\s+и\s+загрузить\s+файл/i.test(text)) score += 40;
+  if ((input.className || "").toString().includes("x-form-file")) score += 20;
+  if (visible(input)) score += 10;
+  if (!input.disabled) score += 5;
+  if (score > bestScore) {
+    best = input;
+    bestScore = score;
+  }
+}
+return best;
+"""
+            )
+            if input_element is not None:
+                return input_element
+            time.sleep(0.3)
+        raise RuntimeError("На странице не найдено поле выбора файла input.x-form-file.")
+
+    def _set_file_input_files_with_cdp(self, input_element, path: Path) -> None:
+        assert self.driver is not None
+        marker = f"auto-upload-{time.time_ns()}"
+        self.driver.execute_script(
+            "arguments[0].setAttribute('data-auto-upload-id', arguments[1]);",
+            input_element,
+            marker,
+        )
+        document = self.driver.execute_cdp_cmd(
+            "DOM.getDocument",
+            {"depth": -1, "pierce": True},
+        )
+        root = document.get("root") if isinstance(document, dict) else {}
+        root_id = root.get("nodeId") if isinstance(root, dict) else None
+        if not root_id:
+            raise RuntimeError("CDP не вернул корневой DOM nodeId.")
+        found = self.driver.execute_cdp_cmd(
+            "DOM.querySelector",
+            {"nodeId": root_id, "selector": f'input[data-auto-upload-id="{marker}"]'},
+        )
+        node_id = found.get("nodeId") if isinstance(found, dict) else None
+        if not node_id:
+            raise RuntimeError("CDP не нашёл file input в DOM.")
+        self.driver.execute_cdp_cmd(
+            "DOM.setFileInputFiles",
+            {"nodeId": node_id, "files": [str(path)]},
+        )
+
+    def _dispatch_file_input_events(self, input_element) -> None:
+        assert self.driver is not None
+        self.driver.execute_script(
+            """
+const input = arguments[0];
+input.dispatchEvent(new Event('input', { bubbles: true }));
+input.dispatchEvent(new Event('change', { bubbles: true }));
+if (window.Ext) {
+  try {
+    const fileFields = Ext.ComponentQuery ? Ext.ComponentQuery.query('filefield, fileuploadfield') : [];
+    const cmp = fileFields.find((item) => {
+      try {
+        return item.fileInputEl && item.fileInputEl.dom === input;
+      } catch (e) {
+        return false;
+      }
+    });
+    if (cmp) {
+      if (cmp.fireEvent) cmp.fireEvent('change', cmp, input.value, '');
+      if (cmp.onFileChange) cmp.onFileChange(input, { target: input });
+      if (cmp.button && cmp.button.fireEvent) cmp.button.fireEvent('change', cmp.button, input.value);
+    }
+  } catch (e) {}
+}
+""",
+            input_element,
+        )
+
+    def _wait_after_file_selection(self, path: Path, before_count: int = 0) -> bool:
+        assert self.driver is not None
+        marker = self._normalize_uploaded_filename(path.name)
+        deadline = time.time() + 18
+        while time.time() < deadline:
+            try:
+                info = self.driver.execute_script(
+                    r"""
+const bodyText = String(document.body && document.body.innerText || "");
+const fileValues = Array.from(document.querySelectorAll("input[type='file']")).map((input) => input.value || "");
+const masks = Array.from(document.querySelectorAll(".x-mask-loading, .x-mask-msg, .x-mask"))
+  .filter((el) => {
+    const style = window.getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden";
+  })
+  .map((el) => String(el.innerText || el.textContent || ""));
+return { bodyText, fileValues, masks };
+"""
+                )
+                if isinstance(info, dict):
+                    body_text = str(info.get("bodyText") or "")
+                    values = " ".join(str(value or "") for value in info.get("fileValues") or [])
+                    text_marker = self._normalize_uploaded_filename(f"{body_text}\n{values}")
+                    if marker and marker in text_marker:
+                        return True
+                    if len(self._uploaded_file_names()) > before_count:
+                        return True
+                    masks = info.get("masks") or []
+                    if masks:
+                        time.sleep(0.5)
+                        continue
+            except Exception:
+                pass
+            time.sleep(0.4)
+        return self._is_uploaded_file_listed(path) or len(self._uploaded_file_names()) > before_count
+
+    def _is_uploaded_file_listed(self, path: Path) -> bool:
+        marker = self._normalize_uploaded_filename(path.name)
+        if not marker:
+            return False
+        return marker in {self._normalize_uploaded_filename(name) for name in self._uploaded_file_names()}
+
+    def _uploaded_file_names(self) -> list[str]:
+        assert self.driver is not None
+        try:
+            names = self.driver.execute_script(
+                r"""
+const anchors = Array.from(document.querySelectorAll("a"));
+return anchors
+  .map((a) => String(a.innerText || a.textContent || "").trim())
+  .filter((text) => /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)$/i.test(text));
+"""
+            )
+        except Exception:
+            return []
+        if not isinstance(names, list):
+            return []
+        return [str(name).strip() for name in names if str(name or "").strip()]
+
+    def _normalize_uploaded_filename(self, name: str) -> str:
+        value = str(name or "").casefold().replace("ё", "е")
+        value = re.sub(r"\s+", "", value)
+        value = re.sub(r"[_\W]+", "", value, flags=re.UNICODE)
+        return value
+
+    def _upload_one_file_via_dialog(self, path: Path) -> None:
+        assert self.driver is not None
+        clicked = self.driver.execute_async_script(
+            r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let i = 0; i < 40; i++) {
+    const nodes = Array.from(document.querySelectorAll("button, input[type=button], a, span, div"));
+    const button = nodes.find((el) => /Выбрать\s+и\s+загрузить\s+файл/i.test(String(el.innerText || el.value || el.textContent || "")));
+    if (button) {
+      try {
+        button.scrollIntoView({ block: "center", inline: "center" });
+        button.click();
+        callback(true);
+        return;
+      } catch (e) {
+        callback(false);
+        return;
+      }
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        )
+        if not clicked:
+            raise RuntimeError("Не найдена кнопка «Выбрать и загрузить файл».")
+
+        time.sleep(0.7)
+        self._set_windows_clipboard_text(str(path))
+        from pywinauto.keyboard import send_keys
+
+        send_keys("^v")
+        time.sleep(0.2)
+        send_keys("{ENTER}")
+        time.sleep(2.5)
+
+    def _set_windows_clipboard_text(self, text: str) -> None:
+        import win32clipboard
+        import win32con
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
+        finally:
+            win32clipboard.CloseClipboard()
 
     def _switch_to_etp_tab(self) -> bool:
         switched = super()._switch_to_etp_tab()
