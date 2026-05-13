@@ -645,6 +645,7 @@ class Sidebar(QWidget):
         self.btn_keyword_lemma = QPushButton("Лемматизация")
         self.btn_keyword_lemma.setObjectName("Ghost")
         self.btn_keyword_lemma.setCheckable(True)
+        self.btn_keyword_lemma.setChecked(True)
         self.btn_keyword_lemma.setToolTip(
             "Искать ключевые фразы по нормальным формам слов: "
             "«средствами измерения» = «средство измерение». "
@@ -1290,7 +1291,7 @@ class Sidebar(QWidget):
     def reset_client_filters(self) -> None:
         self.ed_quick_search.clear()
         self.cb_keyword_search.setChecked(False)
-        self.btn_keyword_lemma.setChecked(False)
+        self.btn_keyword_lemma.setChecked(True)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
         self.ed_organizer.clear()

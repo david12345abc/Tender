@@ -45,10 +45,11 @@ QPushButton#PlatformButton {
     background: transparent;
     border: 0;
     border-radius: 10px;
-    padding: 10px 18px;
+    padding: 0 18px;
     color: #9ca8d7;
     font-weight: 600;
     min-height: 40px;
+    max-height: 40px;
 }
 
 QPushButton#PlatformButton:hover {
