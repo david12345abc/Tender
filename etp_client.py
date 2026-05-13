@@ -635,7 +635,11 @@ class EtpClient:
         text = str(link.get("text") or "").strip()
         href = str(link.get("href") or "")
         for source in (text, href.rsplit("/", 1)[-1]):
-            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
+            m = re.search(
+                r"([^/?#]+\.(?:001|002|003|004|005|006|007|008|docx?|docm|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv|jpg|jpeg|gif|png|tiff?|sgn))",
+                source,
+                re.I,
+            )
             if m:
                 return self._safe_filename(m.group(1), f"document_{index}")
         return self._safe_filename(text or f"document_{index}", f"document_{index}")

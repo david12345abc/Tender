@@ -166,6 +166,24 @@ QHeaderView::section {
 }
 QTableView::item { padding: 4px 8px; }
 
+QMenu {
+    background-color: #ffffff;
+    color: #1a1d22;
+    border: 1px solid #d4d8dd;
+}
+QMenu::item {
+    padding: 6px 18px;
+    color: #1a1d22;
+    background-color: transparent;
+}
+QMenu::item:selected {
+    background-color: #cfe0ff;
+    color: #1a1d22;
+}
+QMenu::item:disabled {
+    color: #7b818a;
+}
+
 QStatusBar { background: #ffffff; border-top: 1px solid #e3e5e8; }
 QProgressBar {
     border: 1px solid #d4d8dd;

@@ -592,8 +592,9 @@ def make_tektorg_technical_upload_task(
             details += f"\n\nКоммерческие файлы загружены: {commercial_uploaded}"
         if errors:
             details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
+        ok = not errors and (uploaded > 0 or commercial_uploaded > 0 or bool(commercial_parts))
         w.session.emit(
-            uploaded > 0 and not errors,
+            ok,
             f"Технические файлы обработаны. Загружено: {uploaded}, ошибок: {len(errors)}.{details}",
         )
 

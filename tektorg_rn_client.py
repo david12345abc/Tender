@@ -206,20 +206,16 @@ _COLLECT_RN_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
 (async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const wanted = /Документация процедуры|Извещение/i;
+  const fileExt = /\.(?:001|002|003|004|005|006|007|008|docx?|docm|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv|jpg|jpeg|gif|png|tiff?|sgn)(?:[?#]|\s|$)/i;
   const fileLike = (href, text) => {
     const value = `${href || ""} ${text || ""}`;
     return /\/file\/get\//i.test(value)
-      || /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|\s|$)/i.test(value);
+      || fileExt.test(value);
   };
 
   for (let i = 0; i < 80; i++) {
-    const pageText = String(document.body && document.body.innerText || "");
     const anchors = Array.from(document.querySelectorAll("a[href]"));
-    if (
-      wanted.test(pageText)
-      && anchors.some((a) => fileLike(a.href, a.innerText || a.textContent || ""))
-    ) {
+    if (anchors.some((a) => fileLike(a.href, a.innerText || a.textContent || ""))) {
       break;
     }
     await wait(300);
@@ -238,41 +234,21 @@ const callback = arguments[arguments.length - 1];
     links.push({ href, text, section });
   }
 
-  function collectFrom(root, section) {
-    for (const anchor of Array.from(root.querySelectorAll("a[href]"))) {
-      push(anchor, section);
+  function nearestSection(anchor) {
+    let node = anchor;
+    for (let i = 0; node && i < 8; i++, node = node.parentElement) {
+      const legend = node.querySelector && node.querySelector("legend");
+      const legendText = (legend && (legend.innerText || legend.textContent) || "").trim();
+      if (legendText) return legendText;
+      const header = node.querySelector && node.querySelector(".x-panel-header-text, .x-fieldset-header-text, h1, h2, h3, h4");
+      const headerText = (header && (header.innerText || header.textContent) || "").trim();
+      if (headerText) return headerText;
     }
+    return "Документы процедуры";
   }
 
-  for (const fieldset of Array.from(document.querySelectorAll("fieldset"))) {
-    const legend = fieldset.querySelector("legend");
-    const title = (legend && (legend.innerText || legend.textContent) || "").trim();
-    if (wanted.test(title)) collectFrom(fieldset, title);
-  }
-
-  if (!links.length) {
-    const blocks = Array.from(document.querySelectorAll("body, div, section, table, tbody, tr, td"));
-    for (const block of blocks) {
-      const text = String(block.innerText || block.textContent || "").trim();
-      if (!wanted.test(text)) continue;
-      const section = /Документация процедуры/i.test(text)
-        ? "Документация процедуры"
-        : "Извещение";
-      collectFrom(block, section);
-    }
-  }
-
-  if (!links.length) {
-    for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
-      const href = anchor.href || "";
-      const text = (anchor.innerText || anchor.textContent || "").trim();
-      if (!fileLike(href, text)) continue;
-      const before = String(document.body && document.body.innerText || "");
-      const section = /Извещение/i.test(before) && /извещ/i.test(text)
-        ? "Извещение"
-        : "Документация процедуры";
-      push(anchor, section);
-    }
+  for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
+    push(anchor, nearestSection(anchor));
   }
 
   callback(links);
@@ -311,7 +287,7 @@ class TektorgRnClient(EtpClient):
         output_dir: Path,
         progress: Optional[Callable[[str], None]] = None,
     ) -> dict[str, Any]:
-        """Скачивает файлы из блоков «Документация процедуры» и «Извещение»."""
+        """Скачивает все файловые ссылки, найденные на странице процедуры."""
         assert self.driver is not None, "Сначала вызовите connect()"
         proc_id = proc.get("id") or proc.get("procedure_id")
         if not proc_id:
@@ -402,11 +378,13 @@ class TektorgRnClient(EtpClient):
         step_started = time.perf_counter()
         self._switch_to_application_tab(application_url, progress=progress)
         record_timing(f"Переход на страницу подачи заявки: {application_url}", step_started)
+        uploaded: list[str] = []
+        errors: list[str] = []
         if progress:
-            progress("Ожидаю блок технической части заявки...")
+            progress("Проверяю наличие вкладки технической части предложения...")
         step_started = time.perf_counter()
-        self._ensure_technical_tab_active()
-        record_timing("Ожидание технической части предложения", step_started)
+        has_technical_tab = self._has_technical_tab_button()
+        record_timing("Проверка наличия технической части предложения", step_started)
         if progress:
             progress("Запускаю фоновое распознавание характеристики и коммерческих условий...")
         step_started = time.perf_counter()
@@ -422,30 +400,48 @@ class TektorgRnClient(EtpClient):
             lambda: self._extract_commercial_terms_for_application(technical_dir, progress=None),
         )
         record_timing("Запуск фонового распознавания документов", step_started)
-        step_started = time.perf_counter()
-        self._clear_uploaded_files(progress=progress)
-        record_timing("Очистка ранее загруженных технических файлов", step_started)
 
-        uploaded: list[str] = []
-        errors: list[str] = []
-        for index, path in enumerate(files, start=1):
+        if has_technical_tab:
             if progress:
-                progress(f"Загружаю технический файл {index}/{len(files)}: {path.name}")
+                progress("Ожидаю блок технической части заявки...")
             step_started = time.perf_counter()
             try:
-                self._upload_one_file(path, progress=progress)
-                self._remove_duplicate_uploaded_files(progress=progress)
-                if not self._is_uploaded_file_listed(path):
-                    raise RuntimeError("файл не появился в списке загруженных документов")
-                uploaded.append(str(path))
-                record_timing(f"Загрузка технического файла {index}: {path.name}", step_started)
-            except Exception as e:
-                record_timing(f"Загрузка технического файла {index}: {path.name}", step_started, ok=False)
-                errors.append(f"{path.name}: {e}")
-                break
-        step_started = time.perf_counter()
-        self._remove_duplicate_uploaded_files(progress=progress)
-        record_timing("Финальная проверка дублей технических файлов", step_started)
+                self._ensure_technical_tab_active()
+                record_timing("Ожидание технической части предложения", step_started)
+            except Exception:
+                if self._has_technical_tab_button():
+                    raise
+                has_technical_tab = False
+                if progress:
+                    progress("Видимая вкладка «Техническая часть предложения» не найдена, пропускаю технический этап.")
+                record_timing("Техническая часть предложения отсутствует, этап пропущен", step_started)
+
+        if has_technical_tab:
+            step_started = time.perf_counter()
+            self._clear_uploaded_files(progress=progress)
+            record_timing("Очистка ранее загруженных технических файлов", step_started)
+            for index, path in enumerate(files, start=1):
+                if progress:
+                    progress(f"Загружаю технический файл {index}/{len(files)}: {path.name}")
+                step_started = time.perf_counter()
+                try:
+                    self._upload_one_file(path, progress=progress)
+                    self._remove_duplicate_uploaded_files(progress=progress)
+                    if not self._is_uploaded_file_listed(path):
+                        raise RuntimeError("файл не появился в списке загруженных документов")
+                    uploaded.append(str(path))
+                    record_timing(f"Загрузка технического файла {index}: {path.name}", step_started)
+                except Exception as e:
+                    record_timing(f"Загрузка технического файла {index}: {path.name}", step_started, ok=False)
+                    errors.append(f"{path.name}: {e}")
+                    break
+            step_started = time.perf_counter()
+            self._remove_duplicate_uploaded_files(progress=progress)
+            record_timing("Финальная проверка дублей технических файлов", step_started)
+        else:
+            if progress:
+                progress("Вкладка «Техническая часть предложения» отсутствует, пропускаю загрузку технических файлов.")
+            record_timing("Техническая часть предложения отсутствует, этап пропущен", time.perf_counter())
         commercial_terms: CommercialTerms | None = None
         supplier_characteristic: SupplierCharacteristic | None = None
         commercial_upload: dict[str, Any] = {}
@@ -617,19 +613,67 @@ class TektorgRnClient(EtpClient):
             time.sleep(0.3)
         raise RuntimeError("Страница подачи заявки не открылась в браузере.")
 
+    def _has_technical_tab_button(self) -> bool:
+        assert self.driver is not None
+        script = r"""
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const tabNodes = () => Array.from(document.querySelectorAll(
+  ".x-tab-strip-text, li.x-tab-strip-active, li.x-tab-strip-over, li.x-tab-edge, ul.x-tab-strip li, .x-tab-right, .x-tab-left"
+)).filter(visible);
+const isTabText = (el, pattern) => {
+  const text = textOf(el);
+  if (!pattern.test(text)) return false;
+  const tab = el.closest && el.closest("li, .x-tab-strip-wrap, .x-tab-panel-header, .x-tab-right, .x-tab-left");
+  return !!(tab && visible(tab));
+};
+const tabs = tabNodes();
+const hasTechnicalDom = tabs.some((el) => isTabText(el, /^Техническая\s+часть\s+предложения$/i));
+const hasCommercialDom = tabs.some((el) => isTabText(el, /^Коммерческая\s+часть\s+предложения$/i));
+return {
+  hasTechnical: hasTechnicalDom,
+  hasCommercial: hasCommercialDom,
+};
+"""
+        deadline = time.time() + 8
+        last_result: Any = None
+        while time.time() < deadline:
+            last_result = self.driver.execute_script(script)
+            if isinstance(last_result, dict):
+                if last_result.get("hasTechnical"):
+                    return True
+                if last_result.get("hasCommercial"):
+                    return False
+            time.sleep(0.25)
+        if isinstance(last_result, dict) and not last_result.get("hasTechnical"):
+            return False
+        return False
+
     def _ensure_technical_tab_active(self) -> None:
         assert self.driver is not None
         script = r"""
 const callback = arguments[arguments.length - 1];
 (async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
   const visible = (el) => {
     if (!el) return false;
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   };
+  const findVisibleTechnicalTab = () => Array.from(document.querySelectorAll(
+    ".x-tab-strip-text, ul.x-tab-strip li, .x-tab-right, .x-tab-left, [role='tab'], a, button, li"
+  )).find((el) => {
+    if (!visible(el) || textOf(el) !== "Техническая часть предложения") return false;
+    const tab = el.closest && el.closest("li, .x-tab-strip-wrap, .x-tab-panel-header, .x-tab-right, .x-tab-left, [role='tab']");
+    return !!(tab && visible(tab));
+  });
   const clickBest = (node) => {
     const chain = [node, node && node.parentElement, node && node.parentElement && node.parentElement.parentElement];
     for (const el of chain) {
@@ -654,8 +698,7 @@ const callback = arguments[arguments.length - 1];
       callback(true);
       return;
     }
-    const nodes = Array.from(document.querySelectorAll("a, button, span, div, td, em"));
-    const tab = nodes.find((el) => /Техническая\s+часть\s+предложения/i.test(textOf(el)));
+    const tab = findVisibleTechnicalTab();
     if (tab) {
       clickBest(tab);
     }
@@ -769,7 +812,7 @@ const callback = arguments[arguments.length - 1];
     if (!el) return false;
     const style = window.getComputedStyle(el);
     const rect = el.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   };
   const findLetterButtonCmp = () => {
     if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return null;
@@ -1446,7 +1489,7 @@ const values = arguments[0] || {};
     if (setDomValue(findInputNearLabel(labelPattern), value)) return true;
     return setField(cmp, value);
   };
-  const result = { price_with_vat: false, validity_date: false };
+  const result = { price_with_vat: false, price_without_vat: false, validity_date: false };
   for (let i = 0; i < 40; i++) {
     if (!Array.from(document.querySelectorAll(".x-window, .x-window-body")).some((el) => visible(el) && letterText.test(String(el.innerText || el.textContent || "")))) {
       await wait(250);
@@ -1465,6 +1508,18 @@ const values = arguments[0] || {};
       result.price_with_vat = setByInputName("price", values.price_with_vat, true)
         || setByCmpOrLabel(field, /итоговая\s+цена,\s*с\s+ндс/i, values.price_with_vat);
     }
+    if (values.price_without_vat) {
+      const field = findField(
+        ["price_no_nds", "price_without_nds", "price_without_vat", "price_no_vat"],
+        [
+          /цен.*без\s+ндс/i,
+          /стоимост.*без\s+ндс/i,
+          /price_no_nds|without/i,
+        ]
+      );
+      result.price_without_vat = setByInputName("price_no_nds", values.price_without_vat, true)
+        || setByCmpOrLabel(field, /цен.*без\s+ндс/i, values.price_without_vat);
+    }
     if (values.validity_date) {
       const field = findField(
         ["validity_date", "valid_until", "date_valid", "date_end", "offer_valid_until", "offer_date"],
@@ -1480,6 +1535,7 @@ const values = arguments[0] || {};
         || setByCmpOrLabel(field, /настоящая\s+заявка\s+на\s+участие\s+в\s+опросе\s+действует\s+до/i, values.validity_date);
     }
     if ((!values.price_with_vat || result.price_with_vat)
+      && (!values.price_without_vat || result.price_without_vat)
       && (!values.validity_date || result.validity_date)) {
       callback({ ok: true, result });
       return;
@@ -1529,7 +1585,40 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
       .filter((win) => visible(win) && !letterText.test(String(win.innerText || win.textContent || "")));
     for (const win of windows) {
       const text = String(win.innerText || win.textContent || "");
-      if (!/(Ошибка|Предупреждение|Error|Warning|Неверный\s+формат\s+файла)/i.test(text)) continue;
+      if (!/(Непредвиденн|Ошибка|Предупреждение|Error|Warning|Неверный\s+формат\s+файла)/i.test(text)) continue;
+      let extClosed = false;
+      eachCmp((cmp) => {
+        if (extClosed || cmp.hidden || cmp.disabled) return;
+        const el = cmp && cmp.el && cmp.el.dom;
+        const cmpWin = el && el.closest && el.closest(".x-window");
+        if (cmpWin !== win) return;
+        const text = String(cmp.text || "").trim();
+        if (!/^(OK|ОК)$/i.test(text)) return;
+        try {
+          if (typeof cmp.onClick === "function") {
+            cmp.onClick({ button: 0, preventDefault() {}, stopEvent() {}, getTarget() { return el; } });
+            extClosed = true;
+            return;
+          }
+        } catch (e) {}
+        try {
+          if (cmp.handler) {
+            cmp.handler.call(cmp.scope || cmp, cmp);
+            extClosed = true;
+            return;
+          }
+        } catch (e) {}
+        try {
+          if (cmp.fireEvent) {
+            cmp.fireEvent("click", cmp);
+            extClosed = true;
+          }
+        } catch (e) {}
+      });
+      if (extClosed) {
+        closed = true;
+        continue;
+      }
       const buttons = Array.from(win.querySelectorAll("button, input[type='button'], a, span, div, td, em"))
         .filter((el) => visible(el) && /^(OK|ОК)$/i.test(textOf(el)));
       const button = buttons.find((el) => (el.tagName || "").toLowerCase() === "button") || buttons[0];
@@ -1545,6 +1634,10 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
     }
     return closed;
   };
+  const hasBlockingDialogs = () => Array.from(document.querySelectorAll(".x-window"))
+    .some((win) => visible(win)
+      && !letterText.test(String(win.innerText || win.textContent || ""))
+      && /(Непредвиденн|Ошибка|Предупреждение|Error|Warning|Неверный\s+формат\s+файла)/i.test(String(win.innerText || win.textContent || "")));
   const inLetterWindow = (cmp) => {
     const el = cmp && cmp.el && cmp.el.dom;
     const win = el && el.closest && el.closest(".x-window");
@@ -1623,14 +1716,19 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
     } catch (e) {}
     return false;
   };
+  result.blockerClosed = closeBlockingDialogs();
+  result.blockersOpen = hasBlockingDialogs();
+  if (result.blockerClosed) {
+    result.reason = "blocking dialog closed";
+    return result;
+  }
+  if (result.blockersOpen) {
+    result.reason = "blocking dialog still open";
+    return result;
+  }
   result.letterOpen = !!letterWindow();
   if (!result.letterOpen) {
     result.reason = "letter window is already closed";
-    return result;
-  }
-  result.blockerClosed = closeBlockingDialogs();
-  if (result.blockerClosed) {
-    result.reason = "blocking dialog closed";
     return result;
   }
   const domClicked = clickDom();
@@ -1645,6 +1743,12 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
         last_result: Any = None
         for _ in range(30):
             last_result = self.driver.execute_script(script)
+            if isinstance(last_result, dict) and last_result.get("blockerClosed"):
+                time.sleep(1.0)
+                continue
+            if isinstance(last_result, dict) and last_result.get("blockersOpen"):
+                time.sleep(0.5)
+                continue
             if isinstance(last_result, dict) and not last_result.get("letterOpen"):
                 return
             time.sleep(0.5)
@@ -1905,6 +2009,16 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
             if progress:
                 progress(f"Прямая загрузка через input не сработала для {path.name}: {e}")
 
+        if progress:
+            progress(f"Проверяю, не появился ли файл с задержкой: {path.name}")
+        if self._wait_after_file_selection(
+            path,
+            upload_panel_id=upload_panel_id,
+            previous_count=None,
+            timeout_seconds=45.0,
+        ):
+            return
+
         raise RuntimeError(f"Файл не загрузился. Ошибка штатной загрузки: {dialog_error}. Ошибка input: {direct_error}")
 
     def _find_tektorg_file_input(
@@ -2031,10 +2145,11 @@ if (window.Ext) {
         path: Path,
         upload_panel_id: str = "application_docs_tech_1",
         previous_count: int | None = None,
+        timeout_seconds: float = 60.0,
     ) -> bool:
         assert self.driver is not None
         marker = self._normalize_uploaded_filename(path.name)
-        deadline = time.time() + 18
+        deadline = time.time() + timeout_seconds
         while time.time() < deadline:
             try:
                 names = self._uploaded_file_names(upload_panel_id=upload_panel_id)

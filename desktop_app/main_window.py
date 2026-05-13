@@ -1317,7 +1317,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Документы не найдены",
-                "В блоках «Документация процедуры» и «Извещение» ссылки на файлы не найдены.",
+                "На странице процедуры ссылки на файлы не найдены.",
             )
         elif errors:
             QMessageBox.warning(
