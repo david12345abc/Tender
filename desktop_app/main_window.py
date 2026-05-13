@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         self._cache_dirty: bool = False
         self._cache_save_enabled: bool = True
         self._platform_key: str = "tektorg_rn"
+        self._auth_dialog_open: bool = False
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -1152,6 +1153,9 @@ class MainWindow(QMainWindow):
                 self._last_user = login
                 self.user_label.setText(f"Пользователь: {login}")
         else:
+            if self._auth_dialog_open:
+                return
+            self._auth_dialog_open = True
             self._set_badge("false", "○ Нужен вход")
             # Диалог с подсказкой + кнопкой «Повторить»
             box = QMessageBox(self)
@@ -1161,9 +1165,12 @@ class MainWindow(QMainWindow):
             box.setInformativeText(message)
             btn_retry = box.addButton("Я вошёл — повторить", QMessageBox.AcceptRole)
             box.addButton("Отмена", QMessageBox.RejectRole)
-            box.exec()
-            if box.clickedButton() is btn_retry:
-                QTimer.singleShot(200, self._on_search)
+            try:
+                box.exec()
+                if box.clickedButton() is btn_retry:
+                    QTimer.singleShot(200, self._on_search)
+            finally:
+                self._auth_dialog_open = False
 
     @Slot(bool, str)
     def _on_documents_status(self, ok: bool, message: str) -> None:

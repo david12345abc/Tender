@@ -486,19 +486,13 @@ class EtpClient:
                 time.sleep(1)
             return False
 
-        launch(browser.user_data_dir, browser.profile_dir)
-        primary_timeout = min(15, timeout)
-        if wait_for_port(primary_timeout):
-            return
-
-        # Если браузер уже был запущен обычным способом, Chromium часто просто
-        # открывает новое окно старого процесса и игнорирует remote debugging.
-        # В этом случае запускаем отдельный управляемый профиль приложения.
+        # Запускаем только изолированный профиль приложения. Обычный профиль
+        # Chrome может уже быть открыт пользователем и создавать второе окно.
         local = Path(os.environ.get("LOCALAPPDATA") or Path.home())
         safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", browser.label).strip("_")
         fallback_dir = local / "ETP_GPB_Search" / "browser_profiles" / safe_label
         launch(fallback_dir)
-        if wait_for_port(max(5, timeout - primary_timeout)):
+        if wait_for_port(timeout):
             self.browser = BrowserLaunchConfig(
                 key=browser.key,
                 label=f"{browser.label} (управляемый профиль)",
