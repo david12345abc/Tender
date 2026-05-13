@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -162,6 +163,7 @@ def call_lm_studio_chat(
     user_prompt: str,
     timeout_sec: int = 900,
     max_tokens: int = 8192,
+    retries: int = 2,
 ) -> str:
     url = base_url.rstrip("/") + "/v1/chat/completions"
     payload: dict[str, Any] = {
@@ -175,26 +177,38 @@ def call_lm_studio_chat(
         "stream": False,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-        method="POST",
-    )
-    try:
-        with urlopen(req, timeout=timeout_sec) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-    except HTTPError as e:
-        detail = ""
+    raw = ""
+    last_error: BaseException | None = None
+    attempts = max(1, retries + 1)
+    for attempt in range(1, attempts + 1):
+        req = Request(
+            url,
+            data=body,
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
         try:
-            detail = e.read().decode("utf-8", errors="replace")[:2000]
-        except Exception:
-            pass
-        raise RuntimeError(f"LM Studio HTTP {e.code}: {e.reason}. {detail}") from e
-    except (TimeoutError, socket.timeout) as e:
-        raise RuntimeError(f"LM Studio не ответил за {timeout_sec} сек. (таймаут).") from e
-    except URLError as e:
-        raise RuntimeError(f"Не удалось подключиться к LM Studio: {e}") from e
+            with urlopen(req, timeout=timeout_sec) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            break
+        except HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", errors="replace")[:2000]
+            except Exception:
+                pass
+            raise RuntimeError(f"LM Studio HTTP {e.code}: {e.reason}. {detail}") from e
+        except (TimeoutError, socket.timeout, ConnectionResetError, ConnectionAbortedError, URLError, OSError) as e:
+            last_error = e
+            if attempt >= attempts:
+                if isinstance(e, (TimeoutError, socket.timeout)):
+                    raise RuntimeError(f"LM Studio не ответил за {timeout_sec} сек. (таймаут).") from e
+                raise RuntimeError(
+                    f"Не удалось подключиться к LM Studio после {attempts} попыток: {e}"
+                ) from e
+            time.sleep(min(2 * attempt, 5))
+    if not raw:
+        raise RuntimeError(f"Пустой ответ LM Studio. Последняя ошибка: {last_error}")
 
     data = json.loads(raw)
     choices = data.get("choices") or []

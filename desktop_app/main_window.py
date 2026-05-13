@@ -67,6 +67,7 @@ from .constants import (
     user_writable_root,
 )
 from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
+from .gpb_rag.chat import answer_question_from_saved_index
 from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
@@ -1153,6 +1154,10 @@ class MainWindow(QMainWindow):
         clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
         return (clean[:160] or default) + ".docx"
 
+    def _safe_folder_name(self, name: str, default: str = "procedure") -> str:
+        clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(name or "")).strip(" .")
+        return clean[:120] or default
+
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
         from docx import Document
 
@@ -1209,7 +1214,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-            summary_rows.append([registry, title or "—", str(path), str(unpacked_by_registry.get(registry) or "")])
+            chat_dir = ANALYSIS_DIR / "rag_debug" / self._safe_folder_name(registry)
+            summary_rows.append(
+                [
+                    registry,
+                    title or "—",
+                    str(path),
+                    str(unpacked_by_registry.get(registry) or ""),
+                    str(chat_dir),
+                ]
+            )
 
         self._analysis_sink["summary_rows"] = summary_rows
         return summary_rows
@@ -1227,7 +1241,7 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        headers = ["Реестровый номер", "Наименование", "Таблица анализа", "Разархивированные документы"]
+        headers = ["Реестровый номер", "Наименование", "Таблица анализа", "Разархивированные документы", "Чат"]
         table = QTableWidget(len(rows), len(headers))
         table.setHorizontalHeaderLabels(headers)
         hh = table.horizontalHeader()
@@ -1237,6 +1251,7 @@ class MainWindow(QMainWindow):
         table.setColumnWidth(1, 520)
         table.setColumnWidth(2, 130)
         table.setColumnWidth(3, 180)
+        table.setColumnWidth(4, 110)
         table.setWordWrap(True)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1304,11 +1319,82 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(dlg, "Ошибка скачивания", f"Не удалось скачать документы:\n{e}")
 
+        def open_analysis_chat(row_index: int) -> None:
+            if not (0 <= row_index < len(rows)):
+                return
+            row = rows[row_index]
+            registry = str(row[0] if len(row) > 0 else "")
+            title = str(row[1] if len(row) > 1 else "")
+            docs_dir = Path(str(row[3] if len(row) > 3 else ""))
+            index_dir = Path(str(row[4] if len(row) > 4 else ""))
+            has_index = (index_dir / "index.faiss").is_file() and (index_dir / "metadata.json").is_file()
+            if not has_index and not docs_dir.is_dir():
+                QMessageBox.information(
+                    dlg,
+                    "Чат недоступен",
+                    "FAISS-индекс для этой процедуры не найден. "
+                    "Также не найдена папка документов, из которой можно построить индекс заново.",
+                )
+                return
+
+            chat_dlg = QDialog(dlg)
+            chat_dlg.setWindowTitle(f"Чат по анализу {registry}")
+            chat_dlg.resize(820, 620)
+            chat_layout = QVBoxLayout(chat_dlg)
+            header = QLabel(f"<b>{registry}</b><br>{title}")
+            header.setWordWrap(True)
+            chat_layout.addWidget(header)
+            history = QTextEdit()
+            history.setReadOnly(True)
+            history.setPlainText(
+                "Задайте вопрос по карточке и документам закупки. "
+                "Будут отправлены только самые релевантные фрагменты из FAISS.\n"
+            )
+            chat_layout.addWidget(history, 1)
+            question = QTextEdit()
+            question.setPlaceholderText("Например: какие сроки поставки и условия оплаты?")
+            question.setMaximumHeight(86)
+            chat_layout.addWidget(question)
+            buttons_row = QHBoxLayout()
+            buttons_row.addStretch(1)
+            btn_ask = QPushButton("Спросить")
+            btn_close = QPushButton("Закрыть")
+            buttons_row.addWidget(btn_ask)
+            buttons_row.addWidget(btn_close)
+            chat_layout.addLayout(buttons_row)
+
+            def ask() -> None:
+                q = question.toPlainText().strip()
+                if not q:
+                    return
+                question.clear()
+                history.append(f"\nПользователь:\n{q}\n")
+                btn_ask.setEnabled(False)
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    answer = answer_question_from_saved_index(
+                        index_dir=index_dir,
+                        question=q,
+                        lm_base_url=LM_STUDIO_BASE_URL,
+                        lm_model=LM_STUDIO_MODEL,
+                        fallback_docs_dir=docs_dir,
+                    )
+                    history.append(f"Бот:\n{answer}\n")
+                except Exception as e:
+                    history.append(f"Ошибка:\n{e}\n")
+                finally:
+                    QApplication.restoreOverrideCursor()
+                    btn_ask.setEnabled(True)
+
+            btn_ask.clicked.connect(ask)
+            btn_close.clicked.connect(chat_dlg.reject)
+            chat_dlg.exec()
+
         for r, row in enumerate(rows):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val[:2000] if val else "")
-                if c in {2, 3}:
+                if c in {2, 3, 4}:
                     item.setText("")
                 if c == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1323,6 +1409,19 @@ class MainWindow(QMainWindow):
             btn_docs.setEnabled(bool(row[3] if len(row) > 3 else ""))
             btn_docs.clicked.connect(lambda _checked=False, row_index=r: copy_unpacked_documents(row_index))
             table.setCellWidget(r, 3, btn_docs)
+
+            btn_chat = QPushButton("Чат")
+            chat_source = Path(str(row[4] if len(row) > 4 else ""))
+            docs_source = Path(str(row[3] if len(row) > 3 else ""))
+            btn_chat.setEnabled(
+                (
+                    (chat_source / "index.faiss").is_file()
+                    and (chat_source / "metadata.json").is_file()
+                )
+                or docs_source.is_dir()
+            )
+            btn_chat.clicked.connect(lambda _checked=False, row_index=r: open_analysis_chat(row_index))
+            table.setCellWidget(r, 4, btn_chat)
 
             title_len = len(str(row[1] if len(row) > 1 else ""))
             table.setRowHeight(r, min(96, max(34, 34 + (title_len // 90) * 18)))
@@ -1979,6 +2078,21 @@ class MainWindow(QMainWindow):
             self.cache_banner.setVisible(False)
             self.status_msg.setText("Готов. Нажмите «Поиск».")
 
+    def _cleanup_analysis_temp_dirs(self) -> None:
+        """Удаляет только служебные RAG/analysis-папки, сохраняя готовые .docx/.xlsx."""
+        temp_dir_names = (
+            "rag_debug",
+            "_downloaded_docs",
+            "разархивированные_документы",
+        )
+        for name in temp_dir_names:
+            path = ANALYSIS_DIR / name
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+            except Exception:
+                traceback.print_exc()
+
     # --------------- закрытие
     def closeEvent(self, event) -> None:  # noqa: N802
         try:
@@ -1991,6 +2105,10 @@ class MainWindow(QMainWindow):
             pass
         try:
             self.client.close()
+        except Exception:
+            pass
+        try:
+            self._cleanup_analysis_temp_dirs()
         except Exception:
             pass
         event.accept()

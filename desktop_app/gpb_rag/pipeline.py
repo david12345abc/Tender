@@ -90,8 +90,9 @@ def run_rag_table_analysis(
     if debug_dir is not None:
         try:
             store.save(debug_dir)
-        except Exception:
-            pass
+        except Exception as exc:
+            if ingest_notes_out is not None:
+                ingest_notes_out.append(f"Не удалось сохранить FAISS-индекс для чата: {exc}")
 
     parsed, raw_bundle = extract_fields_via_retrieval(
         store,

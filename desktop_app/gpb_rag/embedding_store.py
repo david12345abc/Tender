@@ -67,7 +67,12 @@ class FaissChunkIndex:
         directory.mkdir(parents=True, exist_ok=True)
         if self.index is None:
             return
-        faiss.write_index(self.index, str(directory / "index.faiss"))
+        index_path = directory / "index.faiss"
+        try:
+            faiss.write_index(self.index, str(index_path))
+        except Exception:
+            serialized = faiss.serialize_index(self.index)
+            index_path.write_bytes(bytes(serialized))
         meta = [
             {
                 "chunk_id": c.chunk_id,
@@ -79,3 +84,33 @@ class FaissChunkIndex:
             for c in self.chunks
         ]
         (directory / "metadata.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def load(self, directory: Path) -> None:
+        import faiss
+        import numpy as np
+
+        index_path = directory / "index.faiss"
+        meta_path = directory / "metadata.json"
+        if not index_path.is_file() or not meta_path.is_file():
+            raise FileNotFoundError(f"FAISS-индекс не найден в папке: {directory}")
+
+        try:
+            self.index = faiss.read_index(str(index_path))
+        except Exception:
+            raw_index = np.frombuffer(index_path.read_bytes(), dtype="uint8")
+            self.index = faiss.deserialize_index(raw_index)
+        raw_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        chunks: list[ChunkPayload] = []
+        for item in raw_meta:
+            if not isinstance(item, dict):
+                continue
+            chunks.append(
+                ChunkPayload(
+                    chunk_id=str(item.get("chunk_id") or ""),
+                    file_name=str(item.get("file_name") or ""),
+                    text=str(item.get("text") or ""),
+                    page=item.get("page"),
+                    section=item.get("section"),
+                )
+            )
+        self.chunks = chunks
