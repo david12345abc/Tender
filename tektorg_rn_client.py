@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import json
 from pathlib import Path
 import re
@@ -376,6 +377,25 @@ class TektorgRnClient(EtpClient):
                 }
             )
 
+        def run_background(label: str, fn: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
+            started = time.perf_counter()
+            try:
+                return fn(), {
+                    "label": f"Фоново: {label}",
+                    "seconds": round(time.perf_counter() - started, 3),
+                    "ok": True,
+                }
+            except Exception as e:
+                return e, {
+                    "label": f"Фоново: {label}",
+                    "seconds": round(time.perf_counter() - started, 3),
+                    "ok": False,
+                }
+
+        analysis_executor: ThreadPoolExecutor | None = None
+        supplier_future: Future[tuple[Any, dict[str, Any]]] | None = None
+        commercial_terms_future: Future[tuple[Any, dict[str, Any]]] | None = None
+
         if progress:
             progress("Открываю вкладку подачи заявки для загрузки технических файлов...")
         step_started = time.perf_counter()
@@ -386,6 +406,21 @@ class TektorgRnClient(EtpClient):
         step_started = time.perf_counter()
         self._ensure_technical_tab_active()
         record_timing("Ожидание технической части предложения", step_started)
+        if progress:
+            progress("Запускаю фоновое распознавание характеристики и коммерческих условий...")
+        step_started = time.perf_counter()
+        analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tektorg-analysis")
+        supplier_future = analysis_executor.submit(
+            run_background,
+            "определение характеристики поставщика",
+            lambda: self._classify_supplier_characteristic(technical_dir, progress=None),
+        )
+        commercial_terms_future = analysis_executor.submit(
+            run_background,
+            "распознавание итоговой стоимости и срока действия",
+            lambda: self._extract_commercial_terms_for_application(technical_dir, progress=None),
+        )
+        record_timing("Запуск фонового распознавания документов", step_started)
         step_started = time.perf_counter()
         self._clear_uploaded_files(progress=progress)
         record_timing("Очистка ранее загруженных технических файлов", step_started)
@@ -416,7 +451,14 @@ class TektorgRnClient(EtpClient):
         if not errors:
             step_started = time.perf_counter()
             try:
-                supplier_characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
+                if supplier_future is not None:
+                    supplier_value, supplier_timing = supplier_future.result()
+                    timings.append(supplier_timing)
+                    if isinstance(supplier_value, Exception):
+                        raise supplier_value
+                    supplier_characteristic = supplier_value
+                else:
+                    supplier_characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
                 if supplier_characteristic.label:
                     if progress:
                         progress(f"Выбираю характеристику поставщика: {supplier_characteristic.label}")
@@ -463,8 +505,15 @@ class TektorgRnClient(EtpClient):
             record_timing("Заполнение константных значений письма", step_started)
             try:
                 step_started = time.perf_counter()
-                commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
-                record_timing("Распознавание итоговой стоимости и срока действия", step_started)
+                if commercial_terms_future is not None:
+                    commercial_value, commercial_timing = commercial_terms_future.result()
+                    timings.append(commercial_timing)
+                    if isinstance(commercial_value, Exception):
+                        raise commercial_value
+                    commercial_terms = commercial_value
+                else:
+                    commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
+                record_timing("Получение результата распознавания итоговой стоимости и срока действия", step_started)
                 if commercial_terms.price_with_vat or commercial_terms.price_without_vat or commercial_terms.validity_date:
                     step_started = time.perf_counter()
                     self._fill_application_letter_commercial_terms(commercial_terms)
@@ -474,6 +523,8 @@ class TektorgRnClient(EtpClient):
             except Exception as e:
                 record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
                 errors.append(f"Коммерческая часть: {e}")
+        if analysis_executor is not None:
+            analysis_executor.shutdown(wait=False, cancel_futures=True)
         record_timing("Весь сценарий после распределения файлов", workflow_started, ok=not errors)
         return {
             "uploaded": uploaded,
