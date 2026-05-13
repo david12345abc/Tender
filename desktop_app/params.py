@@ -19,6 +19,7 @@ class SearchParams:
 class ClientFilters:
     quick_search: str = ""
     keyword_search_enabled: bool = False
+    keyword_lemma_enabled: bool = False
     keywords: tuple[str, ...] = ()
     registry_contains: str = ""
     unique_number_contains: str = ""

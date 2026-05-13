@@ -10,24 +10,18 @@ from PySide6.QtGui import QColor
 from etp_client import SERVER_STATUS_BY_LABEL, STATUS_LABELS, procedure_type_label, step_id_label, trend_pur_label
 
 from .constants import COLUMNS
+from .keyword_lemma import contains_token_sequence, keyword_tokens
 from .keywords import load_keywords
 from .params import ClientFilters
 from .utils import fmt_date, fmt_money, parse_dt, parse_price
 
 
 def _word_tokens(text: str) -> list[str]:
-    return re.findall(r"[0-9A-Za-zА-Яа-яЁё]+", text.casefold().replace("ё", "е"))
+    return keyword_tokens(text)
 
 
 def _contains_keyword_as_words(text: str, keyword: str) -> bool:
-    haystack = _word_tokens(text)
-    needle = _word_tokens(keyword)
-    if not haystack or not needle:
-        return False
-    if len(needle) == 1:
-        return needle[0] in set(haystack)
-    last_start = len(haystack) - len(needle)
-    return any(haystack[i : i + len(needle)] == needle for i in range(last_start + 1))
+    return contains_token_sequence(text, keyword)
 
 
 def _normalize_status(value: Any) -> str:
@@ -99,9 +93,11 @@ class ProcedureTableModel(QAbstractTableModel):
         super().__init__(parent)
         self._rows: list[dict[str, Any]] = []
         self._keywords: tuple[str, ...] = ()
+        self._keyword_lemma_enabled = False
 
-    def set_keywords(self, keywords: tuple[str, ...]) -> None:
+    def set_keywords(self, keywords: tuple[str, ...], lemma_enabled: bool = False) -> None:
         self._keywords = keywords
+        self._keyword_lemma_enabled = lemma_enabled
         if self._rows:
             self.dataChanged.emit(
                 self.index(0, 0),
@@ -133,7 +129,11 @@ class ProcedureTableModel(QAbstractTableModel):
         return [
             keyword
             for keyword in keywords
-            if _contains_keyword_as_words(haystack, keyword)
+            if contains_token_sequence(
+                haystack,
+                keyword,
+                lemmatize=self._keyword_lemma_enabled,
+            )
         ]
 
     def _first_date(self, proc: dict[str, Any], keys: tuple[str, ...]) -> Optional[datetime]:
@@ -697,7 +697,11 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             )
             keywords = tuple(k for k in f.keywords if k.strip())
             if not keywords or not any(
-                _contains_keyword_as_words(haystack, keyword)
+                contains_token_sequence(
+                    haystack,
+                    keyword,
+                    lemmatize=f.keyword_lemma_enabled,
+                )
                 for keyword in keywords
             ):
                 return False

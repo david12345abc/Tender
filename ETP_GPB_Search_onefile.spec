@@ -22,7 +22,7 @@ extra_datas: list = []
 extra_binaries: list = []
 extra_hiddenimports: list = []
 
-for pkg in ('sentence_transformers', 'transformers', 'torch', 'tiktoken'):
+for pkg in ('sentence_transformers', 'transformers', 'torch', 'tiktoken', 'pymorphy3', 'pymorphy3_dicts_ru'):
     try:
         d, b, h = collect_all(pkg)
         extra_datas += d

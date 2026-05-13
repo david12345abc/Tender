@@ -642,6 +642,17 @@ class Sidebar(QWidget):
             "Искать процедуры, где встречается хотя бы одно слово из списка"
         )
         actions_row.addWidget(self.cb_keyword_search)
+        self.btn_keyword_lemma = QPushButton("Лемматизация")
+        self.btn_keyword_lemma.setObjectName("Ghost")
+        self.btn_keyword_lemma.setCheckable(True)
+        self.btn_keyword_lemma.setToolTip(
+            "Искать ключевые фразы по нормальным формам слов: "
+            "«средствами измерения» = «средство измерение». "
+            "Короткие фрагменты вроде «кип», «ууг», «пуг» остаются как есть."
+        )
+        self.btn_keyword_lemma.setMinimumHeight(40)
+        self.btn_keyword_lemma.setMaximumHeight(42)
+        actions_row.addWidget(self.btn_keyword_lemma)
         self.btn_edit_keywords = QPushButton("Редактировать список")
         self.btn_edit_keywords.setObjectName("Ghost")
         self.btn_edit_keywords.setMinimumHeight(40)
@@ -933,6 +944,7 @@ class Sidebar(QWidget):
         self.btn_search.clicked.connect(self.searchRequested)
         self.btn_reset.clicked.connect(self.resetRequested)
         self.cb_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.btn_keyword_lemma.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         self.btn_edit_keywords.clicked.connect(self.editKeywordsRequested)
 
     def _set_extra_visible(self, visible: bool) -> None:
@@ -1175,6 +1187,7 @@ class Sidebar(QWidget):
             return ClientFilters(
                 quick_search=self.ed_quick_search.text().strip(),
                 keyword_search_enabled=self.cb_keyword_search.isChecked(),
+                keyword_lemma_enabled=self.btn_keyword_lemma.isChecked(),
                 keywords=keywords,
                 organizer_contains=self.ed_organizer.text().strip(),
                 trend_pur=quick_trends[0] if len(quick_trends) == 1 else (self.cb_trend.currentData() or ""),
@@ -1216,6 +1229,7 @@ class Sidebar(QWidget):
         return ClientFilters(
             quick_search=self.ed_quick_search.text().strip(),
             keyword_search_enabled=self.cb_keyword_search.isChecked(),
+            keyword_lemma_enabled=self.btn_keyword_lemma.isChecked(),
             keywords=keywords,
             registry_contains=self.ed_registry.text().strip(),
             unique_number_contains=self.ed_unique_number.text().strip(),
@@ -1276,6 +1290,7 @@ class Sidebar(QWidget):
     def reset_client_filters(self) -> None:
         self.ed_quick_search.clear()
         self.cb_keyword_search.setChecked(False)
+        self.btn_keyword_lemma.setChecked(False)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
         self.ed_organizer.clear()

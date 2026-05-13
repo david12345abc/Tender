@@ -280,6 +280,14 @@ QPushButton#Ghost:hover {
     color: white;
 }
 
+QPushButton#Ghost:checked {
+
+    background-color: #263b78;
+    border-color: rgba(99,102,241,0.45);
+
+    color: white;
+}
+
 QPushButton#Danger {
 
     background-color: rgba(120,30,55,0.16);

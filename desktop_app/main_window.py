@@ -728,7 +728,7 @@ class MainWindow(QMainWindow):
             )
             return
         self.proxy.set_filters(filters)
-        self.model.set_keywords(filters.keywords)
+        self.model.set_keywords(filters.keywords, filters.keyword_lemma_enabled)
 
         has_active_filters = self._has_active_filters(filters)
         if self._platform_key == "gpb" and CACHE_FILE.exists() and not has_active_filters:
@@ -880,7 +880,8 @@ class MainWindow(QMainWindow):
             )
             return
         active_keywords = tuple(keyword for enabled, keyword in items if enabled)
-        self.model.set_keywords(active_keywords)
+        filters = self.sidebar.client_filters()
+        self.model.set_keywords(active_keywords, filters.keyword_lemma_enabled)
         self.sidebar.refresh_keywords_count()
         self._on_filters_changed()
         QMessageBox.information(
@@ -1566,14 +1567,14 @@ class MainWindow(QMainWindow):
     def _on_filters_changed(self) -> None:
         filters = self.sidebar.client_filters()
         self.proxy.set_filters(filters)
-        self.model.set_keywords(filters.keywords)
+        self.model.set_keywords(filters.keywords, filters.keyword_lemma_enabled)
         self._refresh_counter()
         self._schedule_table_row_resize()
 
     def _on_reset_filters(self) -> None:
         self.sidebar.reset_client_filters()
         self.proxy.set_filters(ClientFilters())
-        self.model.set_keywords(())
+        self.model.set_keywords((), False)
         self._refresh_counter()
         self._schedule_table_row_resize()
 
