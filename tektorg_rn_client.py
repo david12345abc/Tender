@@ -1449,8 +1449,13 @@ const values = arguments[0] || {};
         if progress:
             progress(f"Открываю штатный выбор файла: {path.name}")
         try:
+            before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
             self._upload_one_file_via_dialog(path, upload_panel_id=upload_panel_id)
-            if self._wait_after_file_selection(path, upload_panel_id=upload_panel_id):
+            if self._wait_after_file_selection(
+                path,
+                upload_panel_id=upload_panel_id,
+                previous_count=before_count,
+            ):
                 return
             raise RuntimeError("файл не появился в списке после штатной загрузки")
         except Exception as e:
@@ -1462,6 +1467,7 @@ const values = arguments[0] || {};
         try:
             if progress:
                 progress(f"Пробую резервную загрузку через input: {path.name}")
+            before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
             input_element = self._find_tektorg_file_input(upload_panel_id=upload_panel_id, area_name=area_name)
             self.driver.execute_script(
                 """
@@ -1493,7 +1499,11 @@ input.scrollIntoView({ block: 'center', inline: 'center' });
                     progress(f"DevTools-загрузка не сработала, пробую Selenium send_keys: {cdp_error}")
                 input_element.send_keys(str(path))
             self._dispatch_file_input_events(input_element)
-            if self._wait_after_file_selection(path, upload_panel_id=upload_panel_id):
+            if self._wait_after_file_selection(
+                path,
+                upload_panel_id=upload_panel_id,
+                previous_count=before_count,
+            ):
                 return
             raise RuntimeError("Сайт не показал файл в списке после выбора через input.")
         except Exception as e:
@@ -1626,12 +1636,22 @@ if (window.Ext) {
         self,
         path: Path,
         upload_panel_id: str = "application_docs_tech_1",
+        previous_count: int | None = None,
     ) -> bool:
         assert self.driver is not None
         marker = self._normalize_uploaded_filename(path.name)
         deadline = time.time() + 18
         while time.time() < deadline:
             try:
+                names = self._uploaded_file_names(upload_panel_id=upload_panel_id)
+                normalized_names = {
+                    self._normalize_uploaded_filename(name)
+                    for name in names
+                }
+                if marker and marker in normalized_names:
+                    return True
+                if previous_count is not None and len(names) > previous_count:
+                    return True
                 info = self.driver.execute_script(
                     r"""
 const uploadPanelId = arguments[0];
@@ -1979,7 +1999,7 @@ const uploadPanelId = arguments[0];
         send_keys("^v")
         time.sleep(0.2)
         send_keys("{ENTER}")
-        time.sleep(2.5)
+        time.sleep(0.6)
 
     def _set_windows_clipboard_text(self, text: str) -> None:
         import win32clipboard

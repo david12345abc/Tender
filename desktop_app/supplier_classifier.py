@@ -47,6 +47,14 @@ def classify_supplier_characteristic(technical_dir: Path, progress=None) -> Supp
         result.reason = "Не удалось извлечь текст из технических документов."
         return result
 
+    rule_label, rule_confidence = _fallback_by_rules(text)
+    if rule_label and rule_confidence >= 0.85:
+        result.label = rule_label
+        result.confidence = rule_confidence
+        result.source = "rules"
+        result.reason = "Характеристика определена по явным ключевым признакам в технических документах."
+        return result
+
     if progress:
         progress("Определяю характеристику поставщика через LM Studio...")
     try:
@@ -136,6 +144,10 @@ def _fallback_by_rules(text: str) -> tuple[str, float]:
     low = text.lower()
     service_score = len(re.findall(r"\b(услуг|услуги|работ|шмр|пнр|монтаж|пусконалад)", low))
     producer_score = len(re.findall(r"\b(мтр|оборудован|товар|поставка|изготовител|производител|продукц)", low))
+    if producer_score >= 6 and producer_score >= service_score * 3:
+        return PRODUCER_LABEL, 0.9
+    if service_score >= 6 and service_score >= producer_score * 3:
+        return SERVICE_EXECUTOR_LABEL, 0.9
     if service_score > producer_score * 1.3:
         return SERVICE_EXECUTOR_LABEL, 0.55
     if producer_score:

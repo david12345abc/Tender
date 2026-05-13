@@ -88,26 +88,38 @@ def extract_commercial_terms(
 
     candidates: list[dict[str, Any]] = []
     text_parts: list[str] = []
+    generic_text_files: list[Path] = []
     for path in files:
         try:
             if path.suffix.lower() in {".xlsx", ".xlsm"}:
-                xlsx_candidates = _price_candidates_from_xlsx(path)
+                xlsx_candidates, xlsx_text = _price_candidates_and_text_from_xlsx(path)
                 candidates.extend(xlsx_candidates)
+                if xlsx_text:
+                    text_parts.append(xlsx_text)
                 terms.notes.append(f"{path.name}: кандидатов цены из Excel: {len(xlsx_candidates)}")
             elif path.suffix.lower() == ".xls":
-                xls_candidates = _price_candidates_from_xls(path)
+                xls_candidates, xls_text = _price_candidates_and_text_from_xls(path)
                 candidates.extend(xls_candidates)
+                if xls_text:
+                    text_parts.append(xls_text)
                 terms.notes.append(f"{path.name}: кандидатов цены из XLS: {len(xls_candidates)}")
+            else:
+                generic_text_files.append(path)
         except Exception as e:
             terms.notes.append(f"{path.name}: не удалось разобрать таблицу Excel ({e})")
+            generic_text_files.append(path)
 
-    try:
-        text = build_documents_text(files, progress=None)
-    except Exception as e:
-        text = ""
-        terms.notes.append(f"Не удалось извлечь общий текст коммерческих документов: {e}")
+    if generic_text_files:
+        try:
+            text = build_documents_text(generic_text_files, progress=None)
+        except Exception as e:
+            text = ""
+            terms.notes.append(f"Не удалось извлечь общий текст коммерческих документов: {e}")
+        if text:
+            text_parts.append(text)
+
+    text = "\n\n".join(part for part in text_parts if part)
     if text:
-        text_parts.append(text)
         text_candidates = _price_candidates_from_text(text)
         candidates.extend(text_candidates)
         terms.notes.append(f"Кандидатов цены из общего текста: {len(text_candidates)}")
@@ -196,14 +208,21 @@ def _collect_files(root: Path) -> list[Path]:
 
 
 def _price_candidates_from_xlsx(path: Path) -> list[dict[str, Any]]:
+    candidates, _ = _price_candidates_and_text_from_xlsx(path)
+    return candidates
+
+
+def _price_candidates_and_text_from_xlsx(path: Path) -> tuple[list[dict[str, Any]], str]:
     from openpyxl import load_workbook
 
     wb = load_workbook(path, read_only=True, data_only=True)
     candidates: list[dict[str, Any]] = []
+    text_parts: list[str] = []
     try:
         for ws in wb.worksheets[:8]:
             rows = list(ws.iter_rows(values_only=True))
             candidates.extend(_price_candidates_from_table_rows(path.name, ws.title, rows))
+            text_parts.append(_rows_to_text(path.name, ws.title, rows))
             for row_index, row in enumerate(rows, start=1):
                 cells = ["" if value is None else str(value).strip() for value in row]
                 row_text = " ".join(cells).lower()
@@ -240,10 +259,15 @@ def _price_candidates_from_xlsx(path: Path) -> list[dict[str, Any]]:
                     )
     finally:
         wb.close()
-    return candidates
+    return candidates, "\n\n".join(part for part in text_parts if part)
 
 
 def _price_candidates_from_xls(path: Path) -> list[dict[str, Any]]:
+    candidates, _ = _price_candidates_and_text_from_xls(path)
+    return candidates
+
+
+def _price_candidates_and_text_from_xls(path: Path) -> tuple[list[dict[str, Any]], str]:
     import pythoncom
     import win32com.client
 
@@ -256,12 +280,14 @@ def _price_candidates_from_xls(path: Path) -> list[dict[str, Any]]:
         wb = excel.Workbooks.Open(str(path), ReadOnly=True)
         try:
             candidates: list[dict[str, Any]] = []
+            text_parts: list[str] = []
             for sheet in list(wb.Worksheets)[:8]:
                 used = sheet.UsedRange
                 values = used.Value
                 rows = _normalize_excel_rows(values)
                 candidates.extend(_price_candidates_from_table_rows(path.name, str(sheet.Name), rows))
-            return candidates
+                text_parts.append(_rows_to_text(path.name, str(sheet.Name), rows))
+            return candidates, "\n\n".join(part for part in text_parts if part)
         finally:
             wb.Close(False)
     finally:
@@ -278,6 +304,18 @@ def _normalize_excel_rows(values: Any) -> list[tuple[Any, ...]]:
     if values and not isinstance(values[0], tuple):
         return [values]
     return list(values)
+
+
+def _rows_to_text(file_name: str, sheet_name: str, rows: list[tuple[Any, ...]], max_rows: int = 300) -> str:
+    parts = [f"--- Файл: {file_name}, лист: {sheet_name} ---"]
+    for row_index, row in enumerate(rows, start=1):
+        values = [str(value).strip() for value in row if value is not None and str(value).strip()]
+        if values:
+            parts.append(" | ".join(values))
+        if row_index >= max_rows:
+            parts.append("[лист обрезан]")
+            break
+    return "\n".join(parts)
 
 
 def _price_candidates_from_table_rows(
