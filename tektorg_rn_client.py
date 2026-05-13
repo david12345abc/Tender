@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import date, timedelta
 import json
 from pathlib import Path
 import re
@@ -513,11 +514,16 @@ class TektorgRnClient(EtpClient):
                     commercial_terms = commercial_value
                 else:
                     commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
+                if not commercial_terms.validity_date:
+                    commercial_terms.validity_date = self._default_offer_validity_date()
                 record_timing("Получение результата распознавания итоговой стоимости и срока действия", step_started)
                 if commercial_terms.price_with_vat or commercial_terms.price_without_vat or commercial_terms.validity_date:
                     step_started = time.perf_counter()
                     self._fill_application_letter_commercial_terms(commercial_terms)
                     record_timing("Заполнение распознанных коммерческих условий", step_started)
+                    step_started = time.perf_counter()
+                    self._save_application_letter_modal()
+                    record_timing("Сохранение письма о подаче заявки", step_started)
                 else:
                     errors.append("Коммерческая часть: не удалось уверенно найти итоговую стоимость или срок действия предложения.")
             except Exception as e:
@@ -1486,6 +1492,178 @@ const values = arguments[0] || {};
         result = self.driver.execute_async_script(script, values)
         if not (isinstance(result, dict) and result.get("ok")):
             raise RuntimeError(f"Не удалось заполнить коммерческие поля письма: {result}")
+
+    def _default_offer_validity_date(self) -> str:
+        return (date.today() + timedelta(days=200)).strftime("%d.%m.%Y")
+
+    def _save_application_letter_modal(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const result = { letterOpen: false, blockerClosed: false, clicked: false, reason: "" };
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+  };
+  const letterText = /Письмо\s+о\s+подаче\s+заявки/i;
+  const saveText = /^Сохранить$/i;
+  const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+  const eachCmp = (fn) => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+    const all = Ext.ComponentMgr.all;
+    if (typeof all.each === "function") {
+      all.each(fn);
+      return;
+    }
+    const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+    for (const cmp of items) {
+      if (cmp && typeof cmp === "object") fn(cmp);
+    }
+  };
+  const letterWindow = () => Array.from(document.querySelectorAll(".x-window"))
+    .find((el) => visible(el) && letterText.test(String(el.innerText || el.textContent || "")));
+  const closeBlockingDialogs = () => {
+    let closed = false;
+    const windows = Array.from(document.querySelectorAll(".x-window"))
+      .filter((win) => visible(win) && !letterText.test(String(win.innerText || win.textContent || "")));
+    for (const win of windows) {
+      const text = String(win.innerText || win.textContent || "");
+      if (!/(Ошибка|Предупреждение|Error|Warning|Неверный\s+формат\s+файла)/i.test(text)) continue;
+      const buttons = Array.from(win.querySelectorAll("button, input[type='button'], a, span, div, td, em"))
+        .filter((el) => visible(el) && /^(OK|ОК)$/i.test(textOf(el)));
+      const button = buttons.find((el) => (el.tagName || "").toLowerCase() === "button") || buttons[0];
+      if (!button) continue;
+      const extButton = button.closest && button.closest(".x-btn, .x-btn-wrap, table, button, a");
+      const chain = [extButton, button, button.parentElement, button.parentElement && button.parentElement.parentElement];
+      for (const node of chain) {
+        if (dispatchRealClick(node)) {
+          closed = true;
+          break;
+        }
+      }
+    }
+    return closed;
+  };
+  const inLetterWindow = (cmp) => {
+    const el = cmp && cmp.el && cmp.el.dom;
+    const win = el && el.closest && el.closest(".x-window");
+    return !!(win && visible(win) && letterText.test(String(win.innerText || win.textContent || "")));
+  };
+  const findSaveCmp = () => {
+    let found = null;
+    eachCmp((cmp) => {
+      if (found || cmp.hidden || cmp.disabled || !inLetterWindow(cmp)) return;
+      if (saveText.test(String(cmp.text || "").trim())) found = cmp;
+    });
+    return found;
+  };
+  const dispatchRealClick = (node) => {
+    if (!node || !visible(node)) return false;
+    try {
+      node.scrollIntoView({ block: "center", inline: "center" });
+      node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+      node.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
+      node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+      node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+      node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+      if (typeof node.click === "function") node.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+  const clickDom = () => {
+    const win = letterWindow();
+    if (!win) return false;
+    const nodes = Array.from(win.querySelectorAll("button, input[type='button'], a, span, div, td, em"));
+    const button = nodes.find((el) => visible(el) && saveText.test(textOf(el)));
+    if (!button) return false;
+    const extButton = button.closest && button.closest(".x-btn, .x-btn-wrap, table, button, a");
+    const chain = [extButton, button, button.parentElement, button.parentElement && button.parentElement.parentElement];
+    for (const node of chain) {
+      if (dispatchRealClick(node)) return true;
+    }
+    return false;
+  };
+  const clickCmpDom = () => {
+    const cmp = findSaveCmp();
+    if (!cmp) return false;
+    const candidates = [
+      cmp.el && cmp.el.dom,
+      cmp.btnEl && cmp.btnEl.dom,
+      cmp.buttonEl && cmp.buttonEl.dom,
+      cmp.wrap && cmp.wrap.dom,
+    ].filter(Boolean);
+    for (const node of candidates) {
+      if (dispatchRealClick(node)) return true;
+    }
+    return false;
+  };
+  const clickCmpHandler = () => {
+    const cmp = findSaveCmp();
+    if (!cmp) return false;
+    try {
+      if (typeof cmp.onClick === "function") {
+        cmp.onClick({ button: 0, preventDefault() {}, stopEvent() {}, getTarget() { return cmp.el && cmp.el.dom; } });
+        return true;
+      }
+    } catch (e) {}
+    try {
+      if (cmp.handler) {
+        cmp.handler.call(cmp.scope || cmp, cmp);
+        return true;
+      }
+    } catch (e) {}
+    try {
+      if (cmp.fireEvent) {
+        cmp.fireEvent("click", cmp);
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+  result.letterOpen = !!letterWindow();
+  if (!result.letterOpen) {
+    result.reason = "letter window is already closed";
+    return result;
+  }
+  result.blockerClosed = closeBlockingDialogs();
+  if (result.blockerClosed) {
+    result.reason = "blocking dialog closed";
+    return result;
+  }
+  const domClicked = clickDom();
+  const cmpDomClicked = clickCmpDom();
+  const cmpHandlerClicked = clickCmpHandler();
+  result.clicked = domClicked || cmpDomClicked || cmpHandlerClicked;
+  result.method = { domClicked, cmpDomClicked, cmpHandlerClicked };
+  result.letterOpen = !!letterWindow();
+  result.reason = result.clicked ? "save clicked" : "save button not found";
+  return result;
+"""
+        last_result: Any = None
+        for _ in range(30):
+            last_result = self.driver.execute_script(script)
+            if isinstance(last_result, dict) and not last_result.get("letterOpen"):
+                return
+            time.sleep(0.5)
+            still_open = self.driver.execute_script(
+                r"""
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+};
+return Array.from(document.querySelectorAll(".x-window")).some((el) =>
+  visible(el) && /Письмо\s+о\s+подаче\s+заявки/i.test(String(el.innerText || el.textContent || ""))
+);
+"""
+            )
+            if not still_open:
+                return
+        raise RuntimeError(f"Не удалось сохранить письмо о подаче заявки: {last_result}")
 
     def _upload_one_file(
         self,
