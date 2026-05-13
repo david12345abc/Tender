@@ -1665,6 +1665,171 @@ return Array.from(document.querySelectorAll(".x-window")).some((el) =>
                 return
         raise RuntimeError(f"Не удалось сохранить письмо о подаче заявки: {last_result}")
 
+    def save_application_draft(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const result = { clicked: false, done: false, error: "", message: "", method: {} };
+const draftText = /^Сохранить\s+черновик$/i;
+const okText = /^(OK|ОК)$/i;
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+const eachCmp = (fn) => {
+  if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+  const all = Ext.ComponentMgr.all;
+  if (typeof all.each === "function") {
+    all.each(fn);
+    return;
+  }
+  const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+  for (const cmp of items) {
+    if (cmp && typeof cmp === "object") fn(cmp);
+  }
+};
+const dispatchRealClick = (node) => {
+  if (!node || !visible(node)) return false;
+  try {
+    node.scrollIntoView({ block: "center", inline: "center" });
+    node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    if (typeof node.click === "function") node.click();
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+const findDraftCmp = () => {
+  let found = null;
+  eachCmp((cmp) => {
+    if (found || cmp.hidden || cmp.disabled) return;
+    if (draftText.test(String(cmp.text || "").trim())) found = cmp;
+  });
+  return found;
+};
+const clickCmpDom = () => {
+  const cmp = findDraftCmp();
+  if (!cmp) return false;
+  const candidates = [
+    cmp.btnEl && cmp.btnEl.dom,
+    cmp.el && cmp.el.dom,
+    cmp.buttonEl && cmp.buttonEl.dom,
+    cmp.wrap && cmp.wrap.dom,
+  ].filter(Boolean);
+  for (const node of candidates) {
+    if (dispatchRealClick(node)) return true;
+  }
+  return false;
+};
+const clickDom = () => {
+  const nodes = Array.from(document.querySelectorAll("button, input[type='button'], a, span, div, td, em"));
+  const button = nodes.find((el) => visible(el) && draftText.test(textOf(el)));
+  if (!button) return false;
+  const extButton = button.closest && button.closest(".x-btn, .x-btn-wrap, table, button, a");
+  const chain = [extButton, button, button.parentElement, button.parentElement && button.parentElement.parentElement];
+  for (const node of chain) {
+    if (dispatchRealClick(node)) return true;
+  }
+  return false;
+};
+const clickCmpHandler = () => {
+  const cmp = findDraftCmp();
+  if (!cmp) return false;
+  try {
+    if (typeof cmp.onClick === "function") {
+      cmp.onClick({ button: 0, preventDefault() {}, stopEvent() {}, getTarget() { return cmp.el && cmp.el.dom; } });
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.handler) {
+      cmp.handler.call(cmp.scope || cmp, cmp);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.fireEvent) {
+      cmp.fireEvent("click", cmp);
+      return true;
+    }
+  } catch (e) {}
+  return false;
+};
+const inspectDialogs = () => {
+  const windows = Array.from(document.querySelectorAll(".x-window")).filter(visible);
+  for (const win of windows) {
+    const text = textOf(win);
+    if (!text) continue;
+    if (/(Ошибка|Error|Неверн|не\s+удалось|заполните|обязательн)/i.test(text)) {
+      result.error = text.slice(0, 500);
+      return;
+    }
+    if (/(сохранен|сохранён|сохранена|сохранено|черновик)/i.test(text)) {
+      result.done = true;
+      result.message = text.slice(0, 500);
+      const buttons = Array.from(win.querySelectorAll("button, input[type='button'], a, span, div, td, em"))
+        .filter((el) => visible(el) && okText.test(textOf(el)));
+      const button = buttons.find((el) => (el.tagName || "").toLowerCase() === "button") || buttons[0];
+      if (button) {
+        const extButton = button.closest && button.closest(".x-btn, .x-btn-wrap, table, button, a");
+        dispatchRealClick(extButton || button);
+      }
+      return;
+    }
+  }
+};
+inspectDialogs();
+if (result.done || result.error) return result;
+const cmpDomClicked = clickCmpDom();
+const domClicked = clickDom();
+const cmpHandlerClicked = clickCmpHandler();
+result.clicked = cmpDomClicked || domClicked || cmpHandlerClicked;
+result.method = { cmpDomClicked, domClicked, cmpHandlerClicked };
+result.message = result.clicked ? "draft save clicked" : "draft save button not found";
+return result;
+"""
+        last_result: Any = None
+        for attempt in range(30):
+            last_result = self.driver.execute_script(script)
+            if isinstance(last_result, dict):
+                if last_result.get("error"):
+                    raise RuntimeError(str(last_result.get("error")))
+                if last_result.get("done"):
+                    return
+                if not last_result.get("clicked") and attempt == 0:
+                    raise RuntimeError(f"Не удалось нажать кнопку «Сохранить черновик»: {last_result}")
+            time.sleep(0.5)
+            page_state = self.driver.execute_script(
+                r"""
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const text = String(document.body && document.body.innerText || "");
+const windows = Array.from(document.querySelectorAll(".x-window")).filter(visible)
+  .map((el) => String(el.innerText || el.textContent || "").trim());
+return {
+  hasDraftButton: /Сохранить\s+черновик/i.test(text),
+  successWindow: windows.some((value) => /(сохранен|сохранён|сохранена|сохранено|черновик)/i.test(value)),
+  errorWindow: windows.find((value) => /(Ошибка|Error|Неверн|не\s+удалось|заполните|обязательн)/i.test(value)) || "",
+};
+"""
+            )
+            if isinstance(page_state, dict):
+                if page_state.get("errorWindow"):
+                    raise RuntimeError(str(page_state.get("errorWindow")))
+                if page_state.get("successWindow") or not page_state.get("hasDraftButton"):
+                    return
+        raise RuntimeError(f"Не удалось подтвердить сохранение черновика: {last_result}")
+
     def _upload_one_file(
         self,
         path: Path,

@@ -1534,6 +1534,26 @@ class MainWindow(QMainWindow):
         self.status_msg.setText(message)
         if not ok:
             QMessageBox.warning(self, "Загрузка технических файлов", message)
+            return
+        self._bring_window_to_front()
+        box = QMessageBox(self)
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Заявка заполнена")
+        box.setText(
+            "Робот заполнил все поля.\n\n"
+            "Пожалуйста, проверьте корректность введенных данных."
+        )
+        btn_done = box.addButton("Готово", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() is not btn_done:
+            return
+        try:
+            self.status_msg.setText("Сохраняю черновик заявки...")
+            self.client.save_application_draft()
+            self.status_msg.setText("Черновик заявки сохранен.")
+        except Exception as e:
+            QMessageBox.warning(self, "Сохранение черновика", f"Не удалось сохранить черновик заявки: {e}")
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)
