@@ -527,10 +527,13 @@ def make_tektorg_technical_upload_task(
     client: EtpClient,
     application_url: str,
     technical_dir: Path,
+    timing_sink: Optional[dict] = None,
 ) -> Callable[[Worker], None]:
     """Задача: загрузить технические файлы в форму заявки ТЭК-Торг."""
 
     def _run(w: Worker) -> None:
+        if timing_sink is not None:
+            timing_sink.clear()
         if not application_url:
             w.error.emit("Не сформирована ссылка на страницу подачи заявки.")
             return
@@ -564,6 +567,8 @@ def make_tektorg_technical_upload_task(
         except Exception as e:
             w.error.emit(f"Не удалось загрузить технические файлы: {e}")
             return
+        if timing_sink is not None:
+            timing_sink["timings"] = result.get("timings") or []
 
         uploaded = len(result.get("uploaded") or [])
         errors = result.get("errors") or []

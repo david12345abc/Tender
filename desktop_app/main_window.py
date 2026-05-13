@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self._cache_save_timer.timeout.connect(self._save_cache_now)
         self._analysis_sink: dict[str, Any] = {}
         self._row_download_sink: dict[str, Any] = {}
+        self._upload_timing_sink: dict[str, Any] = {}
 
         self._build_ui()
         self._set_platform_buttons()
@@ -1514,7 +1515,12 @@ class MainWindow(QMainWindow):
         if self.technical_upload_runner.is_running():
             self.status_msg.setText("Технические файлы уже загружаются в форму заявки.")
             return
-        fn = make_tektorg_technical_upload_task(self.client, application_url, technical_dir)
+        fn = make_tektorg_technical_upload_task(
+            self.client,
+            application_url,
+            technical_dir,
+            timing_sink=self._upload_timing_sink,
+        )
         try:
             self.technical_upload_runner.start(
                 fn,
@@ -1528,8 +1534,35 @@ class MainWindow(QMainWindow):
     @Slot(bool, str)
     def _on_technical_upload_status(self, ok: bool, message: str) -> None:
         self.status_msg.setText(message)
+        self._show_upload_timing_dialog()
         if not ok:
             QMessageBox.warning(self, "Загрузка технических файлов", message)
+
+    def _show_upload_timing_dialog(self) -> None:
+        timings = self._upload_timing_sink.get("timings") or []
+        if not timings:
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Временный лог выполнения")
+        dlg.resize(760, 520)
+        layout = QVBoxLayout(dlg)
+        text = QTextEdit(dlg)
+        text.setReadOnly(True)
+        lines = ["Детальный лог времени выполнения:", ""]
+        for index, item in enumerate(timings, start=1):
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "Шаг").strip()
+            seconds = float(item.get("seconds") or 0)
+            ok = bool(item.get("ok", True))
+            status = "OK" if ok else "ОШИБКА"
+            lines.append(f"{index}. [{status}] {label}: {seconds:.2f} сек.")
+        text.setPlainText("\n".join(lines))
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+        dlg.exec()
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)

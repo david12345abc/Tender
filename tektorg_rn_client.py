@@ -364,72 +364,124 @@ class TektorgRnClient(EtpClient):
         if not files:
             return {"uploaded": [], "errors": [f"В папке нет файлов: {technical_dir}"]}
 
+        timings: list[dict[str, Any]] = []
+        workflow_started = time.perf_counter()
+
+        def record_timing(label: str, started: float, ok: bool = True) -> None:
+            timings.append(
+                {
+                    "label": label,
+                    "seconds": round(time.perf_counter() - started, 3),
+                    "ok": ok,
+                }
+            )
+
         if progress:
             progress("Открываю вкладку подачи заявки для загрузки технических файлов...")
+        step_started = time.perf_counter()
         self._switch_to_application_tab(application_url, progress=progress)
+        record_timing(f"Переход на страницу подачи заявки: {application_url}", step_started)
         if progress:
             progress("Ожидаю блок технической части заявки...")
+        step_started = time.perf_counter()
         self._ensure_technical_tab_active()
+        record_timing("Ожидание технической части предложения", step_started)
+        step_started = time.perf_counter()
         self._clear_uploaded_files(progress=progress)
+        record_timing("Очистка ранее загруженных технических файлов", step_started)
 
         uploaded: list[str] = []
         errors: list[str] = []
         for index, path in enumerate(files, start=1):
             if progress:
                 progress(f"Загружаю технический файл {index}/{len(files)}: {path.name}")
+            step_started = time.perf_counter()
             try:
                 self._upload_one_file(path, progress=progress)
                 self._remove_duplicate_uploaded_files(progress=progress)
                 if not self._is_uploaded_file_listed(path):
                     raise RuntimeError("файл не появился в списке загруженных документов")
                 uploaded.append(str(path))
+                record_timing(f"Загрузка технического файла {index}: {path.name}", step_started)
             except Exception as e:
+                record_timing(f"Загрузка технического файла {index}: {path.name}", step_started, ok=False)
                 errors.append(f"{path.name}: {e}")
                 break
+        step_started = time.perf_counter()
         self._remove_duplicate_uploaded_files(progress=progress)
+        record_timing("Финальная проверка дублей технических файлов", step_started)
         commercial_terms: CommercialTerms | None = None
         supplier_characteristic: SupplierCharacteristic | None = None
         commercial_upload: dict[str, Any] = {}
         if not errors:
+            step_started = time.perf_counter()
             try:
                 supplier_characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
                 if supplier_characteristic.label:
                     if progress:
                         progress(f"Выбираю характеристику поставщика: {supplier_characteristic.label}")
                     self._select_supplier_characteristic(supplier_characteristic.label)
+                    record_timing(
+                        f"Определение и выбор характеристики поставщика: {supplier_characteristic.label}",
+                        step_started,
+                    )
                 else:
+                    record_timing("Определение характеристики поставщика", step_started, ok=False)
                     errors.append("Характеристика поставщика: не удалось определить подходящий пункт.")
             except Exception as e:
+                record_timing("Определение и выбор характеристики поставщика", step_started, ok=False)
                 errors.append(f"Характеристика поставщика: {e}")
         if not errors:
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
+            step_started = time.perf_counter()
             self._ensure_commercial_tab_active()
+            record_timing("Переход на вкладку коммерческой части предложения", step_started)
             try:
+                step_started = time.perf_counter()
                 commercial_upload = self._upload_commercial_documents(technical_dir, progress=progress)
+                for timing in commercial_upload.get("timings") or []:
+                    if isinstance(timing, dict):
+                        timings.append(timing)
                 if commercial_upload.get("errors"):
+                    record_timing("Загрузка коммерческих документов", step_started, ok=False)
                     errors.extend(str(error) for error in commercial_upload.get("errors") or [])
+                else:
+                    commercial_uploaded = len(commercial_upload.get("uploaded") or [])
+                    record_timing(f"Загрузка коммерческих документов: {commercial_uploaded}", step_started)
             except Exception as e:
+                record_timing("Загрузка коммерческих документов", step_started, ok=False)
                 errors.append(f"Коммерческие документы: {e}")
         if not errors:
             if progress:
                 progress("Открываю окно формирования письма о подаче заявки...")
+            step_started = time.perf_counter()
             self._open_application_letter_modal()
+            record_timing("Открытие окна формирования письма", step_started)
+            step_started = time.perf_counter()
             self._fill_application_letter_defaults()
+            record_timing("Заполнение константных значений письма", step_started)
             try:
+                step_started = time.perf_counter()
                 commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
+                record_timing("Распознавание итоговой стоимости и срока действия", step_started)
                 if commercial_terms.price_with_vat or commercial_terms.price_without_vat or commercial_terms.validity_date:
+                    step_started = time.perf_counter()
                     self._fill_application_letter_commercial_terms(commercial_terms)
+                    record_timing("Заполнение распознанных коммерческих условий", step_started)
                 else:
                     errors.append("Коммерческая часть: не удалось уверенно найти итоговую стоимость или срок действия предложения.")
             except Exception as e:
+                record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
                 errors.append(f"Коммерческая часть: {e}")
+        record_timing("Весь сценарий после распределения файлов", workflow_started, ok=not errors)
         return {
             "uploaded": uploaded,
             "errors": errors,
             "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
             "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
             "commercial_upload": commercial_upload,
+            "timings": timings,
         }
 
     def _switch_to_application_tab(
@@ -882,9 +934,21 @@ const callback = arguments[arguments.length - 1];
 
         uploaded: list[str] = []
         errors: list[str] = []
+        timings: list[dict[str, Any]] = []
+
+        def record_timing(label: str, started: float, ok: bool = True) -> None:
+            timings.append(
+                {
+                    "label": label,
+                    "seconds": round(time.perf_counter() - started, 3),
+                    "ok": ok,
+                }
+            )
+
         for index, path in enumerate(files, start=1):
             if progress:
                 progress(f"Загружаю коммерческий файл {index}/{len(files)}: {path.name}")
+            step_started = time.perf_counter()
             try:
                 self._upload_one_file(
                     path,
@@ -900,7 +964,9 @@ const callback = arguments[arguments.length - 1];
                 if not self._is_uploaded_file_listed(path, upload_panel_id=panel_id):
                     raise RuntimeError("файл не появился в списке коммерческих документов")
                 uploaded.append(str(path))
+                record_timing(f"Загрузка коммерческого файла {index}: {path.name}", step_started)
             except Exception as e:
+                record_timing(f"Загрузка коммерческого файла {index}: {path.name}", step_started, ok=False)
                 errors.append(f"{path.name}: {e}")
                 break
         self._remove_duplicate_uploaded_files(
@@ -908,7 +974,7 @@ const callback = arguments[arguments.length - 1];
             upload_panel_id=panel_id,
             description="коммерческих документов",
         )
-        return {"uploaded": uploaded, "errors": errors}
+        return {"uploaded": uploaded, "errors": errors, "timings": timings}
 
     def _select_supplier_characteristic(self, label: str) -> None:
         assert self.driver is not None
