@@ -1400,13 +1400,6 @@ class MainWindow(QMainWindow):
                 "Часть файлов не удалось переместить:\n\n" + "\n".join(str(e) for e in errors[:10]),
             )
             return
-        QMessageBox.information(
-            self,
-            "Файлы распределены",
-            f"Файлы успешно распределены по папкам.\n\n"
-            f"Коммерческие: {commercial_count}\n"
-            f"Технические: {technical_count}",
-        )
         application_url = self._open_application_create_tab()
         if application_url:
             self._start_technical_upload(application_url, folder / "Технические")
