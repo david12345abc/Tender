@@ -2254,7 +2254,7 @@ return {
             progress(f"Открываю штатный выбор файла: {path.name}")
         try:
             before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
-            self._upload_one_file_via_dialog(path, upload_panel_id=upload_panel_id)
+            self._upload_one_file_via_dialog(path, upload_panel_id=upload_panel_id, progress=progress)
             if self._wait_after_file_selection(
                 path,
                 upload_panel_id=upload_panel_id,
@@ -2267,65 +2267,17 @@ return {
             if progress:
                 progress(f"Штатная загрузка не подтвердилась для {path.name}: {e}")
 
-        direct_error: Exception | None = None
-        try:
-            if progress:
-                progress(f"Пробую резервную загрузку через input: {path.name}")
-            before_count = len(self._uploaded_file_names(upload_panel_id=upload_panel_id))
-            input_element = self._find_tektorg_file_input(upload_panel_id=upload_panel_id, area_name=area_name)
-            self.driver.execute_script(
-                """
-const input = arguments[0];
-let node = input;
-while (node && node !== document.body) {
-  node.style.display = node.style.display === 'none' ? 'block' : node.style.display;
-  node.style.visibility = 'visible';
-  node = node.parentElement;
-}
-input.style.display = 'block';
-input.style.visibility = 'visible';
-input.style.opacity = 1;
-input.style.position = 'relative';
-input.style.zIndex = 999999;
-input.style.width = '520px';
-input.style.height = '30px';
-input.removeAttribute('disabled');
-input.scrollIntoView({ block: 'center', inline: 'center' });
-""",
-                input_element,
-            )
-            if progress:
-                progress(f"Передаю файл в поле загрузки через DevTools: {path.name}")
-            try:
-                self._set_file_input_files_with_cdp(input_element, path)
-            except Exception as cdp_error:
-                if progress:
-                    progress(f"DevTools-загрузка не сработала, пробую Selenium send_keys: {cdp_error}")
-                input_element.send_keys(str(path))
-            self._dispatch_file_input_events(input_element)
-            if self._wait_after_file_selection(
-                path,
-                upload_panel_id=upload_panel_id,
-                previous_count=before_count,
-            ):
-                return
-            raise RuntimeError("Сайт не показал файл в списке после выбора через input.")
-        except Exception as e:
-            direct_error = e
-            if progress:
-                progress(f"Прямая загрузка через input не сработала для {path.name}: {e}")
-
         if progress:
             progress(f"Проверяю, не появился ли файл с задержкой: {path.name}")
         if self._wait_after_file_selection(
             path,
             upload_panel_id=upload_panel_id,
             previous_count=None,
-            timeout_seconds=45.0,
+            timeout_seconds=20.0,
         ):
             return
 
-        raise RuntimeError(f"Файл не загрузился. Ошибка штатной загрузки: {dialog_error}. Ошибка input: {direct_error}")
+        raise RuntimeError(f"Файл не загрузился через штатный выбор файла: {dialog_error}")
 
     def _find_tektorg_file_input(
         self,
@@ -2498,7 +2450,7 @@ return { bodyText, masks };
                         continue
             except Exception:
                 pass
-            time.sleep(0.4)
+            time.sleep(0.2)
         return self._is_uploaded_file_listed(path, upload_panel_id=upload_panel_id)
 
     def _is_uploaded_file_listed(
@@ -2759,62 +2711,201 @@ const callback = arguments[arguments.length - 1];
         self,
         path: Path,
         upload_panel_id: str = "application_docs_tech_1",
+        progress: Optional[Callable[[str], None]] = None,
     ) -> None:
         assert self.driver is not None
-        clicked = self.driver.execute_async_script(
-            r"""
-const callback = arguments[arguments.length - 1];
-const uploadPanelId = arguments[0];
-(async () => {
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const upload = window.Ext && Ext.getCmp ? Ext.getCmp(uploadPanelId) : null;
-  const uploadPanel = upload && upload.ids ? Ext.getCmp(upload.ids.upload_panel_id) : null;
-  const uploadDom = uploadPanel && uploadPanel.el && uploadPanel.el.dom;
-  if (uploadDom) {
-    const button = Array.from(uploadDom.querySelectorAll("button, input[type=button], a, span, div"))
-      .find((el) => /Выбрать\s+и\s+загрузить\s+файл/i.test(String(el.innerText || el.value || el.textContent || "")));
-    if (button) {
-      try {
-        button.scrollIntoView({ block: "center", inline: "center" });
-        button.click();
-        await wait(700);
-        callback(true);
-        return;
-      } catch (e) {}
-    }
-  }
-  for (let i = 0; i < 40; i++) {
-    const nodes = Array.from(document.querySelectorAll("button, input[type=button], a, span, div"));
-    const button = nodes.find((el) => /Выбрать\s+и\s+загрузить\s+файл/i.test(String(el.innerText || el.value || el.textContent || "")));
-    if (button) {
-      try {
-        button.scrollIntoView({ block: "center", inline: "center" });
-        button.click();
-        callback(true);
-        return;
-      } catch (e) {
-        callback(false);
-        return;
-      }
-    }
-    await wait(250);
-  }
-  callback(false);
-})();
-""",
-            upload_panel_id,
-        )
-        if not clicked:
-            raise RuntimeError("Не найдена кнопка «Выбрать и загрузить файл».")
+        last_error = ""
+        for attempt in range(1, 4):
+            if progress:
+                progress(f"Нажимаю кнопку выбора файла ({attempt}/3): {path.name}")
+            clicked = self._click_tektorg_upload_button(upload_panel_id)
+            if not clicked:
+                last_error = "кнопка «Выбрать и загрузить файл» не найдена или не нажалась"
+                time.sleep(0.3)
+                continue
+            dialog_hwnd = self._wait_for_windows_file_dialog(timeout_seconds=5.0)
+            if dialog_hwnd:
+                if progress:
+                    progress(f"Выбираю файл в окне Windows: {path.name}")
+                self._choose_file_in_windows_dialog(dialog_hwnd, path)
+                self._wait_for_windows_file_dialog_closed(dialog_hwnd, timeout_seconds=5.0)
+                time.sleep(0.15)
+                return
+            last_error = "после нажатия кнопки окно выбора файла Windows не открылось"
+            time.sleep(0.5)
+        raise RuntimeError(last_error or "Не удалось открыть штатное окно выбора файла.")
 
-        time.sleep(0.7)
+    def _click_tektorg_upload_button(self, upload_panel_id: str) -> bool:
+        assert self.driver is not None
+        try:
+            button = self.driver.execute_script(
+                r"""
+const uploadPanelId = arguments[0];
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const target = /Выбрать\s+и\s+загрузить\s+файл/i;
+const upload = window.Ext && Ext.getCmp ? Ext.getCmp(uploadPanelId) : null;
+const uploadPanel = upload && upload.ids ? Ext.getCmp(upload.ids.upload_panel_id) : null;
+const uploadDom = uploadPanel && uploadPanel.el && uploadPanel.el.dom;
+const roots = [uploadDom, document].filter(Boolean);
+for (const root of roots) {
+  const nodes = Array.from(root.querySelectorAll(".x-btn, button, input[type=button], a, span, div, td, em"));
+  for (const node of nodes) {
+    if (!visible(node) || !target.test(textOf(node))) continue;
+    const clickable = node.closest && node.closest(".x-btn, table.x-btn, button, a");
+    const candidate = clickable && visible(clickable) ? clickable : node;
+    candidate.scrollIntoView({ block: "center", inline: "center" });
+    return candidate;
+  }
+}
+return null;
+""",
+                upload_panel_id,
+            )
+            if button is None:
+                return False
+            try:
+                button.click()
+                return True
+            except Exception:
+                self.driver.execute_script(
+                    r"""
+const node = arguments[0];
+if (!node) return false;
+node.scrollIntoView({ block: "center", inline: "center" });
+for (const type of ["mouseover", "mousemove", "mousedown", "mouseup", "click"]) {
+  node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+}
+if (typeof node.click === "function") node.click();
+return true;
+""",
+                    button,
+                )
+                return True
+        except Exception:
+            return False
+
+    def _choose_file_in_windows_dialog(self, hwnd: int, path: Path) -> None:
+        from pywinauto import Desktop
+        from pywinauto.keyboard import send_keys
+
+        dialog = Desktop(backend="win32").window(handle=hwnd)
+        dialog.wait("visible enabled ready", timeout=3)
+        dialog.set_focus()
+        edits = [
+            edit for edit in dialog.descendants(class_name="Edit")
+            if edit.is_visible() and edit.is_enabled()
+        ]
+        if not edits:
+            self._choose_file_in_windows_dialog_via_clipboard(path)
+            return
+        edits.sort(key=lambda edit: edit.rectangle().top, reverse=True)
+        file_name_edit = edits[0]
+        try:
+            file_name_edit.set_focus()
+            file_name_edit.set_edit_text(str(path))
+        except Exception:
+            self._set_windows_clipboard_text(str(path))
+            file_name_edit.click_input()
+            send_keys("^a")
+            send_keys("^v")
+        buttons = [
+            button for button in dialog.descendants(class_name="Button")
+            if button.is_visible() and button.is_enabled()
+        ]
+        open_button = None
+        for button in buttons:
+            title = str(button.window_text() or "").replace("&", "").strip()
+            if re.search(r"^(Открыть|Open|Выбрать|Choose)$", title, re.I):
+                open_button = button
+                break
+        if open_button is not None:
+            open_button.click_input()
+            return
+        dialog.set_focus()
+        send_keys("{ENTER}")
+
+    def _choose_file_in_windows_dialog_via_clipboard(self, path: Path) -> None:
         self._set_windows_clipboard_text(str(path))
         from pywinauto.keyboard import send_keys
 
         send_keys("^v")
-        time.sleep(0.2)
+        time.sleep(0.05)
         send_keys("{ENTER}")
-        time.sleep(0.6)
+
+    def _wait_for_windows_file_dialog(self, timeout_seconds: float = 5.0) -> int | None:
+        try:
+            import win32con
+            import win32gui
+        except Exception:
+            time.sleep(0.5)
+            return None
+
+        def has_edit_child(hwnd: int) -> bool:
+            found = False
+
+            def enum_child(child, _):
+                nonlocal found
+                if win32gui.GetClassName(child).lower() == "edit":
+                    found = True
+                    return False
+                return True
+
+            try:
+                win32gui.EnumChildWindows(hwnd, enum_child, None)
+            except Exception:
+                return False
+            return found
+
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            candidates: list[int] = []
+
+            def enum_handler(hwnd, _):
+                if not win32gui.IsWindowVisible(hwnd):
+                    return
+                if win32gui.GetClassName(hwnd) != "#32770":
+                    return
+                title = win32gui.GetWindowText(hwnd)
+                if not has_edit_child(hwnd):
+                    return
+                if title and not re.search(r"откры|open|выбор|choose|file|файл", title, re.I):
+                    # Windows file dialogs sometimes have custom titles; keep them as fallback.
+                    candidates.append(hwnd)
+                    return
+                candidates.insert(0, hwnd)
+
+            win32gui.EnumWindows(enum_handler, None)
+            if candidates:
+                hwnd = candidates[0]
+                try:
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
+                    win32gui.SetForegroundWindow(hwnd)
+                except Exception:
+                    pass
+                return hwnd
+            time.sleep(0.1)
+        return None
+
+    def _wait_for_windows_file_dialog_closed(self, hwnd: int, timeout_seconds: float = 4.0) -> bool:
+        try:
+            import win32gui
+        except Exception:
+            return False
+        deadline = time.time() + timeout_seconds
+        while time.time() < deadline:
+            try:
+                if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+                    return True
+            except Exception:
+                return True
+            time.sleep(0.1)
+        return False
 
     def _set_windows_clipboard_text(self, text: str) -> None:
         import win32clipboard
