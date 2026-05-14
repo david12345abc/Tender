@@ -392,14 +392,15 @@ class TektorgRnClient(EtpClient):
         has_technical_tab = self._has_technical_tab_button()
         record_timing("Проверка наличия технической части предложения", step_started)
         if progress:
-            progress("Запускаю фоновое распознавание характеристики и коммерческих условий...")
+            progress("Запускаю фоновое распознавание коммерческих условий...")
         step_started = time.perf_counter()
         analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tektorg-analysis")
-        supplier_future = analysis_executor.submit(
-            run_background,
-            "определение характеристики поставщика",
-            lambda: self._classify_supplier_characteristic(technical_dir, progress=None),
-        )
+        if has_technical_tab:
+            supplier_future = analysis_executor.submit(
+                run_background,
+                "определение характеристики поставщика",
+                lambda: self._classify_supplier_characteristic(technical_dir, progress=None),
+            )
         commercial_terms_future = analysis_executor.submit(
             run_background,
             "распознавание итоговой стоимости и срока действия",
@@ -452,7 +453,7 @@ class TektorgRnClient(EtpClient):
         supplier_characteristic: SupplierCharacteristic | None = None
         commercial_upload: dict[str, Any] = {}
         manual_letter_required_fields: list[str] = []
-        if not errors:
+        if not errors and has_technical_tab:
             step_started = time.perf_counter()
             try:
                 if supplier_future is not None:
@@ -477,6 +478,8 @@ class TektorgRnClient(EtpClient):
             except Exception as e:
                 record_timing("Определение и выбор характеристики поставщика", step_started, ok=False)
                 errors.append(f"Характеристика поставщика: {e}")
+        elif not has_technical_tab:
+            record_timing("Характеристика поставщика пропущена вместе с технической частью", time.perf_counter())
         if not errors:
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
@@ -635,7 +638,7 @@ class TektorgRnClient(EtpClient):
             time.sleep(0.3)
         raise RuntimeError("Страница подачи заявки не открылась в браузере.")
 
-    def _has_technical_tab_button(self) -> bool:
+    def _application_offer_tabs_state(self) -> dict[str, Any]:
         assert self.driver is not None
         script = r"""
 const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
@@ -645,27 +648,52 @@ const visible = (el) => {
   const rect = el.getBoundingClientRect();
   return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
 };
-const tabNodes = () => Array.from(document.querySelectorAll(
-  ".x-tab-strip-text, li.x-tab-strip-active, li.x-tab-strip-over, li.x-tab-edge, ul.x-tab-strip li, .x-tab-right, .x-tab-left"
-)).filter(visible);
-const isTabText = (el, pattern) => {
-  const text = textOf(el);
-  if (!pattern.test(text)) return false;
-  const tab = el.closest && el.closest("li, .x-tab-strip-wrap, .x-tab-panel-header, .x-tab-right, .x-tab-left");
-  return !!(tab && visible(tab));
+const sameText = (text, pattern) => pattern.test(String(text || "").replace(/\s+/g, " ").trim());
+const tabContainers = () => {
+  const selectors = [
+    ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge)",
+    "ul.x-tab-strip li:not(.x-tab-edge)",
+    "[role='tab']",
+    ".x-tab-strip-text"
+  ];
+  const items = [];
+  for (const selector of selectors) {
+    for (const el of Array.from(document.querySelectorAll(selector))) {
+      if (!visible(el)) continue;
+      const container = el.closest && el.closest("li:not(.x-tab-edge), [role='tab']");
+      const node = container && visible(container) ? container : el;
+      const text = textOf(node);
+      if (!text) continue;
+      items.push({ node, text });
+    }
+  }
+  const seen = new Set();
+  return items.filter((item) => {
+    const rect = item.node.getBoundingClientRect();
+    const key = `${item.text}:${Math.round(rect.left)}:${Math.round(rect.top)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 };
-const tabs = tabNodes();
-const hasTechnicalDom = tabs.some((el) => isTabText(el, /^Техническая\s+часть\s+предложения$/i));
-const hasCommercialDom = tabs.some((el) => isTabText(el, /^Коммерческая\s+часть\s+предложения$/i));
+const tabs = tabContainers();
+const labels = tabs.map((item) => item.text);
+const hasTechnicalDom = labels.some((text) => sameText(text, /^Техническая\s+часть\s+предложения$/i));
+const hasCommercialDom = labels.some((text) => sameText(text, /^Коммерческая\s+часть\s+предложения$/i));
 return {
   hasTechnical: hasTechnicalDom,
   hasCommercial: hasCommercialDom,
+  labels,
 };
 """
-        deadline = time.time() + 8
+        result = self.driver.execute_script(script)
+        return result if isinstance(result, dict) else {"hasTechnical": False, "hasCommercial": False, "labels": []}
+
+    def _has_technical_tab_button(self) -> bool:
+        deadline = time.time() + 2.0
         last_result: Any = None
         while time.time() < deadline:
-            last_result = self.driver.execute_script(script)
+            last_result = self._application_offer_tabs_state()
             if isinstance(last_result, dict):
                 if last_result.get("hasTechnical"):
                     return True
@@ -690,12 +718,18 @@ const callback = arguments[arguments.length - 1];
     return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   };
   const findVisibleTechnicalTab = () => Array.from(document.querySelectorAll(
-    ".x-tab-strip-text, ul.x-tab-strip li, .x-tab-right, .x-tab-left, [role='tab'], a, button, li"
+    ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge), ul.x-tab-strip li:not(.x-tab-edge), .x-tab-strip-text, [role='tab']"
   )).find((el) => {
     if (!visible(el) || textOf(el) !== "Техническая часть предложения") return false;
-    const tab = el.closest && el.closest("li, .x-tab-strip-wrap, .x-tab-panel-header, .x-tab-right, .x-tab-left, [role='tab']");
+    const tab = el.closest && el.closest("li:not(.x-tab-edge), [role='tab']");
     return !!(tab && visible(tab));
   });
+  const visibleOfferTabLabels = () => Array.from(document.querySelectorAll(
+    ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge), ul.x-tab-strip li:not(.x-tab-edge), .x-tab-strip-text, [role='tab']"
+  ))
+    .filter(visible)
+    .map((el) => textOf((el.closest && el.closest("li:not(.x-tab-edge), [role='tab']")) || el))
+    .filter(Boolean);
   const clickBest = (node) => {
     const chain = [node, node && node.parentElement, node && node.parentElement && node.parentElement.parentElement];
     for (const el of chain) {
@@ -708,7 +742,7 @@ const callback = arguments[arguments.length - 1];
     }
     return false;
   };
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 12; i++) {
     const bodyText = String(document.body && document.body.innerText || "");
     const hasTechnicalBlock = /Документы\s+технической\s+части\s+заявки/i.test(bodyText);
     const hasFileInput = Array.from(document.querySelectorAll("input[type='file']")).some(visible);
@@ -723,8 +757,16 @@ const callback = arguments[arguments.length - 1];
     const tab = findVisibleTechnicalTab();
     if (tab) {
       clickBest(tab);
+    } else {
+      const labels = visibleOfferTabLabels();
+      const hasCommercial = labels.some((text) => /^Коммерческая\s+часть\s+предложения$/i.test(text));
+      const hasTechnical = labels.some((text) => /^Техническая\s+часть\s+предложения$/i.test(text));
+      if (hasCommercial && !hasTechnical) {
+        callback(false);
+        return;
+      }
     }
-    await wait(400);
+    await wait(250);
   }
   callback(false);
 })();

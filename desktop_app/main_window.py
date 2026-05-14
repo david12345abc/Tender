@@ -100,6 +100,7 @@ class MainWindow(QMainWindow):
         self._analysis_sink: dict[str, Any] = {}
         self._row_download_sink: dict[str, Any] = {}
         self._technical_upload_sink: dict[str, Any] = {}
+        self._application_workflow_started_at: Optional[float] = None
 
         self._build_ui()
         self._set_platform_buttons()
@@ -1249,12 +1250,15 @@ class MainWindow(QMainWindow):
         if not idx.isValid() or not self.sidebar.btn_search_by_number.isChecked():
             return
         proc = self._proc_from_index(idx)
+        self._application_workflow_started_at = time.perf_counter()
         self._open_in_browser(proc)
         self._start_tektorg_row_download(proc)
 
     def _on_row_double_clicked(self, idx: QModelIndex) -> None:
         proc = self._proc_from_index(idx)
         if self.sidebar.btn_search_by_number.isChecked():
+            if self._application_workflow_started_at is None:
+                self._application_workflow_started_at = time.perf_counter()
             self._open_in_browser(proc)
             self._start_tektorg_row_download(proc)
             return
@@ -1608,6 +1612,16 @@ class MainWindow(QMainWindow):
             return missing_labels[0]
         return " и ".join(missing_labels)
 
+    def _application_workflow_elapsed_text(self) -> str:
+        if self._application_workflow_started_at is None:
+            return ""
+        elapsed = max(0, int(round(time.perf_counter() - self._application_workflow_started_at)))
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02d}:{seconds:02d}"
+        return f"{minutes:02d}:{seconds:02d}"
+
     def _show_application_filled_dialog(self) -> None:
         box = QMessageBox(self)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
@@ -1624,7 +1638,10 @@ class MainWindow(QMainWindow):
         try:
             self.status_msg.setText("Сохраняю черновик заявки...")
             self.client.save_application_draft()
-            self.status_msg.setText("Черновик заявки сохранен.")
+            elapsed_text = self._application_workflow_elapsed_text()
+            self.status_msg.setText(
+                f"Черновик заявки сохранен. {elapsed_text}" if elapsed_text else "Черновик заявки сохранен."
+            )
         except Exception as e:
             QMessageBox.warning(self, "Сохранение черновика", f"Не удалось сохранить черновик заявки: {e}")
 
