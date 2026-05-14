@@ -68,6 +68,7 @@ from .worker import (
     make_analyze_procedure_task,
     make_download_documents_task,
     make_search_task,
+    make_tektorg_commercial_continue_task,
     make_tektorg_row_documents_task,
     make_tektorg_technical_upload_task,
 )
@@ -101,6 +102,7 @@ class MainWindow(QMainWindow):
         self._row_download_sink: dict[str, Any] = {}
         self._technical_upload_sink: dict[str, Any] = {}
         self._application_workflow_started_at: Optional[float] = None
+        self._current_technical_dir: Optional[Path] = None
 
         self._build_ui()
         self._set_platform_buttons()
@@ -1519,6 +1521,7 @@ class MainWindow(QMainWindow):
         if self.technical_upload_runner.is_running():
             self.status_msg.setText("Технические файлы уже загружаются в форму заявки.")
             return
+        self._current_technical_dir = technical_dir
         self._technical_upload_sink.clear()
         fn = make_tektorg_technical_upload_task(
             self.client,
@@ -1542,12 +1545,66 @@ class MainWindow(QMainWindow):
         if not ok:
             QMessageBox.warning(self, "Загрузка технических файлов", message)
             return
+        if self._technical_upload_sink.get("manual_commercial_files_required"):
+            self._handle_missing_commercial_files()
+            return
         manual_fields = list(self._technical_upload_sink.get("manual_letter_required_fields") or [])
         if manual_fields:
             self._handle_manual_letter_fields(manual_fields)
             return
         self._bring_window_to_front()
         self._show_application_filled_dialog()
+
+    def _handle_missing_commercial_files(self) -> None:
+        self._bring_window_to_front()
+        technical_dir = self._current_technical_dir
+        commercial_dir = technical_dir.parent / "Коммерческие" if technical_dir else None
+        box = QMessageBox(self)
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Коммерческие файлы не найдены")
+        text = (
+            "Робот среди скачанных файлов не распознал ни одного файла, "
+            "относящегося к коммерческой части.\n\n"
+            "Пожалуйста, добавьте коммерческие файлы в папку «Коммерческие»"
+        )
+        if commercial_dir:
+            text += f":\n{commercial_dir}"
+        text += "\n\nПосле добавления файлов нажмите «Готово»."
+        box.setText(text)
+        btn_done = box.addButton("Готово", QMessageBox.AcceptRole)
+        box.exec()
+        if box.clickedButton() is not btn_done:
+            return
+        self._start_commercial_continue()
+
+    def _start_commercial_continue(self) -> None:
+        technical_dir = self._current_technical_dir
+        if technical_dir is None:
+            QMessageBox.warning(
+                self,
+                "Коммерческие файлы",
+                "Не удалось определить папку технических документов для продолжения сценария.",
+            )
+            return
+        if self.technical_upload_runner.is_running():
+            self.status_msg.setText("Сценарий заявки уже выполняется.")
+            return
+        self._technical_upload_sink.clear()
+        fn = make_tektorg_commercial_continue_task(
+            self.client,
+            technical_dir,
+            result_sink=self._technical_upload_sink,
+        )
+        try:
+            self.technical_upload_runner.start(
+                fn,
+                on_progress=self._on_progress,
+                on_session=self._on_technical_upload_status,
+                on_error=self._on_error,
+            )
+        except Exception as e:
+            self._on_error(f"Не удалось продолжить коммерческую часть: {e}")
 
     def _handle_manual_letter_fields(self, fields: list[str]) -> None:
         self._bring_window_to_front()

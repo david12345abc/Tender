@@ -595,6 +595,9 @@ def make_tektorg_technical_upload_task(
         commercial_uploaded = len(commercial_upload.get("uploaded") or [])
         if commercial_uploaded:
             details += f"\n\nКоммерческие файлы загружены: {commercial_uploaded}"
+        manual_commercial_files_required = bool(result.get("manual_commercial_files_required"))
+        if manual_commercial_files_required:
+            details += "\n\nТребуется ручное добавление коммерческих файлов."
         manual_fields = result.get("manual_letter_required_fields") or []
         if manual_fields:
             labels = {
@@ -607,11 +610,85 @@ def make_tektorg_technical_upload_task(
             )
         if errors:
             details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
-        ok = not errors and (uploaded > 0 or commercial_uploaded > 0 or bool(commercial_parts))
+        ok = not errors and (
+            uploaded > 0
+            or commercial_uploaded > 0
+            or bool(commercial_parts)
+            or manual_commercial_files_required
+        )
         w.session.emit(
             ok,
             f"Технические файлы обработаны. Загружено: {uploaded}, ошибок: {len(errors)}.{details}",
         )
+
+    return _run
+
+
+def make_tektorg_commercial_continue_task(
+    client: EtpClient,
+    technical_dir: Path,
+    result_sink: Optional[dict] = None,
+) -> Callable[[Worker], None]:
+    """Продолжить сценарий ТЭК-Торг после ручного добавления коммерческих файлов."""
+
+    def _run(w: Worker) -> None:
+        if result_sink is not None:
+            result_sink.clear()
+        if not technical_dir.exists():
+            w.error.emit(f"Папка технических документов не найдена:\n{technical_dir}")
+            return
+        if client.driver is None:
+            try:
+                client.connect()
+            except Exception as e:
+                w.error.emit(f"Ошибка подключения к Chrome: {e}")
+                return
+
+        continue_fn = getattr(client, "continue_commercial_documents_after_manual_files", None)
+        if not callable(continue_fn):
+            w.error.emit("Для текущей площадки не подключено продолжение коммерческой части.")
+            return
+        try:
+            result = continue_fn(technical_dir, progress=w.progress.emit)
+        except Exception as e:
+            w.error.emit(f"Не удалось продолжить коммерческую часть: {e}")
+            return
+        if result_sink is not None:
+            result_sink.update(result)
+
+        errors = result.get("errors") or []
+        details = ""
+        commercial = result.get("commercial_terms") or {}
+        commercial_parts = []
+        if commercial.get("price_with_vat"):
+            commercial_parts.append(f"итог с НДС: {commercial['price_with_vat']}")
+        if commercial.get("price_without_vat"):
+            commercial_parts.append(f"без НДС: {commercial['price_without_vat']}")
+        if commercial.get("validity_date"):
+            commercial_parts.append(f"действует до: {commercial['validity_date']}")
+        if commercial_parts:
+            details += "\n\nКоммерческие условия: " + ", ".join(commercial_parts)
+        commercial_upload = result.get("commercial_upload") or {}
+        commercial_uploaded = len(commercial_upload.get("uploaded") or [])
+        if commercial_uploaded:
+            details += f"\n\nКоммерческие файлы загружены: {commercial_uploaded}"
+        manual_commercial_files_required = bool(result.get("manual_commercial_files_required"))
+        if manual_commercial_files_required:
+            details += "\n\nКоммерческие файлы всё ещё не найдены."
+        manual_fields = result.get("manual_letter_required_fields") or []
+        if manual_fields:
+            labels = {
+                "price_with_vat": "итоговая стоимость с НДС",
+                "price_without_vat": "итоговая стоимость без НДС",
+                "validity_date": "дата действия заявки",
+            }
+            details += "\n\nТребуется ручное заполнение: " + ", ".join(
+                labels.get(str(field), str(field)) for field in manual_fields
+            )
+        if errors:
+            details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
+        ok = not errors and (commercial_uploaded > 0 or bool(commercial_parts) or manual_commercial_files_required)
+        w.session.emit(ok, f"Коммерческая часть обработана. Ошибок: {len(errors)}.{details}")
 
     return _run
 

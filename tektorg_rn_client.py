@@ -463,6 +463,7 @@ class TektorgRnClient(EtpClient):
         supplier_characteristic: SupplierCharacteristic | None = None
         commercial_upload: dict[str, Any] = {}
         manual_letter_required_fields: list[str] = []
+        manual_commercial_files_required = False
         if not errors and has_technical_tab:
             step_started = time.perf_counter()
             try:
@@ -505,13 +506,18 @@ class TektorgRnClient(EtpClient):
                 if commercial_upload.get("errors"):
                     record_timing("Загрузка коммерческих документов", step_started, ok=False)
                     errors.extend(str(error) for error in commercial_upload.get("errors") or [])
+                elif commercial_upload.get("missing_files"):
+                    manual_commercial_files_required = True
+                    if progress:
+                        progress("Ожидаю ручное добавление коммерческих файлов.")
+                    record_timing("Коммерческие файлы не найдены, требуется ручное добавление", step_started)
                 else:
                     commercial_uploaded = len(commercial_upload.get("uploaded") or [])
                     record_timing(f"Загрузка коммерческих документов: {commercial_uploaded}", step_started)
             except Exception as e:
                 record_timing("Загрузка коммерческих документов", step_started, ok=False)
                 errors.append(f"Коммерческие документы: {e}")
-        if not errors:
+        if not errors and not manual_commercial_files_required:
             if progress:
                 progress("Открываю окно формирования письма о подаче заявки...")
             step_started = time.perf_counter()
@@ -569,6 +575,113 @@ class TektorgRnClient(EtpClient):
             "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
             "commercial_upload": commercial_upload,
             "manual_letter_required_fields": manual_letter_required_fields,
+            "manual_commercial_files_required": manual_commercial_files_required,
+            "timings": timings,
+        }
+
+    def continue_commercial_documents_after_manual_files(
+        self,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        errors: list[str] = []
+        timings: list[dict[str, Any]] = []
+        commercial_upload: dict[str, Any] = {}
+        commercial_terms: CommercialTerms | None = None
+        manual_letter_required_fields: list[str] = []
+        manual_commercial_files_required = False
+
+        def record_timing(label: str, started: float, ok: bool = True) -> None:
+            timings.append(
+                {
+                    "label": label,
+                    "seconds": round(time.perf_counter() - started, 3),
+                    "ok": ok,
+                }
+            )
+
+        if progress:
+            progress("Продолжаю с коммерческой части предложения...")
+        step_started = time.perf_counter()
+        try:
+            self._ensure_commercial_tab_active()
+            record_timing("Переход на вкладку коммерческой части предложения", step_started)
+        except Exception as e:
+            record_timing("Переход на вкладку коммерческой части предложения", step_started, ok=False)
+            errors.append(f"Коммерческая часть: {e}")
+
+        if not errors:
+            step_started = time.perf_counter()
+            try:
+                commercial_upload = self._upload_commercial_documents(technical_dir, progress=progress)
+                for timing in commercial_upload.get("timings") or []:
+                    if isinstance(timing, dict):
+                        timings.append(timing)
+                if commercial_upload.get("missing_files"):
+                    manual_commercial_files_required = True
+                    if progress:
+                        progress("Коммерческие файлы всё ещё не найдены.")
+                    record_timing("Коммерческие файлы не найдены после ручного добавления", step_started, ok=False)
+                elif commercial_upload.get("errors"):
+                    record_timing("Загрузка коммерческих документов", step_started, ok=False)
+                    errors.extend(str(error) for error in commercial_upload.get("errors") or [])
+                else:
+                    commercial_uploaded = len(commercial_upload.get("uploaded") or [])
+                    record_timing(f"Загрузка коммерческих документов: {commercial_uploaded}", step_started)
+            except Exception as e:
+                record_timing("Загрузка коммерческих документов", step_started, ok=False)
+                errors.append(f"Коммерческие документы: {e}")
+
+        if not errors and not manual_commercial_files_required:
+            if progress:
+                progress("Открываю окно формирования письма о подаче заявки...")
+            step_started = time.perf_counter()
+            try:
+                self._open_application_letter_modal()
+                record_timing("Открытие окна формирования письма", step_started)
+                step_started = time.perf_counter()
+                self._fill_application_letter_defaults()
+                record_timing("Заполнение константных значений письма", step_started)
+                step_started = time.perf_counter()
+                commercial_terms = self._extract_commercial_terms_for_application(technical_dir, progress=progress)
+                if not commercial_terms.validity_date:
+                    commercial_terms.validity_date = self._default_offer_validity_date()
+                record_timing("Получение результата распознавания итоговой стоимости и срока действия", step_started)
+                if commercial_terms.price_with_vat or commercial_terms.price_without_vat or commercial_terms.validity_date:
+                    step_started = time.perf_counter()
+                    self._fill_application_letter_commercial_terms(commercial_terms)
+                    record_timing("Заполнение распознанных коммерческих условий", step_started)
+                    step_started = time.perf_counter()
+                    letter_status = self.application_letter_required_fields_status()
+                    manual_letter_required_fields = self._normalize_manual_letter_fields(
+                        letter_status.get("missing") or []
+                    )
+                    if manual_letter_required_fields:
+                        if progress:
+                            progress("Ожидаю ручное заполнение обязательных полей письма заявки.")
+                        record_timing("Письмо ожидает ручное заполнение обязательных полей", step_started)
+                    else:
+                        self._save_application_letter_modal()
+                        record_timing("Сохранение письма о подаче заявки", step_started)
+                else:
+                    errors.append("Коммерческая часть: не удалось уверенно найти итоговую стоимость или срок действия предложения.")
+            except ApplicationLetterManualInputRequired as e:
+                manual_letter_required_fields = self._normalize_manual_letter_fields(e.fields, str(e))
+                if progress:
+                    progress("Ожидаю ручное заполнение обязательных полей письма заявки.")
+                record_timing("Письмо ожидает ручное заполнение обязательных полей", step_started)
+            except Exception as e:
+                record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
+                errors.append(f"Коммерческая часть: {e}")
+
+        return {
+            "uploaded": [],
+            "errors": errors,
+            "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
+            "supplier_characteristic": {},
+            "commercial_upload": commercial_upload,
+            "manual_letter_required_fields": manual_letter_required_fields,
+            "manual_commercial_files_required": manual_commercial_files_required,
             "timings": timings,
         }
 
@@ -1194,7 +1307,12 @@ const callback = arguments[arguments.length - 1];
             if path.is_file() and not path.name.startswith("~$")
         ] if commercial_dir.exists() else []
         if not files:
-            return {"uploaded": [], "errors": [f"В папке нет коммерческих файлов: {commercial_dir}"]}
+            return {
+                "uploaded": [],
+                "errors": [],
+                "missing_files": True,
+                "folder": str(commercial_dir),
+            }
 
         panel_id = "application_docs_com_1"
         self._clear_uploaded_files(
