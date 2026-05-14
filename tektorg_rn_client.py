@@ -405,12 +405,11 @@ class TektorgRnClient(EtpClient):
             progress("Запускаю фоновое распознавание коммерческих условий...")
         step_started = time.perf_counter()
         analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tektorg-analysis")
-        if has_technical_tab:
-            supplier_future = analysis_executor.submit(
-                run_background,
-                "определение характеристики поставщика",
-                lambda: self._classify_supplier_characteristic(technical_dir, progress=None),
-            )
+        supplier_future = analysis_executor.submit(
+            run_background,
+            "определение характеристики поставщика",
+            lambda: self._classify_supplier_characteristic(technical_dir, progress=None),
+        )
         commercial_terms_future = analysis_executor.submit(
             run_background,
             "распознавание итоговой стоимости и срока действия",
@@ -492,6 +491,7 @@ class TektorgRnClient(EtpClient):
         elif not has_technical_tab:
             record_timing("Характеристика поставщика пропущена вместе с технической частью", time.perf_counter())
         if not errors:
+            self._close_tektorg_notification_dialogs(timeout_seconds=2.0)
             if progress:
                 progress("Перехожу на вкладку коммерческой части предложения...")
             step_started = time.perf_counter()
@@ -565,6 +565,31 @@ class TektorgRnClient(EtpClient):
             except Exception as e:
                 record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
                 errors.append(f"Коммерческая часть: {e}")
+        if not errors and not manual_commercial_files_required and not manual_letter_required_fields:
+            step_started = time.perf_counter()
+            try:
+                if supplier_characteristic is None and supplier_future is not None:
+                    supplier_value, supplier_timing = supplier_future.result()
+                    timings.append(supplier_timing)
+                    if isinstance(supplier_value, Exception):
+                        raise supplier_value
+                    supplier_characteristic = supplier_value
+                ensured_supplier = self._ensure_supplier_characteristic_if_required(
+                    technical_dir,
+                    existing=supplier_characteristic,
+                    progress=progress,
+                )
+                if ensured_supplier and ensured_supplier.label:
+                    supplier_characteristic = ensured_supplier
+                    record_timing(
+                        f"Финальная проверка характеристики поставщика: {ensured_supplier.label}",
+                        step_started,
+                    )
+                else:
+                    record_timing("Финальная проверка характеристики поставщика", step_started)
+            except Exception as e:
+                record_timing("Финальная проверка характеристики поставщика", step_started, ok=False)
+                errors.append(f"Характеристика поставщика: {e}")
         if analysis_executor is not None:
             analysis_executor.shutdown(wait=False, cancel_futures=True)
         record_timing("Весь сценарий после распределения файлов", workflow_started, ok=not errors)
@@ -673,12 +698,30 @@ class TektorgRnClient(EtpClient):
             except Exception as e:
                 record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
                 errors.append(f"Коммерческая часть: {e}")
+        supplier_characteristic: SupplierCharacteristic | None = None
+        if not errors and not manual_commercial_files_required and not manual_letter_required_fields:
+            step_started = time.perf_counter()
+            try:
+                supplier_characteristic = self._ensure_supplier_characteristic_if_required(
+                    technical_dir,
+                    progress=progress,
+                )
+                if supplier_characteristic and supplier_characteristic.label:
+                    record_timing(
+                        f"Финальная проверка характеристики поставщика: {supplier_characteristic.label}",
+                        step_started,
+                    )
+                else:
+                    record_timing("Финальная проверка характеристики поставщика", step_started)
+            except Exception as e:
+                record_timing("Финальная проверка характеристики поставщика", step_started, ok=False)
+                errors.append(f"Характеристика поставщика: {e}")
 
         return {
             "uploaded": [],
             "errors": errors,
             "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
-            "supplier_characteristic": {},
+            "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
             "commercial_upload": commercial_upload,
             "manual_letter_required_fields": manual_letter_required_fields,
             "manual_commercial_files_required": manual_commercial_files_required,
@@ -1296,6 +1339,174 @@ const callback = arguments[arguments.length - 1];
     ) -> SupplierCharacteristic:
         return classify_supplier_characteristic(technical_dir, progress=progress)
 
+    def _supplier_characteristic_status(self) -> dict[str, Any]:
+        assert self.driver is not None
+        script = r"""
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+const lower = (value) => norm(value).toLowerCase();
+const result = { visible: false, filled: false, value: "", source: "" };
+const acceptValue = (value) => {
+  const text = norm(value);
+  if (!text) return false;
+  if (/^(выберите|select|--|-)$/i.test(text)) return false;
+  if (/^[\d\s.,]+$/.test(text)) return false;
+  return true;
+};
+const eachCmp = (fn) => {
+  if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+  const all = Ext.ComponentMgr.all;
+  if (typeof all.each === "function") {
+    all.each(fn);
+    return;
+  }
+  const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+  for (const cmp of items) {
+    if (cmp && typeof cmp === "object") fn(cmp);
+  }
+};
+const visibleInputValue = (input) => {
+  if (!input || !visible(input)) return "";
+  return norm(input.value || input.getAttribute("value") || input.textContent || "");
+};
+const markFromInput = (input, source) => {
+  result.visible = true;
+  result.source = source;
+  const value = visibleInputValue(input);
+  if (acceptValue(value)) {
+    result.filled = true;
+    result.value = value;
+  }
+  return result.filled;
+};
+const cmpInput = (cmp) => {
+  const inputEl = cmp && cmp.inputEl && cmp.inputEl.dom;
+  if (inputEl) return inputEl;
+  const dom = cmp && cmp.el && cmp.el.dom;
+  return dom ? dom.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled])") : null;
+};
+const findInputNearNode = (node) => {
+  const formItem = node.closest(".x-form-item");
+  if (formItem) {
+    const input = formItem.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled]), select:not([disabled])");
+    if (input && visible(input)) return input;
+    return null;
+  }
+  const containers = [
+    node.closest("tr"),
+    node.parentElement,
+    node.parentElement && node.parentElement.parentElement,
+    node.parentElement && node.parentElement.parentElement && node.parentElement.parentElement.parentElement,
+  ].filter(Boolean);
+  for (const container of containers) {
+    const input = container.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled]), select:not([disabled])");
+    if (input && visible(input)) return input;
+  }
+  return null;
+};
+eachCmp((cmp) => {
+  if (result.filled || cmp.hidden || cmp.disabled) return;
+  if (String(cmp.name || "") !== "supplier_type_srm_id") return;
+  const input = cmpInput(cmp);
+  if (input && markFromInput(input, "component-name")) return;
+  const dom = cmp.el && cmp.el.dom;
+  if (dom && visible(dom)) {
+    result.visible = true;
+    result.source = "component-name";
+  }
+});
+if (result.filled) return result;
+const labels = Array.from(document.querySelectorAll("label, .x-form-item-label"))
+  .filter(visible)
+  .filter((el) => /характеристика\s+поставщика/i.test(lower(el.innerText || el.textContent || "")));
+for (const label of labels) {
+  const input = findInputNearNode(label);
+  if (input && markFromInput(input, "label-near-input")) return result;
+  result.visible = true;
+  result.source = "label";
+}
+return result;
+"""
+        result = self.driver.execute_script(script)
+        return result if isinstance(result, dict) else {"visible": False, "filled": False, "value": ""}
+
+    def _switch_to_existing_application_tab(self) -> bool:
+        if not self.driver:
+            return False
+        try:
+            handles = list(self.driver.window_handles)
+        except Exception:
+            return False
+        for handle in handles:
+            try:
+                self.driver.switch_to.window(handle)
+                url = self.driver.current_url or ""
+                if "rn.tektorg.ru" in url and "#com/applic/create" in url:
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _ensure_supplier_characteristic_if_required(
+        self,
+        technical_dir: Path,
+        existing: SupplierCharacteristic | None = None,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> SupplierCharacteristic | None:
+        self._switch_to_existing_application_tab()
+        status: dict[str, Any] = {}
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            status = self._supplier_characteristic_status()
+            if status.get("filled"):
+                return existing
+            if status.get("visible"):
+                break
+            time.sleep(0.25)
+        if not status.get("visible"):
+            return existing
+        if progress:
+            progress("Ожидаю результат распознавания характеристики поставщика...")
+        characteristic = existing
+        if not characteristic or not characteristic.label:
+            characteristic = self._classify_supplier_characteristic(technical_dir, progress=progress)
+        if not characteristic.label:
+            raise RuntimeError("не удалось определить подходящий пункт.")
+        if progress:
+            progress(f"Выбираю характеристику поставщика: {characteristic.label}")
+        self._select_supplier_characteristic(characteristic.label)
+        deadline = time.time() + 8
+        while time.time() < deadline:
+            status = self._supplier_characteristic_status()
+            if status.get("filled"):
+                return characteristic
+            time.sleep(0.25)
+        if status.get("visible") and not status.get("filled"):
+            raise RuntimeError(f"не удалось заполнить поле «Характеристика поставщика»: {characteristic.label}")
+        return characteristic
+
+    def ensure_supplier_characteristic_before_completion(
+        self,
+        technical_dir: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """Финальный стоп-контроль перед модалкой «Заявка заполнена»."""
+        self._switch_to_existing_application_tab()
+        characteristic = self._ensure_supplier_characteristic_if_required(
+            technical_dir,
+            progress=progress,
+        )
+        status = self._supplier_characteristic_status()
+        if status.get("visible") and not status.get("filled"):
+            label = characteristic.label if characteristic and characteristic.label else ""
+            detail = f": {label}" if label else ""
+            raise RuntimeError(f"поле «Характеристика поставщика» осталось пустым{detail}.")
+
     def _upload_commercial_documents(
         self,
         technical_dir: Path,
@@ -1409,8 +1620,12 @@ const targetLabel = String(arguments[0] || "");
     let found = null;
     eachCmp((cmp) => {
       if (found || cmp.hidden || cmp.disabled) return;
+      if (String(cmp.name || "") === "supplier_type_srm_id") {
+        found = cmp;
+        return;
+      }
       const label = labelOf(cmp);
-      if (/характеристика поставщика/i.test(label) || /supplier/i.test(label)) found = cmp;
+      if (/характеристика поставщика/i.test(label)) found = cmp;
     });
     if (found) return found;
     const nodes = Array.from(document.querySelectorAll("label, td, div, span"));
@@ -2785,11 +3000,20 @@ return result;
             deleted = self._delete_uploaded_file_component(component_id, upload_panel_id=upload_panel_id)
             if not deleted:
                 break
-            if not self._wait_uploaded_count_less_than(before_count, upload_panel_id=upload_panel_id):
+            self._confirm_delete_dialog(timeout_seconds=1.5)
+            self._close_tektorg_notification_dialogs(timeout_seconds=3.0)
+            if not self._wait_uploaded_item_removed(
+                component_id,
+                before_count=before_count,
+                upload_panel_id=upload_panel_id,
+            ):
                 raise RuntimeError(f"Сайт не удалил дубль файла: {name}")
             removed += 1
+            self._close_tektorg_notification_dialogs(timeout_seconds=1.0)
         if removed and progress:
             progress(f"Удалено дублей {description}: {removed}")
+        if removed:
+            self._close_tektorg_notification_dialogs(timeout_seconds=3.0)
         return removed
 
     def _clear_uploaded_files(
@@ -2814,11 +3038,20 @@ return result;
             deleted = self._delete_uploaded_file_component(component_id, upload_panel_id=upload_panel_id)
             if not deleted:
                 break
-            if not self._wait_uploaded_count_less_than(before_count, upload_panel_id=upload_panel_id):
+            self._confirm_delete_dialog(timeout_seconds=1.5)
+            self._close_tektorg_notification_dialogs(timeout_seconds=3.0)
+            if not self._wait_uploaded_item_removed(
+                component_id,
+                before_count=before_count,
+                upload_panel_id=upload_panel_id,
+            ):
                 raise RuntimeError(f"Сайт не удалил ранее загруженный файл: {name}")
             removed += 1
+            self._close_tektorg_notification_dialogs(timeout_seconds=1.0)
         if removed and progress:
             progress(f"Очищено ранее загруженных файлов ({description}): {removed}")
+        if removed:
+            self._close_tektorg_notification_dialogs(timeout_seconds=3.0)
         return removed
 
     def _next_duplicate_uploaded_file(
@@ -2886,9 +3119,8 @@ return true;
         except Exception:
             return False
 
-    def _confirm_delete_dialog(self) -> None:
+    def _confirm_delete_dialog(self, timeout_seconds: float = 0.8) -> None:
         assert self.driver is not None
-        time.sleep(0.3)
         try:
             alert = self.driver.switch_to.alert
             alert.accept()
@@ -2899,9 +3131,11 @@ return true;
             self.driver.execute_async_script(
                 r"""
 const callback = arguments[arguments.length - 1];
+const timeoutMs = Number(arguments[0] || 800);
 (async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  for (let i = 0; i < 20; i++) {
+  const started = Date.now();
+  while (Date.now() - started <= timeoutMs) {
     const buttons = Array.from(document.querySelectorAll("button, .x-btn-text, td.x-btn-mc"));
     const yes = buttons.find((el) => /^(да|yes|ok|удалить)$/i.test(String(el.innerText || el.textContent || el.value || "").trim()));
     if (yes) {
@@ -2915,10 +3149,222 @@ const callback = arguments[arguments.length - 1];
   }
   callback(false);
 })();
-"""
+""",
+                max(0.0, timeout_seconds) * 1000,
             )
         except Exception:
             pass
+
+    def _close_tektorg_notification_dialogs(self, timeout_seconds: float = 0.8) -> int:
+        assert self.driver is not None
+        try:
+            alert = self.driver.switch_to.alert
+            text = str(alert.text or "")
+            if re.search(r"Черновик.*заявк.*сохран|документ.*сведен.*заявк.*сохран", text, re.I):
+                alert.accept()
+                return 1
+        except Exception:
+            pass
+        try:
+            result = self.driver.execute_async_script(
+                r"""
+const callback = arguments[arguments.length - 1];
+const timeoutMs = Number(arguments[0] || 800);
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width >= 0 && rect.height >= 0;
+};
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").trim();
+const notificationText = /Черновик[\s\S]{0,160}(документов|сведений|заявк)[\s\S]{0,220}сохран[её]н/i;
+const okText = /^(OK|ОК)$/i;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const eachCmp = (fn) => {
+  if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+  const all = Ext.ComponentMgr.all;
+  if (typeof all.each === "function") {
+    all.each(fn);
+    return;
+  }
+  const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+  for (const cmp of items) {
+    if (cmp && typeof cmp === "object") fn(cmp);
+  }
+};
+const eachWindow = (fn) => {
+  try {
+    const mgr = window.Ext && (Ext.WindowMgr || Ext.WindowManager);
+    const range = mgr && typeof mgr.getRange === "function" ? mgr.getRange() : null;
+    const items = range || mgr && mgr.items && (mgr.items.items || mgr.items) || [];
+    if (Array.isArray(items)) {
+      for (const win of items) {
+        if (win && typeof win === "object") fn(win);
+      }
+    }
+    if (mgr && typeof mgr.each === "function") mgr.each(fn);
+  } catch (e) {}
+};
+const dispatchRealClick = (node) => {
+  if (!node || !visible(node)) return false;
+  try {
+    if (node.scrollIntoView) node.scrollIntoView({ block: "center", inline: "center" });
+    node.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, view: window }));
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    if (typeof node.click === "function") node.click();
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+const cmpText = (cmp) => String([
+  cmp && cmp.title,
+  cmp && cmp.text,
+  cmp && cmp.message,
+  cmp && cmp.msg,
+  cmp && cmp.html,
+  cmp && cmp.body && cmp.body.dom && textOf(cmp.body.dom),
+  cmp && cmp.el && cmp.el.dom && textOf(cmp.el.dom),
+].filter(Boolean).join(" "));
+const closeCmp = (cmp) => {
+  if (!cmp) return false;
+  try {
+    if (typeof cmp.onClick === "function") {
+      cmp.onClick({ button: 0, preventDefault() {}, stopEvent() {}, getTarget() { return cmp.el && cmp.el.dom; } });
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.handler) {
+      cmp.handler.call(cmp.scope || cmp, cmp);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.fireEvent) {
+      cmp.fireEvent("click", cmp);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.hide) {
+      cmp.hide();
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (cmp.close) {
+      cmp.close();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+};
+const closeWindowCmp = (winCmp) => {
+  if (!winCmp) return false;
+  try {
+    const buttons = winCmp.buttons || winCmp.fbar && winCmp.fbar.items && winCmp.fbar.items.items || [];
+    for (const btn of Array.from(buttons || [])) {
+      if (okText.test(String(btn && btn.text || "").trim()) && closeCmp(btn)) return true;
+    }
+  } catch (e) {}
+  try {
+    if (winCmp.hide) {
+      winCmp.hide();
+      return true;
+    }
+  } catch (e) {}
+  try {
+    if (winCmp.close) {
+      winCmp.close();
+      return true;
+    }
+  } catch (e) {}
+  return false;
+};
+const notificationWindows = () => {
+  const nodes = Array.from(document.querySelectorAll(".x-window, .x-window-dlg, .x-message-box, .x-window-body, .x-panel"));
+  const windows = [];
+  for (const node of nodes) {
+    if (!visible(node) || !notificationText.test(textOf(node))) continue;
+    const win = node.closest && node.closest(".x-window") || node;
+    if (!windows.includes(win)) windows.push(win);
+  }
+  return windows;
+};
+const closeDomWindow = (win) => {
+  let done = false;
+  eachCmp((cmp) => {
+    if (done || cmp.hidden || cmp.disabled) return;
+    const el = cmp.el && cmp.el.dom;
+    const cmpWin = el && el.closest && el.closest(".x-window");
+    if (cmpWin !== win || !okText.test(String(cmp.text || "").trim())) return;
+    done = closeCmp(cmp);
+  });
+  if (!done) {
+    const buttons = Array.from(win.querySelectorAll("button, input[type='button'], a, span, div, td, em"))
+      .filter((el) => visible(el) && okText.test(textOf(el)));
+    const button = buttons.find((el) => (el.tagName || "").toLowerCase() === "button") || buttons[0];
+    const extButton = button && button.closest && button.closest(".x-btn, .x-btn-wrap, table, button, a");
+    const chain = [extButton, button, button && button.parentElement, button && button.parentElement && button.parentElement.parentElement];
+    done = chain.some(dispatchRealClick);
+  }
+  if (!done) {
+    const closeButton = win.querySelector(".x-tool-close, .x-window-header .x-tool, [class*='close']");
+    done = dispatchRealClick(closeButton);
+  }
+  return done;
+};
+const closeOnce = () => {
+  let closed = 0;
+  const bodyText = textOf(document.body);
+  if (notificationText.test(bodyText)) {
+    try {
+      if (window.Ext && Ext.Msg && (!Ext.Msg.isVisible || Ext.Msg.isVisible())) {
+        Ext.Msg.hide();
+        closed += 1;
+      }
+    } catch (e) {}
+    try {
+      if (window.Ext && Ext.MessageBox && (!Ext.MessageBox.isVisible || Ext.MessageBox.isVisible())) {
+        Ext.MessageBox.hide();
+        closed += 1;
+      }
+    } catch (e) {}
+  }
+  eachWindow((winCmp) => {
+    if (!notificationText.test(cmpText(winCmp))) return;
+    if (closeWindowCmp(winCmp)) closed += 1;
+  });
+  for (const win of notificationWindows()) {
+    if (closeDomWindow(win)) closed += 1;
+  }
+  return closed;
+};
+(async () => {
+  const started = Date.now();
+  let total = 0;
+  while (Date.now() - started <= timeoutMs) {
+    total += closeOnce();
+    if (total > 0) {
+      await wait(150);
+      total += closeOnce();
+      callback(total);
+      return;
+    }
+    await wait(150);
+  }
+  callback(total);
+})();
+""",
+                max(0.0, timeout_seconds) * 1000,
+            )
+            return int(result or 0)
+        except Exception:
+            return 0
 
     def _wait_uploaded_count_less_than(
         self,
@@ -2927,7 +3373,30 @@ const callback = arguments[arguments.length - 1];
     ) -> bool:
         deadline = time.time() + 12
         while time.time() < deadline:
+            self._close_tektorg_notification_dialogs(timeout_seconds=0.4)
             if len(self._uploaded_file_names(upload_panel_id=upload_panel_id)) < before_count:
+                self._close_tektorg_notification_dialogs(timeout_seconds=1.0)
+                return True
+            time.sleep(0.3)
+        return False
+
+    def _wait_uploaded_item_removed(
+        self,
+        component_id: str,
+        before_count: int,
+        upload_panel_id: str = "application_docs_tech_1",
+    ) -> bool:
+        deadline = time.time() + 15
+        while time.time() < deadline:
+            self._confirm_delete_dialog(timeout_seconds=0.15)
+            self._close_tektorg_notification_dialogs(timeout_seconds=0.4)
+            items = self._uploaded_file_items(upload_panel_id=upload_panel_id)
+            component_ids = {str(item.get("componentId") or "") for item in items if isinstance(item, dict)}
+            if component_id not in component_ids:
+                self._close_tektorg_notification_dialogs(timeout_seconds=1.0)
+                return True
+            if len(items) < before_count:
+                self._close_tektorg_notification_dialogs(timeout_seconds=1.0)
                 return True
             time.sleep(0.3)
         return False

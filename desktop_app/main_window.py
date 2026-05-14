@@ -1680,6 +1680,8 @@ class MainWindow(QMainWindow):
         return f"{minutes:02d}:{seconds:02d}"
 
     def _show_application_filled_dialog(self) -> None:
+        if not self._ensure_supplier_characteristic_before_completion():
+            return
         box = QMessageBox(self)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.setIcon(QMessageBox.Information)
@@ -1701,6 +1703,31 @@ class MainWindow(QMainWindow):
             )
         except Exception as e:
             QMessageBox.warning(self, "Сохранение черновика", f"Не удалось сохранить черновик заявки: {e}")
+
+    def _ensure_supplier_characteristic_before_completion(self) -> bool:
+        technical_dir = self._current_technical_dir
+        if technical_dir is None:
+            return True
+        ensure = getattr(self.client, "ensure_supplier_characteristic_before_completion", None)
+        if not callable(ensure):
+            return True
+        try:
+            self.status_msg.setText("Проверяю характеристику поставщика...")
+            ensure(technical_dir, progress=self._on_progress)
+            return True
+        except Exception as e:
+            self._bring_window_to_front()
+            QMessageBox.warning(
+                self,
+                "Характеристика поставщика",
+                (
+                    "Робот пока не смог заполнить поле «Характеристика поставщика».\n\n"
+                    f"{e}\n\n"
+                    "Модалка о завершении не будет показана, пока это поле не заполнено."
+                ),
+            )
+            self.status_msg.setText("Ожидается заполнение характеристики поставщика.")
+            return False
 
     def _on_context_menu(self, pos) -> None:
         idx = self.table.indexAt(pos)
