@@ -391,6 +391,16 @@ class TektorgRnClient(EtpClient):
         step_started = time.perf_counter()
         has_technical_tab = self._has_technical_tab_button()
         record_timing("Проверка наличия технической части предложения", step_started)
+        if not has_technical_tab:
+            step_started = time.perf_counter()
+            try:
+                if progress:
+                    progress("Проверяю техническую часть контрольной попыткой...")
+                self._ensure_technical_tab_active()
+                has_technical_tab = True
+                record_timing("Техническая часть найдена контрольной попыткой", step_started)
+            except Exception:
+                record_timing("Техническая часть не найдена контрольной попыткой", step_started)
         if progress:
             progress("Запускаю фоновое распознавание коммерческих условий...")
         step_started = time.perf_counter()
@@ -642,6 +652,8 @@ class TektorgRnClient(EtpClient):
         assert self.driver is not None
         script = r"""
 const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
+const technicalPattern = /Техническ\w*\s+част\w*/i;
+const commercialPattern = /Коммерческ\w*\s+част\w*/i;
 const visible = (el) => {
   if (!el) return false;
   const style = window.getComputedStyle(el);
@@ -678,11 +690,45 @@ const tabContainers = () => {
 };
 const tabs = tabContainers();
 const labels = tabs.map((item) => item.text);
-const hasTechnicalDom = labels.some((text) => sameText(text, /^Техническая\s+часть\s+предложения$/i));
-const hasCommercialDom = labels.some((text) => sameText(text, /^Коммерческая\s+часть\s+предложения$/i));
+const allVisibleTexts = Array.from(document.querySelectorAll("a, button, li, span, div, td, em"))
+  .filter(visible)
+  .map(textOf)
+  .filter(Boolean);
+const hasTechnicalDom = labels.some((text) => technicalPattern.test(text))
+  || allVisibleTexts.some((text) => technicalPattern.test(text));
+const hasCommercialDom = labels.some((text) => commercialPattern.test(text))
+  || allVisibleTexts.some((text) => commercialPattern.test(text));
+let hasTechnicalExt = false;
+let hasCommercialExt = false;
+if (window.Ext && Ext.ComponentMgr && Ext.ComponentMgr.all) {
+  const eachCmp = (fn) => {
+    const all = Ext.ComponentMgr.all;
+    if (typeof all.each === "function") {
+      all.each(fn);
+      return;
+    }
+    const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+    for (const cmp of items) {
+      if (cmp && typeof cmp === "object") fn(cmp);
+    }
+  };
+  eachCmp((cmp) => {
+    let title = "";
+    try {
+      if (cmp.getTitle) title = String(cmp.getTitle() || "");
+    } catch (e) {}
+    const text = [title, cmp.title, cmp.text, cmp.itemId, cmp.id, cmp.tab && cmp.tab.text].filter(Boolean).join(" ");
+    if (technicalPattern.test(text)) hasTechnicalExt = true;
+    if (commercialPattern.test(text)) hasCommercialExt = true;
+  });
+}
 return {
-  hasTechnical: hasTechnicalDom,
-  hasCommercial: hasCommercialDom,
+  hasTechnical: hasTechnicalDom || hasTechnicalExt,
+  hasCommercial: hasCommercialDom || hasCommercialExt,
+  hasTechnicalDom,
+  hasTechnicalExt,
+  hasCommercialDom,
+  hasCommercialExt,
   labels,
 };
 """
@@ -690,15 +736,19 @@ return {
         return result if isinstance(result, dict) else {"hasTechnical": False, "hasCommercial": False, "labels": []}
 
     def _has_technical_tab_button(self) -> bool:
-        deadline = time.time() + 2.0
+        deadline = time.time() + 4.0
         last_result: Any = None
+        commercial_seen_at: float | None = None
         while time.time() < deadline:
             last_result = self._application_offer_tabs_state()
             if isinstance(last_result, dict):
                 if last_result.get("hasTechnical"):
                     return True
                 if last_result.get("hasCommercial"):
-                    return False
+                    if commercial_seen_at is None:
+                        commercial_seen_at = time.time()
+                    elif time.time() - commercial_seen_at >= 1.2:
+                        return False
             time.sleep(0.25)
         if isinstance(last_result, dict) and not last_result.get("hasTechnical"):
             return False
@@ -711,6 +761,8 @@ const callback = arguments[arguments.length - 1];
 (async () => {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "").replace(/\s+/g, " ").trim();
+  const technicalPattern = /Техническ\w*\s+част\w*/i;
+  const commercialPattern = /Коммерческ\w*\s+част\w*/i;
   const visible = (el) => {
     if (!el) return false;
     const style = window.getComputedStyle(el);
@@ -718,12 +770,65 @@ const callback = arguments[arguments.length - 1];
     return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
   };
   const findVisibleTechnicalTab = () => Array.from(document.querySelectorAll(
-    ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge), ul.x-tab-strip li:not(.x-tab-edge), .x-tab-strip-text, [role='tab']"
+    ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge), ul.x-tab-strip li:not(.x-tab-edge), .x-tab-strip-text, [role='tab'], a, button, li, span, div, td, em"
   )).find((el) => {
-    if (!visible(el) || textOf(el) !== "Техническая часть предложения") return false;
-    const tab = el.closest && el.closest("li:not(.x-tab-edge), [role='tab']");
-    return !!(tab && visible(tab));
+    if (!visible(el) || !technicalPattern.test(textOf(el))) return false;
+    const tab = el.closest && el.closest("li:not(.x-tab-edge), [role='tab'], .x-btn, button, a");
+    return !tab || visible(tab);
   });
+  const findTechnicalCmp = () => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return null;
+    let found = null;
+    const eachCmp = (fn) => {
+      const all = Ext.ComponentMgr.all;
+      if (typeof all.each === "function") {
+        all.each(fn);
+        return;
+      }
+      const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+      for (const cmp of items) {
+        if (cmp && typeof cmp === "object") fn(cmp);
+      }
+    };
+    eachCmp((cmp) => {
+      if (found) return;
+      let title = "";
+      try {
+        if (cmp.getTitle) title = String(cmp.getTitle() || "");
+      } catch (e) {}
+      const text = [title, cmp.title, cmp.text, cmp.itemId, cmp.id, cmp.tab && cmp.tab.text]
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (technicalPattern.test(text)) found = cmp;
+    });
+    return found;
+  };
+  const activateTechnicalCmp = () => {
+    const cmp = findTechnicalCmp();
+    if (!cmp) return false;
+    try {
+      if (cmp.ownerCt && cmp.ownerCt.setActiveTab) {
+        cmp.ownerCt.setActiveTab(cmp);
+        return true;
+      }
+    } catch (e) {}
+    try {
+      if (cmp.show) {
+        cmp.show();
+        return true;
+      }
+    } catch (e) {}
+    try {
+      const tabEl = cmp.tab && cmp.tab.el && cmp.tab.el.dom;
+      if (tabEl && visible(tabEl)) {
+        tabEl.click();
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
   const visibleOfferTabLabels = () => Array.from(document.querySelectorAll(
     ".x-tab-panel-header ul.x-tab-strip li:not(.x-tab-edge), ul.x-tab-strip li:not(.x-tab-edge), .x-tab-strip-text, [role='tab']"
   ))
@@ -757,11 +862,13 @@ const callback = arguments[arguments.length - 1];
     const tab = findVisibleTechnicalTab();
     if (tab) {
       clickBest(tab);
+    } else if (activateTechnicalCmp()) {
+      await wait(250);
     } else {
       const labels = visibleOfferTabLabels();
-      const hasCommercial = labels.some((text) => /^Коммерческая\s+часть\s+предложения$/i.test(text));
-      const hasTechnical = labels.some((text) => /^Техническая\s+часть\s+предложения$/i.test(text));
-      if (hasCommercial && !hasTechnical) {
+      const hasCommercial = labels.some((text) => commercialPattern.test(text));
+      const hasTechnical = labels.some((text) => technicalPattern.test(text));
+      if (i >= 3 && hasCommercial && !hasTechnical) {
         callback(false);
         return;
       }
