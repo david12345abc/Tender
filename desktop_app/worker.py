@@ -528,12 +528,15 @@ def make_tektorg_technical_upload_task(
     application_url: str,
     technical_dir: Path,
     timing_sink: Optional[dict] = None,
+    result_sink: Optional[dict] = None,
 ) -> Callable[[Worker], None]:
     """Задача: загрузить технические файлы в форму заявки ТЭК-Торг."""
 
     def _run(w: Worker) -> None:
         if timing_sink is not None:
             timing_sink.clear()
+        if result_sink is not None:
+            result_sink.clear()
         if not application_url:
             w.error.emit("Не сформирована ссылка на страницу подачи заявки.")
             return
@@ -569,6 +572,8 @@ def make_tektorg_technical_upload_task(
             return
         if timing_sink is not None:
             timing_sink["timings"] = result.get("timings") or []
+        if result_sink is not None:
+            result_sink.update(result)
 
         uploaded = len(result.get("uploaded") or [])
         errors = result.get("errors") or []
@@ -590,6 +595,16 @@ def make_tektorg_technical_upload_task(
         commercial_uploaded = len(commercial_upload.get("uploaded") or [])
         if commercial_uploaded:
             details += f"\n\nКоммерческие файлы загружены: {commercial_uploaded}"
+        manual_fields = result.get("manual_letter_required_fields") or []
+        if manual_fields:
+            labels = {
+                "price_with_vat": "итоговая стоимость с НДС",
+                "price_without_vat": "итоговая стоимость без НДС",
+                "validity_date": "дата действия заявки",
+            }
+            details += "\n\nТребуется ручное заполнение: " + ", ".join(
+                labels.get(str(field), str(field)) for field in manual_fields
+            )
         if errors:
             details += "\n\nОшибки:\n" + "\n".join(str(error) for error in errors[:8])
         ok = not errors and (uploaded > 0 or commercial_uploaded > 0 or bool(commercial_parts))

@@ -19,6 +19,12 @@ MARKET_SURVEY_TYPE = "market_survey"
 RPC_ENDPOINT = "/index.php?rpctype=direct&module=default"
 
 
+class ApplicationLetterManualInputRequired(RuntimeError):
+    def __init__(self, fields: list[str], message: str = "") -> None:
+        self.fields = fields
+        super().__init__(message or "Требуется ручное заполнение обязательных полей письма заявки.")
+
+
 _INDEX_INDEX_JS = r"""
 const callback = arguments[arguments.length - 1];
 const endpoint = arguments[0];
@@ -445,6 +451,7 @@ class TektorgRnClient(EtpClient):
         commercial_terms: CommercialTerms | None = None
         supplier_characteristic: SupplierCharacteristic | None = None
         commercial_upload: dict[str, Any] = {}
+        manual_letter_required_fields: list[str] = []
         if not errors:
             step_started = time.perf_counter()
             try:
@@ -518,10 +525,24 @@ class TektorgRnClient(EtpClient):
                     self._fill_application_letter_commercial_terms(commercial_terms)
                     record_timing("Заполнение распознанных коммерческих условий", step_started)
                     step_started = time.perf_counter()
-                    self._save_application_letter_modal()
-                    record_timing("Сохранение письма о подаче заявки", step_started)
+                    letter_status = self.application_letter_required_fields_status()
+                    manual_letter_required_fields = self._normalize_manual_letter_fields(
+                        letter_status.get("missing") or []
+                    )
+                    if manual_letter_required_fields:
+                        if progress:
+                            progress("Ожидаю ручное заполнение обязательных полей письма заявки.")
+                        record_timing("Письмо ожидает ручное заполнение обязательных полей", step_started)
+                    else:
+                        self._save_application_letter_modal()
+                        record_timing("Сохранение письма о подаче заявки", step_started)
                 else:
                     errors.append("Коммерческая часть: не удалось уверенно найти итоговую стоимость или срок действия предложения.")
+            except ApplicationLetterManualInputRequired as e:
+                manual_letter_required_fields = self._normalize_manual_letter_fields(e.fields, str(e))
+                if progress:
+                    progress("Ожидаю ручное заполнение обязательных полей письма заявки.")
+                record_timing("Письмо ожидает ручное заполнение обязательных полей", step_started)
             except Exception as e:
                 record_timing("Распознавание/заполнение коммерческих условий", step_started, ok=False)
                 errors.append(f"Коммерческая часть: {e}")
@@ -534,6 +555,7 @@ class TektorgRnClient(EtpClient):
             "commercial_terms": commercial_terms.as_dict() if commercial_terms else {},
             "supplier_characteristic": supplier_characteristic.as_dict() if supplier_characteristic else {},
             "commercial_upload": commercial_upload,
+            "manual_letter_required_fields": manual_letter_required_fields,
             "timings": timings,
         }
 
@@ -1546,16 +1568,216 @@ const values = arguments[0] || {};
 })();
 """
         result = self.driver.execute_async_script(script, values)
-        if not (isinstance(result, dict) and result.get("ok")):
+        if not isinstance(result, dict):
             raise RuntimeError(f"Не удалось заполнить коммерческие поля письма: {result}")
 
     def _default_offer_validity_date(self) -> str:
         return (date.today() + timedelta(days=200)).strftime("%d.%m.%Y")
 
+    def _manual_letter_fields_from_text(self, text: str) -> list[str]:
+        value = str(text or "").lower()
+        fields: list[str] = []
+        if ("без" in value and "ндс" in value) or "price_no" in value or "without" in value:
+            fields.append("price_without_vat")
+        if (
+            ("с ндс" in value or "с  ндс" in value)
+            and "без ндс" not in value
+        ) or "price_with" in value:
+            fields.append("price_with_vat")
+        if "действ" in value or "дат" in value or "valid" in value:
+            fields.append("validity_date")
+        if ("стоим" in value or "цен" in value or "price" in value) and not any(
+            field.startswith("price_") for field in fields
+        ):
+            fields.append("price_with_vat")
+        return list(dict.fromkeys(fields))
+
+    def _normalize_manual_letter_fields(self, fields: Any, text: str = "") -> list[str]:
+        normalized: list[str] = []
+        source = fields if isinstance(fields, list) else [fields]
+        for field in source:
+            if isinstance(field, dict):
+                candidates = [str(key) for key in field.keys()]
+                candidates.extend(str(value) for value in field.values())
+            else:
+                candidates = [str(field)]
+            for candidate in candidates:
+                value = candidate.strip()
+                if not value or value in {"{}", "[]", "None", "null", "undefined"}:
+                    continue
+                if value in {"price_with_vat", "price_without_vat", "validity_date"}:
+                    normalized.append(value)
+                    continue
+                normalized.extend(self._manual_letter_fields_from_text(value))
+        if not normalized:
+            normalized = self._manual_letter_fields_from_text(text)
+        return list(dict.fromkeys(normalized))
+
+    def application_letter_required_fields_status(self) -> dict[str, Any]:
+        assert self.driver is not None
+        script = r"""
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const norm = (value) => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+const textOf = (el) => String(el && (el.innerText || el.textContent || el.value) || "");
+const letterText = /Письмо\s+о\s+подаче\s+заявки/i;
+const result = {
+  letterOpen: false,
+  missing: [],
+  fields: {
+    price_with_vat: { found: false, value: "" },
+    price_without_vat: { found: false, value: "" },
+    validity_date: { found: false, value: "" },
+  },
+};
+const eachCmp = (fn) => {
+  if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+  const all = Ext.ComponentMgr.all;
+  if (typeof all.each === "function") {
+    all.each(fn);
+    return;
+  }
+  const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+  for (const cmp of items) {
+    if (cmp && typeof cmp === "object") fn(cmp);
+  }
+};
+const letterWindow = () => Array.from(document.querySelectorAll(".x-window"))
+  .find((el) => visible(el) && letterText.test(textOf(el)));
+const win = letterWindow();
+result.letterOpen = !!win;
+if (!win) return result;
+const inLetterWindow = (cmp) => {
+  const el = cmp && cmp.el && cmp.el.dom;
+  const cmpWin = el && el.closest && el.closest(".x-window");
+  return !!(cmpWin && cmpWin === win);
+};
+const labelOf = (cmp) => norm([
+  cmp.fieldLabel,
+  cmp.boxLabel,
+  cmp.name,
+  cmp.id,
+  cmp.el && cmp.el.dom && textOf(cmp.el.dom),
+].filter(Boolean).join(" "));
+const cmpValue = (cmp) => {
+  try {
+    if (cmp.getRawValue) return String(cmp.getRawValue() || "");
+  } catch (e) {}
+  try {
+    if (cmp.getValue) return String(cmp.getValue() || "");
+  } catch (e) {}
+  const el = cmp && cmp.el && cmp.el.dom;
+  const input = el && el.querySelector && el.querySelector("input:not([type='hidden']), textarea");
+  return input ? String(input.value || "") : "";
+};
+const findCmp = (names, patterns) => {
+  let found = null;
+  eachCmp((cmp) => {
+    if (found || cmp.hidden || cmp.disabled || !inLetterWindow(cmp)) return;
+    const name = norm(cmp.name);
+    const label = labelOf(cmp);
+    if (names.some((item) => name === norm(item)) || patterns.some((pattern) => pattern.test(label))) {
+      found = cmp;
+    }
+  });
+  return found;
+};
+const findInputNearLabel = (labelPattern) => {
+  const nodes = Array.from(win.querySelectorAll("label, td, div, span"));
+  for (const node of nodes) {
+    const text = norm(node.innerText || node.textContent || "");
+    if (!labelPattern.test(text)) continue;
+    const containers = [
+      node.closest("tr"),
+      node.parentElement,
+      node.parentElement && node.parentElement.parentElement,
+      node.parentElement && node.parentElement.parentElement && node.parentElement.parentElement.parentElement,
+    ].filter(Boolean);
+    for (const container of containers) {
+      const input = container.querySelector("input:not([type='hidden']):not([disabled]), textarea:not([disabled])");
+      if (input && visible(input)) return input;
+    }
+  }
+  return null;
+};
+const readField = (key, names, patterns, labelPattern) => {
+  const cmp = findCmp(names, patterns);
+  const cmpRaw = cmp ? cmpValue(cmp) : "";
+  const input = findInputNearLabel(labelPattern)
+    || Array.from(win.querySelectorAll(names.map((name) => `input[name="${name}"], textarea[name="${name}"]`).join(",")))
+      .find((el) => visible(el));
+  const domRaw = input ? String(input.value || input.getAttribute("value") || "") : "";
+  const value = String(cmpRaw || domRaw || "").replace(/\s+/g, " ").trim();
+  result.fields[key] = { found: !!(cmp || input), value };
+};
+readField(
+  "price_with_vat",
+  ["price", "price_nds", "price_with_nds", "price_with_vat", "total_price", "amount"],
+  [/итогов.*цен.*с\s+ндс/i, /стоимост.*с\s+ндс/i, /цен.*предлож.*с\s+ндс/i, /^price$|price_with/i],
+  /итоговая\s+цена,\s*с\s+ндс/i
+);
+readField(
+  "price_without_vat",
+  ["price_no_nds", "price_without_nds", "price_without_vat", "price_no_vat"],
+  [/цен.*без\s+ндс/i, /стоимост.*без\s+ндс/i, /price_no_nds|without/i],
+  /итоговая\s+цена,\s*без\s+ндс|цен.*без\s+ндс/i
+);
+readField(
+  "validity_date",
+  ["offer_valid", "validity_date", "valid_until", "date_valid", "date_end", "offer_valid_until", "offer_date"],
+  [/настоящая\s+заявка.*действует\s+до/i, /срок.*действ/i, /действ.*до/i, /оферт.*до/i, /valid/i],
+  /настоящая\s+заявка\s+на\s+участие\s+в\s+опросе\s+действует\s+до/i
+);
+const hasMoney = /[1-9]/.test(result.fields.price_with_vat.value || "");
+const hasMoneyWithoutVat = /[1-9]/.test(result.fields.price_without_vat.value || "");
+const hasDate = /\d/.test(result.fields.validity_date.value || "");
+if (!hasMoney) result.missing.push("price_with_vat");
+if (result.fields.price_without_vat.found && !hasMoneyWithoutVat) result.missing.push("price_without_vat");
+if (!hasDate) result.missing.push("validity_date");
+return result;
+"""
+        result = self.driver.execute_script(script)
+        return result if isinstance(result, dict) else {"letterOpen": False, "missing": []}
+
+    def save_application_letter_after_manual_input(self) -> None:
+        status = self.application_letter_required_fields_status()
+        missing = self._normalize_manual_letter_fields(status.get("missing") or [])
+        if missing:
+            labels = {
+                "price_with_vat": "итоговая цена с НДС",
+                "price_without_vat": "итоговая цена без НДС",
+                "validity_date": "дата действия заявки",
+            }
+            readable = ", ".join(labels.get(str(item), str(item)) for item in missing)
+            raise RuntimeError(f"Обязательные поля письма всё ещё не заполнены: {readable}.")
+        try:
+            self._save_application_letter_modal()
+        except ApplicationLetterManualInputRequired as e:
+            labels = {
+                "price_with_vat": "итоговая цена с НДС",
+                "price_without_vat": "итоговая цена без НДС",
+                "validity_date": "дата действия заявки",
+            }
+            missing_fields = self._normalize_manual_letter_fields(e.fields)
+            readable = ", ".join(labels.get(str(item), str(item)) for item in missing_fields)
+            raise RuntimeError(f"Обязательные поля письма всё ещё не заполнены: {readable}.") from e
+
     def _save_application_letter_modal(self) -> None:
         assert self.driver is not None
         script = r"""
-const result = { letterOpen: false, blockerClosed: false, clicked: false, reason: "" };
+const result = {
+  letterOpen: false,
+  blockerClosed: false,
+  clicked: false,
+  reason: "",
+  validationRequired: false,
+  validationFields: [],
+  validationText: "",
+};
   const visible = (el) => {
     if (!el) return false;
     const style = window.getComputedStyle(el);
@@ -1579,6 +1801,30 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
   };
   const letterWindow = () => Array.from(document.querySelectorAll(".x-window"))
     .find((el) => visible(el) && letterText.test(String(el.innerText || el.textContent || "")));
+  const fieldsFromValidationText = (text) => {
+    const fields = [];
+    const normalized = String(text || "").replace(/\s+/g, " ");
+    if (/итоговая\s+цена\s+без\s+НДС|итоговая\s+цена,\s+без\s+НДС|цена\s+без\s+НДС/i.test(normalized)) {
+      fields.push("price_without_vat");
+    }
+    if (/итоговая\s+цена\s*,?\s+с\s+НДС|цена\s+с\s+НДС/i.test(normalized)) {
+      fields.push("price_with_vat");
+    }
+    if (/действует\s+до|дата\s+действ|срок\s+действ/i.test(normalized)) {
+      fields.push("validity_date");
+    }
+    return Array.from(new Set(fields));
+  };
+  const validationDialog = () => {
+    const windows = Array.from(document.querySelectorAll(".x-window"))
+      .filter((win) => visible(win) && !letterText.test(String(win.innerText || win.textContent || "")));
+    for (const win of windows) {
+      const text = String(win.innerText || win.textContent || "");
+      if (!/Не\s+заполнено\s+поле/i.test(text)) continue;
+      return { win, text, fields: fieldsFromValidationText(text) };
+    }
+    return null;
+  };
   const closeBlockingDialogs = () => {
     let closed = false;
     const windows = Array.from(document.querySelectorAll(".x-window"))
@@ -1716,6 +1962,15 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
     } catch (e) {}
     return false;
   };
+  const validation = validationDialog();
+  if (validation) {
+    result.validationRequired = true;
+    result.validationFields = validation.fields;
+    result.validationText = validation.text;
+    result.blockerClosed = closeBlockingDialogs();
+    result.reason = "required fields validation dialog";
+    return result;
+  }
   result.blockerClosed = closeBlockingDialogs();
   result.blockersOpen = hasBlockingDialogs();
   if (result.blockerClosed) {
@@ -1743,6 +1998,15 @@ const result = { letterOpen: false, blockerClosed: false, clicked: false, reason
         last_result: Any = None
         for _ in range(30):
             last_result = self.driver.execute_script(script)
+            if isinstance(last_result, dict) and last_result.get("validationRequired"):
+                validation_text = str(last_result.get("validationText") or "")
+                fields = self._normalize_manual_letter_fields(
+                    last_result.get("validationFields") or [],
+                    validation_text,
+                )
+                if not fields:
+                    fields = ["price_with_vat"]
+                raise ApplicationLetterManualInputRequired(fields, validation_text)
             if isinstance(last_result, dict) and last_result.get("blockerClosed"):
                 time.sleep(1.0)
                 continue

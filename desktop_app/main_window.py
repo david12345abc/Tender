@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self._cache_save_timer.timeout.connect(self._save_cache_now)
         self._analysis_sink: dict[str, Any] = {}
         self._row_download_sink: dict[str, Any] = {}
+        self._technical_upload_sink: dict[str, Any] = {}
 
         self._build_ui()
         self._set_platform_buttons()
@@ -1514,10 +1515,12 @@ class MainWindow(QMainWindow):
         if self.technical_upload_runner.is_running():
             self.status_msg.setText("Технические файлы уже загружаются в форму заявки.")
             return
+        self._technical_upload_sink.clear()
         fn = make_tektorg_technical_upload_task(
             self.client,
             application_url,
             technical_dir,
+            result_sink=self._technical_upload_sink,
         )
         try:
             self.technical_upload_runner.start(
@@ -1535,7 +1538,77 @@ class MainWindow(QMainWindow):
         if not ok:
             QMessageBox.warning(self, "Загрузка технических файлов", message)
             return
+        manual_fields = list(self._technical_upload_sink.get("manual_letter_required_fields") or [])
+        if manual_fields:
+            self._handle_manual_letter_fields(manual_fields)
+            return
         self._bring_window_to_front()
+        self._show_application_filled_dialog()
+
+    def _handle_manual_letter_fields(self, fields: list[str]) -> None:
+        self._bring_window_to_front()
+        missing_text = self._manual_letter_missing_text(fields)
+        while True:
+            box = QMessageBox(self)
+            box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Требуется ручное заполнение")
+            box.setText(
+                "Робот не распознал или не смог заполнить " + missing_text + ".\n\n"
+                "Пожалуйста, введите корректные данные в открытом письме заявки, "
+                "затем нажмите «Готово»."
+            )
+            btn_done = box.addButton("Готово", QMessageBox.AcceptRole)
+            box.exec()
+            if box.clickedButton() is not btn_done:
+                return
+            try:
+                self.status_msg.setText("Сохраняю письмо о подаче заявки...")
+                self.client.save_application_letter_after_manual_input()
+                self.status_msg.setText("Письмо о подаче заявки сохранено.")
+                break
+            except Exception as e:
+                message = str(e)
+                QMessageBox.warning(self, "Сохранение письма", f"Не удалось сохранить письмо заявки: {message}")
+                if "всё ещё не заполнены" not in message:
+                    return
+        self._show_application_filled_dialog()
+
+    def _manual_letter_missing_text(self, fields: list[str]) -> str:
+        labels = {
+            "price_with_vat": "итоговую стоимость с НДС",
+            "price_without_vat": "итоговую стоимость без НДС",
+            "validity_date": "дату действия заявки",
+        }
+        normalized: list[str] = []
+        for field in fields:
+            if isinstance(field, dict):
+                candidates = [str(key) for key in field.keys()]
+                candidates.extend(str(value) for value in field.values())
+            else:
+                candidates = [str(field)]
+            for candidate in candidates:
+                value = candidate.strip()
+                if not value or value in {"{}", "[]", "None", "null", "undefined"}:
+                    continue
+                lower_value = value.lower()
+                if lower_value in labels:
+                    normalized.append(lower_value)
+                elif "без" in lower_value and "ндс" in lower_value:
+                    normalized.append("price_without_vat")
+                elif "ндс" in lower_value or "стоим" in lower_value or "цен" in lower_value or "price" in lower_value:
+                    normalized.append("price_with_vat")
+                elif "дат" in lower_value or "действ" in lower_value or "valid" in lower_value:
+                    normalized.append("validity_date")
+        normalized = list(dict.fromkeys(normalized))
+        missing_labels = [labels[field] for field in normalized if field in labels]
+        if not missing_labels:
+            return "итоговую стоимость или дату действия заявки"
+        if len(missing_labels) == 1:
+            return missing_labels[0]
+        return " и ".join(missing_labels)
+
+    def _show_application_filled_dialog(self) -> None:
         box = QMessageBox(self)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.setIcon(QMessageBox.Information)
