@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 from etp_client import HARD_SERVER_LIMIT, EtpClient, _server_status_value
 
 from .constants import ANALYSIS_DIR, VIEW_URL
-from .document_text import prepare_documents_for_analysis
+from .document_text import _is_archive, prepare_documents_for_analysis
 from .gpb_rag.pipeline import ragged_analysis_available, run_rag_table_analysis
 from .lm_table_analysis import (
     build_analysis_system_prompt,
@@ -504,6 +504,20 @@ def make_download_documents_task(
                     output_dir,
                     progress=w.progress.emit,
                 )
+                saved_paths = [Path(p) for p in (result.get("saved") or [])]
+                archive_paths = [p for p in saved_paths if p.is_file() and _is_archive(p)]
+                if archive_paths:
+                    unpack_dir = Path(str(result.get("folder") or output_dir)) / "разархивированные_документы"
+                    issues: list[dict] = []
+                    prepare_documents_for_analysis(
+                        archive_paths,
+                        unpack_dir,
+                        progress=w.progress.emit,
+                        issues=issues,
+                        registry=str(registry or ""),
+                    )
+                    result["unpacked_folder"] = str(unpack_dir)
+                    result["unpack_issues"] = issues
                 if w.is_stop_requested():
                     return
                 results.append(result)

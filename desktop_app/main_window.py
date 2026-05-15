@@ -1214,13 +1214,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+            unpacked_path = Path(str(unpacked_by_registry.get(registry) or ""))
+            if not unpacked_path.is_dir():
+                fallback_unpacked = ANALYSIS_DIR / "разархивированные_документы" / self._safe_folder_name(registry)
+                if fallback_unpacked.is_dir():
+                    unpacked_path = fallback_unpacked
             chat_dir = ANALYSIS_DIR / "rag_debug" / self._safe_folder_name(registry)
             summary_rows.append(
                 [
                     registry,
                     title or "—",
                     str(path),
-                    str(unpacked_by_registry.get(registry) or ""),
+                    str(unpacked_path) if unpacked_path else "",
                     str(chat_dir),
                 ]
             )
@@ -1256,6 +1261,50 @@ class MainWindow(QMainWindow):
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        def centered_cell_widget(widget: QWidget) -> QWidget:
+            holder = QWidget()
+            holder_lay = QHBoxLayout(holder)
+            holder_lay.setContentsMargins(8, 4, 8, 4)
+            holder_lay.setSpacing(0)
+            holder_lay.addWidget(widget, 0, Qt.AlignmentFlag.AlignCenter)
+            return holder
+
+        def row_docs_dir(row: list[str]) -> Path:
+            source = str(row[3] if len(row) > 3 else "").strip()
+            registry = str(row[0] if row else "").strip()
+            candidates = []
+            if source:
+                candidates.append(Path(source))
+            if registry:
+                candidates.append(ANALYSIS_DIR / "разархивированные_документы" / self._safe_folder_name(registry))
+            for candidate in candidates:
+                if candidate.is_dir():
+                    return candidate
+            return candidates[0] if candidates else Path("__missing_docs_path__")
+
+        display_issues = list(self._analysis_sink.get("document_issues") or [])
+        for row in rows:
+            registry = str(row[0] if row else "").strip()
+            docs_dir = row_docs_dir(row)
+            if not docs_dir.is_dir():
+                display_issues.append(
+                    {
+                        "severity": "critical",
+                        "registry": registry,
+                        "file": "",
+                        "message": f"Папка разархивированных документов не найдена: {docs_dir or 'путь не задан'}",
+                    }
+                )
+            elif not any(p.is_file() for p in docs_dir.rglob("*")):
+                display_issues.append(
+                    {
+                        "severity": "critical",
+                        "registry": registry,
+                        "file": "",
+                        "message": f"Папка разархивированных документов пуста: {docs_dir}",
+                    }
+                )
 
         def unique_destination(target: Path) -> Path:
             if not target.exists():
@@ -1299,9 +1348,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(dlg, "Ошибка скачивания", f"Не удалось скачать таблицу анализа:\n{e}")
 
         def copy_unpacked_documents(row_index: int) -> None:
-            source = rows[row_index][3] if 0 <= row_index < len(rows) and len(rows[row_index]) > 3 else ""
-            if not source:
+            if not (0 <= row_index < len(rows)):
                 return
+            src_dir = row_docs_dir(rows[row_index])
             destination_dir = QFileDialog.getExistingDirectory(
                 dlg,
                 "Куда скачать разархивированные документы",
@@ -1310,7 +1359,6 @@ class MainWindow(QMainWindow):
             if not destination_dir:
                 return
             try:
-                src_dir = Path(source)
                 if not src_dir.is_dir():
                     raise RuntimeError(f"Папка не найдена: {src_dir}")
                 dst_dir = unique_destination(Path(destination_dir) / src_dir.name)
@@ -1325,7 +1373,7 @@ class MainWindow(QMainWindow):
             row = rows[row_index]
             registry = str(row[0] if len(row) > 0 else "")
             title = str(row[1] if len(row) > 1 else "")
-            docs_dir = Path(str(row[3] if len(row) > 3 else ""))
+            docs_dir = row_docs_dir(row)
             index_dir = Path(str(row[4] if len(row) > 4 else ""))
             has_index = (index_dir / "index.faiss").is_file() and (index_dir / "metadata.json").is_file()
             if not has_index and not docs_dir.is_dir():
@@ -1403,16 +1451,19 @@ class MainWindow(QMainWindow):
             btn_table = QPushButton("Скачать")
             btn_table.setEnabled(bool(row[2] if len(row) > 2 else ""))
             btn_table.clicked.connect(lambda _checked=False, row_index=r: copy_analysis_files(row_index))
-            table.setCellWidget(r, 2, btn_table)
+            table.setCellWidget(r, 2, centered_cell_widget(btn_table))
 
             btn_docs = QPushButton("Скачать")
-            btn_docs.setEnabled(bool(row[3] if len(row) > 3 else ""))
+            docs_dir = row_docs_dir(row)
+            btn_docs.setEnabled(docs_dir.is_dir() and any(p.is_file() for p in docs_dir.rglob("*")))
+            if not btn_docs.isEnabled():
+                btn_docs.setToolTip(f"Документы недоступны: {docs_dir or 'путь не задан'}")
             btn_docs.clicked.connect(lambda _checked=False, row_index=r: copy_unpacked_documents(row_index))
-            table.setCellWidget(r, 3, btn_docs)
+            table.setCellWidget(r, 3, centered_cell_widget(btn_docs))
 
             btn_chat = QPushButton("Чат")
             chat_source = Path(str(row[4] if len(row) > 4 else ""))
-            docs_source = Path(str(row[3] if len(row) > 3 else ""))
+            docs_source = row_docs_dir(row)
             btn_chat.setEnabled(
                 (
                     (chat_source / "index.faiss").is_file()
@@ -1421,20 +1472,19 @@ class MainWindow(QMainWindow):
                 or docs_source.is_dir()
             )
             btn_chat.clicked.connect(lambda _checked=False, row_index=r: open_analysis_chat(row_index))
-            table.setCellWidget(r, 4, btn_chat)
+            table.setCellWidget(r, 4, centered_cell_widget(btn_chat))
 
             title_len = len(str(row[1] if len(row) > 1 else ""))
-            table.setRowHeight(r, min(96, max(34, 34 + (title_len // 90) * 18)))
+            table.setRowHeight(r, min(112, max(72, 54 + (title_len // 90) * 18)))
 
         layout.addWidget(table, 1)
 
-        issues = self._analysis_sink.get("document_issues") or []
         issues_label = QLabel("Ошибки обработки документов")
         issues_label.setStyleSheet("font-weight: 600; margin-top: 6px;")
         layout.addWidget(issues_label)
 
-        if issues:
-            issue_table = QTableWidget(len(issues), 4)
+        if display_issues:
+            issue_table = QTableWidget(len(display_issues), 4)
             issue_table.setHorizontalHeaderLabels(["!", "Важность", "Реестровый номер", "Описание"])
             issue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             issue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1444,7 +1494,7 @@ class MainWindow(QMainWindow):
             issue_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
             issue_table.setColumnWidth(0, 28)
             issue_table.setMaximumHeight(150)
-            for r, issue in enumerate(issues):
+            for r, issue in enumerate(display_issues):
                 severity = str(issue.get("severity") or "important")
                 is_critical = severity == "critical"
                 color = QColor("#c00000" if is_critical else "#b8860b")

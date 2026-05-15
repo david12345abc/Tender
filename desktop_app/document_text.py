@@ -4,6 +4,7 @@ import html
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -53,9 +54,17 @@ def _is_archive(path: Path) -> bool:
     )
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def _safe_extract_path(root: Path, member_name: str) -> Path:
     target = (root / member_name).resolve()
-    if not str(target).startswith(str(root.resolve())):
+    if not _is_relative_to(target, root):
         raise RuntimeError(f"Небезопасный путь внутри архива: {member_name}")
     return target
 
@@ -115,32 +124,103 @@ def _configure_rarfile_tools(rarfile) -> None:
         ) from exc
 
 
+def _sevenzip_tool() -> Path | None:
+    for attr, candidate in _rar_tool_candidates():
+        if attr == "SEVENZIP_TOOL" and candidate.is_file():
+            return candidate
+    return None
+
+
+def _looks_like_html_or_json_error(path: Path) -> str | None:
+    try:
+        raw = path.read_bytes()[:4096]
+    except Exception:
+        return None
+    prefix = raw.lstrip()[:200].lower()
+    if prefix.startswith((b"<!doctype html", b"<html", b"{")):
+        preview = raw.decode("utf-8", errors="replace")
+        preview = re.sub(r"\s+", " ", preview).strip()[:500]
+        return preview or "похоже на HTML/JSON-ответ вместо архива"
+    return None
+
+
+def _extract_with_7zip(path: Path, target_dir: Path) -> None:
+    tool = _sevenzip_tool()
+    if tool is None:
+        raise RuntimeError("7-Zip не найден для fallback-распаковки архива.")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [str(tool), "x", "-y", f"-o{target_dir}", str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=180,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()[:1200]
+        raise RuntimeError(f"7-Zip не смог распаковать архив: {detail}")
+
+
 def _extract_archive(path: Path, target_dir: Path) -> None:
     suffix = path.suffix.lower()
     name = path.name.lower()
     target_dir.mkdir(parents=True, exist_ok=True)
+    fake_response = _looks_like_html_or_json_error(path)
+    if fake_response:
+        raise RuntimeError(
+            "Файл с расширением архива не является архивом. "
+            f"ЭТП вернула HTML/JSON-ответ вместо файла: {fake_response}"
+        )
     if suffix == ".zip":
-        with zipfile.ZipFile(path) as zf:
-            for member in zf.infolist():
-                if member.is_dir():
-                    continue
-                out = _safe_extract_path(target_dir, member.filename)
-                out.parent.mkdir(parents=True, exist_ok=True)
-                with zf.open(member) as src, out.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
+        try:
+            with zipfile.ZipFile(path) as zf:
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    out = _safe_extract_path(target_dir, member.filename)
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src, out.open("wb") as dst:
+                        shutil.copyfileobj(src, dst)
+        except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:
+            try:
+                _extract_with_7zip(path, target_dir)
+            except Exception as sevenzip_exc:
+                raise RuntimeError(
+                    f"ZIP не распакован стандартным модулем ({exc}) "
+                    f"и fallback через 7-Zip тоже не сработал: {sevenzip_exc}"
+                ) from exc
         return
     if suffix == ".7z":
         import py7zr
 
-        with py7zr.SevenZipFile(path, mode="r") as archive:
-            archive.extractall(path=target_dir)
+        try:
+            with py7zr.SevenZipFile(path, mode="r") as archive:
+                archive.extractall(path=target_dir)
+        except Exception as exc:
+            try:
+                _extract_with_7zip(path, target_dir)
+            except Exception as sevenzip_exc:
+                raise RuntimeError(
+                    f"7z не распакован py7zr ({exc}) "
+                    f"и fallback через 7-Zip тоже не сработал: {sevenzip_exc}"
+                ) from exc
         return
     if suffix == ".rar":
         import rarfile
 
-        _configure_rarfile_tools(rarfile)
-        with rarfile.RarFile(path) as archive:
-            archive.extractall(path=target_dir)
+        try:
+            _configure_rarfile_tools(rarfile)
+            with rarfile.RarFile(path) as archive:
+                archive.extractall(path=target_dir)
+        except Exception as exc:
+            try:
+                _extract_with_7zip(path, target_dir)
+            except Exception as sevenzip_exc:
+                raise RuntimeError(
+                    f"RAR не распакован через rarfile ({exc}) "
+                    f"и fallback через 7-Zip тоже не сработал: {sevenzip_exc}"
+                ) from exc
         return
     if suffix in {".tar", ".gz", ".tgz", ".bz2", ".xz"} or name.endswith((".tar.gz", ".tar.bz2", ".tar.xz")):
         mode = "r:*"
@@ -477,30 +557,37 @@ def prepare_documents_for_analysis(
                 continue
             seen.add(source)
 
-            try:
-                is_inside_output = str(source).startswith(str(output_dir.resolve()))
-            except Exception:
-                is_inside_output = False
+            is_inside_output = _is_relative_to(source, output_dir)
 
             if _is_archive(source):
                 archive_count += 1
-                extract_parent = source.parent if is_inside_output else output_dir
-                extract_dir = _unique_path(extract_parent / f"{source.stem}_разархивировано")
+                archive_source = source
+                if not is_inside_output:
+                    archive_copy = _unique_path(output_dir / source.name)
+                    archive_copy.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, archive_copy)
+                    archive_source = archive_copy.resolve()
+                extract_parent = archive_source.parent
+                extract_dir = _unique_path(extract_parent / f"{archive_source.stem}_разархивировано")
                 if progress:
-                    progress(f"Распаковываю архив: {source.name}")
+                    progress(f"Распаковываю архив: {archive_source.name}")
                 try:
-                    _extract_archive(source, extract_dir)
+                    _extract_archive(archive_source, extract_dir)
                     queue.extend(_walk_files([extract_dir]))
                 except Exception as e:
                     marker = extract_dir / "ОШИБКА_РАСПАКОВКИ.txt"
                     extract_dir.mkdir(parents=True, exist_ok=True)
-                    marker.write_text(f"Не удалось распаковать {source.name}: {e}", encoding="utf-8")
+                    marker.write_text(
+                        f"Исходный архив сохранён здесь: {archive_source}\n"
+                        f"Не удалось распаковать {archive_source.name}: {e}",
+                        encoding="utf-8",
+                    )
                     if issues is not None:
                         issues.append(
                             {
                                 "severity": "critical",
                                 "registry": registry,
-                                "file": source.name,
+                                "file": archive_source.name,
                                 "message": f"Не удалось распаковать архив: {e}",
                             }
                         )

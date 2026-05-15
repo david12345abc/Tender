@@ -185,6 +185,28 @@ def _server_status_value(labels: tuple[Any, ...]) -> Optional[int]:
     return SERVER_STATUS_BY_LABEL.get(label)
 
 
+def _payload_preview(raw: bytes) -> str:
+    text = raw[:800].decode("utf-8", errors="replace")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _download_payload_error(name: str, raw: bytes, content_type: str = "") -> str | None:
+    suffix = Path(name).suffix.lower()
+    prefix = raw.lstrip()[:16].lower()
+    if prefix.startswith((b"<!doctype html", b"<html", b"{")):
+        return (
+            "ЭТП вернула HTML/JSON-ответ вместо файла. "
+            f"content-type={content_type or '—'}, preview={_payload_preview(raw)}"
+        )
+    if suffix == ".zip" and not raw.startswith(b"PK"):
+        return f"Файл .zip не похож на ZIP-архив. content-type={content_type or '—'}, preview={_payload_preview(raw)}"
+    if suffix == ".rar" and not raw.startswith(b"Rar!"):
+        return f"Файл .rar не похож на RAR-архив. content-type={content_type or '—'}, preview={_payload_preview(raw)}"
+    if suffix == ".7z" and not raw.startswith(b"7z\xbc\xaf\x27\x1c"):
+        return f"Файл .7z не похож на 7-Zip-архив. content-type={content_type or '—'}, preview={_payload_preview(raw)}"
+    return None
+
+
 def _purchase_form_value(value: str) -> int:
     text = str(value or "").casefold()
     if "электрон" in text:
@@ -696,7 +718,9 @@ class EtpClient:
         registry = str(proc.get("registry_number") or proc.get("procedure_number") or proc_id)
         title = str(proc.get("title") or "")
         folder_name = self._safe_filename(f"{registry}_{title[:80]}", str(proc_id))
-        out_dir = output_root / folder_name
+        registry_digits = re.sub(r"\D+", "", registry)
+        output_digits = re.sub(r"\D+", "", output_root.name)
+        out_dir = output_root if registry_digits and registry_digits in output_digits else output_root / folder_name
         out_dir.mkdir(parents=True, exist_ok=True)
 
         url = self._detail_url(proc_id)
@@ -704,13 +728,24 @@ class EtpClient:
             progress(f"Открываю подробную страницу {registry}: {url}")
         self.driver.get(url)
         links: list[dict[str, Any]] = []
-        deadline = time.time() + 20
-        while time.time() < deadline:
-            found = self.driver.execute_async_script(_COLLECT_DOCUMENT_LINKS_JS)
-            if isinstance(found, list) and found:
-                links = found
-                break
-            time.sleep(1)
+        found: Any = None
+        try:
+            self.driver.set_script_timeout(120)
+            found = self.driver.execute_async_script(_EXTRACT_PROCEDURE_VIEW_JS)
+        except Exception:
+            found = None
+        finally:
+            self.driver.set_script_timeout(30)
+        if isinstance(found, dict) and found.get("ok") and isinstance(found.get("docLinks"), list):
+            links = found.get("docLinks") or []
+        if not links:
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                found = self.driver.execute_async_script(_COLLECT_DOCUMENT_LINKS_JS)
+                if isinstance(found, list) and found:
+                    links = found
+                    break
+                time.sleep(1)
 
         saved: list[str] = []
         errors: list[str] = []
@@ -738,6 +773,10 @@ class EtpClient:
                 errors.append(f"{name}: пустой ответ")
                 continue
             raw = base64.b64decode(data_url.split(",", 1)[1])
+            payload_error = _download_payload_error(name, raw, str(res.get("contentType") or ""))
+            if payload_error:
+                errors.append(f"{name}: {payload_error}")
+                continue
             target.write_bytes(raw)
             saved.append(str(target))
 
@@ -776,6 +815,9 @@ class EtpClient:
         if "," not in data_url:
             raise RuntimeError(f"Пустой ответ при скачивании {name}")
         raw = base64.b64decode(data_url.split(",", 1)[1])
+        payload_error = _download_payload_error(name, raw, str(res.get("contentType") or ""))
+        if payload_error:
+            raise RuntimeError(f"Ошибка скачивания {name}: {payload_error}")
         target.write_bytes(raw)
         return target
 
