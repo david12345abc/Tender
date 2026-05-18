@@ -36,6 +36,17 @@ def _trim_for_llm(text: str, limit: int) -> str:
         return text
     return text[:limit] + "\n\n[текст обрезан для повторного запроса к модели]"
 
+
+def _safe_int(value, default: int = 0) -> int:
+    text = str(value or "").strip()
+    if not text or text in {"-", "—", "–"}:
+        return default
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return default
+
+
 class Worker(QObject):
     """Универсальный работник: выполняет одну задачу за жизнь.
 
@@ -411,7 +422,7 @@ def make_search_task(
                     return
                 procs = res.get("procedures") or []
                 if variant_total is None:
-                    variant_total = int(res.get("totalCount") or 0)
+                    variant_total = _safe_int(res.get("totalCount"), len(procs))
                     aggregate_total += variant_total
                     total = aggregate_total
                 accepted = procs

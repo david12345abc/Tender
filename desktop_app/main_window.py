@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from etp_client import EtpClient, PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS, step_id_label, trend_pur_label
+from gpb_business_client import GpbBusinessClient
 from roseltorg_client import (
     ROSELTORG_PROCEDURE_TYPE_OPTIONS,
     ROSELTORG_SEARCH_BY_OPTIONS,
@@ -627,7 +628,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ задачи
     def _is_platform_ready(self) -> bool:
-        return self._platform_key in {"gpb", "roseltorg"}
+        return self._platform_key in {"gpb", "gpb_business", "roseltorg"}
 
     def _platform_title(self) -> str:
         if self._platform_key == "roseltorg":
@@ -668,11 +669,11 @@ class MainWindow(QMainWindow):
                 platform_key="gpb_business",
             )
             self.title_label.setText("ГПБ Бизнес — Актуальные процедуры")
-            self.subtitle_label.setText("Поиск, фильтры и ключевые слова")
-            self.lbl_counter.setText("ГПБ Бизнес добавлен как площадка. Поиск будет подключён следующим этапом.")
-            self.user_label.setText("Пользователь: —")
-            self._set_badge("idle", "○  ГПБ Бизнес")
-            self.status_msg.setText("ГПБ Бизнес пока в разработке.")
+            self.subtitle_label.setText("Поиск, фильтры и экспорт")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
         else:
             self.sidebar.set_platform_filter_options(
                 PROCEDURE_TYPE_OPTIONS,
@@ -713,7 +714,12 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
         self._platform_key = key
-        self.client = RoseltorgClient() if key == "roseltorg" else EtpClient()
+        if key == "roseltorg":
+            self.client = RoseltorgClient()
+        elif key == "gpb_business":
+            self.client = GpbBusinessClient()
+        else:
+            self.client = EtpClient()
         self._set_platform_buttons()
         self.model.clear()
         self._last_total = 0
@@ -2149,8 +2155,9 @@ class MainWindow(QMainWindow):
         self.btn_platform_roseltorg.setEnabled(not running)
         self.btn_prev_page.setEnabled(platform_ready and current_page > 0)
         self.btn_next_page.setEnabled(platform_ready and current_page + 1 < page_count)
-        self.btn_download_docs.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
-        self.btn_analyze.setEnabled(platform_ready and self._platform_key == "gpb" and not running and has_visible_rows)
+        gpb_like = self._platform_key in {"gpb", "gpb_business"}
+        self.btn_download_docs.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)
+        self.btn_analyze.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)
         self.btn_show_analysis.setEnabled(not running and bool(self._analysis_sink.get("summary_rows")))
         self.btn_export.setEnabled(platform_ready and has_rows)
         self.sidebar.set_controls_enabled(platform_ready and not running)

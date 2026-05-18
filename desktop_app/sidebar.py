@@ -1027,7 +1027,11 @@ class Sidebar(QWidget):
         self.active_filters_row.addStretch(1)
 
     def _expanded_min_height(self) -> int:
-        return 360 if self._platform_key == "roseltorg" else 560
+        if self._platform_key == "roseltorg":
+            return 360
+        if self._platform_key == "gpb_business":
+            return 460
+        return 560
 
     def _section(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -1138,6 +1142,61 @@ class Sidebar(QWidget):
             ):
                 self._place_row(key, row, col, key in visible_keys)
             self.extra_filters.setMinimumHeight(980)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
+        elif self._platform_key == "gpb_business":
+            visible_keys = {
+                "registry",
+                "trend",
+                "organizer",
+                "customer",
+                "published",
+                "title",
+                "status",
+                "responsible",
+                "price",
+                "end",
+                "results",
+                "special_features",
+                "okpd2",
+                "customer_region",
+            }
+            self._set_row_label("registry", "Номер процедуры:")
+            self._set_row_label("title", "Наименование процедуры:")
+            self._set_row_label("trend", "Тип процедуры:")
+            self._set_row_label("organizer", "Организатор процедуры:")
+            self._set_row_label("customer", "Заказчик:")
+            self._set_row_label("status", "Статус процедуры:")
+            self._set_row_label("responsible", "Ответственное лицо:")
+            self._set_row_label("price", "Начальная цена:")
+            self._set_row_label("published", "Дата публикации:")
+            self._set_row_label("end", "Окончание приема заявок:")
+            self._set_row_label("results", "Дата подведения итогов:")
+            self._set_row_label("special_features", "Процедура для СМСП:")
+            self._set_row_label("okpd2", "ОКПД2:")
+            self._set_row_label("customer_region", "Регион заказчика:")
+            for row in range(40):
+                self._filter_grid.setRowMinimumHeight(row, 0)
+            for key in self._filter_rows:
+                self._set_row_visible(key, False)
+            for key, row, col in (
+                ("registry", 0, 0),
+                ("trend", 0, 1),
+                ("organizer", 1, 0),
+                ("customer", 1, 1),
+                ("published", 2, 0),
+                ("title", 2, 1),
+                ("status", 3, 0),
+                ("responsible", 3, 1),
+                ("price", 4, 0),
+                ("end", 4, 1),
+                ("special_features", 5, 0),
+                ("okpd2", 5, 1),
+                ("customer_region", 6, 0),
+                ("results", 6, 1),
+            ):
+                self._place_row(key, row, col, key in visible_keys)
+            self.extra_filters.setMinimumHeight(1250)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         else:

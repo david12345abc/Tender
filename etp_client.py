@@ -766,6 +766,10 @@ class EtpClient:
         clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", name).strip(" .")
         return clean[:180] or default
 
+    def _prepare_fetch_payload(self, payload: dict[str, Any], client_filters: Any = None) -> None:
+        """Hook for площадки с небольшими отличиями в Procedure.list payload."""
+        return None
+
     def _filename_from_link(self, link: dict[str, Any], index: int) -> str:
         text = str(link.get("text") or "").strip()
         href = str(link.get("href") or "")
@@ -1140,6 +1144,8 @@ class EtpClient:
                 payload["guarantee_application_from"] = guarantee_min
             if guarantee_max is not None:
                 payload["guarantee_application_till"] = guarantee_max
+
+        self._prepare_fetch_payload(payload, client_filters)
 
         request_data = dict(payload)
         request_data.pop("__tid", None)

@@ -613,14 +613,23 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
                 return value
         return None
 
+    def _int_value(self, value: Any, default: int = 0) -> int:
+        text = str(value or "").strip()
+        if not text or text in {"-", "—", "–"}:
+            return default
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            parsed = parse_price(text)
+            return int(parsed) if parsed is not None else default
+
     def _lot_count(self, proc: dict[str, Any]) -> int:
         for key in ("lots_count", "lot_count", "lots_cnt", "positions_count"):
             value = proc.get(key)
             if value is not None:
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    pass
+                parsed = self._int_value(value, default=-1)
+                if parsed >= 0:
+                    return parsed
         lots = proc.get("lots")
         if isinstance(lots, list):
             return len(lots)
@@ -844,7 +853,7 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ):
                 return False
 
-        apc = int(proc.get("applics_count") or 0)
+        apc = self._int_value(proc.get("applics_count"), default=0)
         if f.applics_min is not None and apc < f.applics_min:
             return False
         if f.applics_max is not None and apc > f.applics_max:
