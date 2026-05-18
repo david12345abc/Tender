@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import html
 import os
 import re
@@ -359,6 +360,71 @@ def _read_pptx(path: Path) -> str:
     return "\n".join(parts)
 
 
+@contextmanager
+def _short_office_copy(path: Path, filename: str):
+    with tempfile.TemporaryDirectory(prefix="etp_office_") as tmp:
+        short_path = Path(tmp) / filename
+        shutil.copy2(path, short_path)
+        yield short_path
+
+
+def _read_ppt_via_powerpoint(path: Path) -> str:
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    powerpoint = None
+    presentation = None
+    try:
+        powerpoint = win32com.client.DispatchEx("PowerPoint.Application")
+        parts: list[str] = []
+        with _short_office_copy(path, "presentation.ppt") as short_path:
+            presentation = powerpoint.Presentations.Open(
+                FileName=str(short_path),
+                ReadOnly=True,
+                Untitled=False,
+                WithWindow=False,
+            )
+            try:
+                for slide_index, slide in enumerate(presentation.Slides, start=1):
+                    parts.append(f"Слайд {slide_index}")
+                    for shape in slide.Shapes:
+                        try:
+                            if bool(shape.HasTextFrame) and bool(shape.TextFrame.HasText):
+                                text = str(shape.TextFrame.TextRange.Text or "").strip()
+                                if text:
+                                    parts.append(text)
+                        except Exception:
+                            pass
+                        try:
+                            if bool(shape.HasTable):
+                                table = shape.Table
+                                for row_index in range(1, int(table.Rows.Count) + 1):
+                                    cells: list[str] = []
+                                    for col_index in range(1, int(table.Columns.Count) + 1):
+                                        cell_range = table.Cell(
+                                            row_index,
+                                            col_index,
+                                        ).Shape.TextFrame.TextRange
+                                        cell_text = str(cell_range.Text or "").strip()
+                                        if cell_text:
+                                            cells.append(cell_text)
+                                    if cells:
+                                        parts.append(" | ".join(cells))
+                        except Exception:
+                            pass
+            finally:
+                presentation.Close()
+                presentation = None
+        return "\n".join(parts)
+    finally:
+        if presentation is not None:
+            presentation.Close()
+        if powerpoint is not None:
+            powerpoint.Quit()
+        pythoncom.CoUninitialize()
+
+
 def _read_odf(path: Path) -> str:
     from odf import teletype
     from odf.opendocument import load
@@ -396,11 +462,19 @@ def _read_doc_via_word(path: Path) -> str:
         word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         word.DisplayAlerts = 0
-        doc = word.Documents.Open(str(path), ReadOnly=True, AddToRecentFiles=False)
-        try:
-            return str(doc.Content.Text or "")
-        finally:
-            doc.Close(False)
+        with _short_office_copy(path, "document.doc") as short_path:
+            doc = word.Documents.Open(
+                FileName=str(short_path),
+                ConfirmConversions=False,
+                ReadOnly=True,
+                AddToRecentFiles=False,
+                Visible=False,
+                OpenAndRepair=True,
+            )
+            try:
+                return str(doc.Content.Text or "")
+            finally:
+                doc.Close(False)
     finally:
         if word is not None:
             word.Quit()
@@ -419,6 +493,8 @@ def _extract_text_from_file(path: Path) -> str:
         return _read_pdf(path)
     if suffix == ".pptx":
         return _read_pptx(path)
+    if suffix == ".ppt":
+        return _read_ppt_via_powerpoint(path)
     if suffix in {".odt", ".ods", ".odp"}:
         return _read_odf(path)
     if suffix == ".rtf":
