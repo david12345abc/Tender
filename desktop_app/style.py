@@ -62,6 +62,11 @@ QPushButton#PlatformButton:checked {
     color: white;
 }
 
+QPushButton#PlatformButton::menu-indicator {
+    image: none;
+    width: 0;
+}
+
 #FiltersToolbar {
     background-color: #10182f;
     border-radius: 16px;

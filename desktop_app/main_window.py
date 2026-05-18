@@ -222,11 +222,15 @@ class MainWindow(QMainWindow):
         platform_layout.setSpacing(4)
         self.platform_group = QButtonGroup(self)
         self.platform_group.setExclusive(True)
-        self.btn_platform_gpb = QPushButton("ЭТП ГПБ")
+        self.btn_platform_gpb = QPushButton("ГПБ")
         self.btn_platform_gpb.setObjectName("PlatformButton")
         self.btn_platform_gpb.setCheckable(True)
         self.btn_platform_gpb.setChecked(True)
         self.btn_platform_gpb.setFixedHeight(40)
+        self.gpb_platform_menu = QMenu(self.btn_platform_gpb)
+        self.act_platform_etp_gpb = self.gpb_platform_menu.addAction("ЭТП ГПБ")
+        self.act_platform_gpb_business = self.gpb_platform_menu.addAction("ГПБ Бизнес")
+        self.btn_platform_gpb.setMenu(self.gpb_platform_menu)
         self.btn_platform_roseltorg = QPushButton("Росэлторг")
         self.btn_platform_roseltorg.setObjectName("PlatformButton")
         self.btn_platform_roseltorg.setCheckable(True)
@@ -235,7 +239,8 @@ class MainWindow(QMainWindow):
         self.platform_group.addButton(self.btn_platform_roseltorg)
         platform_layout.addWidget(self.btn_platform_gpb)
         platform_layout.addWidget(self.btn_platform_roseltorg)
-        self.btn_platform_gpb.clicked.connect(lambda: self._select_platform("gpb"))
+        self.act_platform_etp_gpb.triggered.connect(lambda: self._select_platform("gpb"))
+        self.act_platform_gpb_business.triggered.connect(lambda: self._select_platform("gpb_business"))
         self.btn_platform_roseltorg.clicked.connect(lambda: self._select_platform("roseltorg"))
         top_layout.addWidget(platform_switcher, 0, Qt.AlignVCenter)
 
@@ -625,13 +630,23 @@ class MainWindow(QMainWindow):
         return self._platform_key in {"gpb", "roseltorg"}
 
     def _platform_title(self) -> str:
-        return "Росэлторг" if self._platform_key == "roseltorg" else "ЭТП ГПБ"
+        if self._platform_key == "roseltorg":
+            return "Росэлторг"
+        if self._platform_key == "gpb_business":
+            return "ГПБ Бизнес"
+        return "ЭТП ГПБ"
 
     def _set_platform_buttons(self) -> None:
-        self.btn_platform_gpb.setChecked(self._platform_key == "gpb")
+        self.btn_platform_gpb.setChecked(self._platform_key in {"gpb", "gpb_business"})
         self.btn_platform_roseltorg.setChecked(self._platform_key == "roseltorg")
+        self.btn_platform_gpb.setText(self._platform_title() if self._platform_key in {"gpb", "gpb_business"} else "ГПБ")
+        self.act_platform_etp_gpb.setCheckable(True)
+        self.act_platform_gpb_business.setCheckable(True)
+        self.act_platform_etp_gpb.setChecked(self._platform_key == "gpb")
+        self.act_platform_gpb_business.setChecked(self._platform_key == "gpb_business")
 
     def _apply_platform_ui(self) -> None:
+        self._set_platform_buttons()
         if self._platform_key == "roseltorg":
             self.sidebar.set_platform_filter_options(
                 ROSELTORG_PROCEDURE_TYPE_OPTIONS,
@@ -645,6 +660,19 @@ class MainWindow(QMainWindow):
             self.user_label.setText("Пользователь: —")
             self._set_badge("idle", "○  Росэлторг")
             self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
+        elif self._platform_key == "gpb_business":
+            self.sidebar.set_platform_filter_options(
+                PROCEDURE_TYPE_OPTIONS,
+                STATUS_OPTIONS,
+                None,
+                platform_key="gpb_business",
+            )
+            self.title_label.setText("ГПБ Бизнес — Актуальные процедуры")
+            self.subtitle_label.setText("Поиск, фильтры и ключевые слова")
+            self.lbl_counter.setText("ГПБ Бизнес добавлен как площадка. Поиск будет подключён следующим этапом.")
+            self.user_label.setText("Пользователь: —")
+            self._set_badge("idle", "○  ГПБ Бизнес")
+            self.status_msg.setText("ГПБ Бизнес пока в разработке.")
         else:
             self.sidebar.set_platform_filter_options(
                 PROCEDURE_TYPE_OPTIONS,
@@ -660,7 +688,7 @@ class MainWindow(QMainWindow):
             self.status_msg.setText("Готов. Нажмите «Поиск».")
 
     def _select_platform(self, key: str) -> None:
-        if key not in {"gpb", "roseltorg"}:
+        if key not in {"gpb", "gpb_business", "roseltorg"}:
             return
         if self.runner.is_running():
             self._set_platform_buttons()
