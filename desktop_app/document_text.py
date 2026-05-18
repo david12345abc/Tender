@@ -16,6 +16,7 @@ from typing import Iterable
 MAX_DOCUMENT_FILES = 80
 MAX_TEXT_PER_FILE = 12_000
 MAX_DOCUMENT_TEXT = 60_000
+_PADDLE_OCR = None
 
 ARCHIVE_SUFFIXES = {
     ".zip",
@@ -27,6 +28,7 @@ ARCHIVE_SUFFIXES = {
     ".bz2",
     ".xz",
 }
+SPLIT_ARCHIVE_RE = re.compile(r"^(.+\.(?:zip|rar|7z))\.(\d{3})$", re.I)
 TEXT_SUFFIXES = {
     ".txt",
     ".md",
@@ -49,10 +51,69 @@ def _is_archive(path: Path) -> bool:
     name = path.name.lower()
     return (
         path.suffix.lower() in ARCHIVE_SUFFIXES
+        or SPLIT_ARCHIVE_RE.match(name) is not None
         or name.endswith(".tar.gz")
         or name.endswith(".tar.bz2")
         or name.endswith(".tar.xz")
     )
+
+
+def _split_archive_info(path: Path) -> tuple[str, int] | None:
+    match = SPLIT_ARCHIVE_RE.match(path.name)
+    if not match:
+        return None
+    return match.group(1), int(match.group(2))
+
+
+def _split_archive_base_name(path: Path) -> str | None:
+    info = _split_archive_info(path)
+    if info:
+        return info[0]
+    if path.suffix.lower() in {".zip", ".rar", ".7z"}:
+        pattern = re.compile(rf"^{re.escape(path.name)}\.\d{{3}}$", re.I)
+        try:
+            if any(pattern.match(p.name) for p in path.parent.iterdir() if p.is_file()):
+                return path.name
+        except Exception:
+            return None
+    return None
+
+
+def _split_archive_members(path: Path) -> list[Path]:
+    base_name = _split_archive_base_name(path)
+    if not base_name:
+        return []
+    parent = path.parent
+    members: list[tuple[int, Path]] = []
+    base = parent / base_name
+    if base.is_file():
+        members.append((0, base))
+    pattern = re.compile(rf"^{re.escape(base_name)}\.(\d{{3}})$", re.I)
+    try:
+        for item in parent.iterdir():
+            if not item.is_file():
+                continue
+            match = pattern.match(item.name)
+            if match:
+                members.append((int(match.group(1)), item))
+    except Exception:
+        pass
+    return [p for _part, p in sorted(members, key=lambda item: item[0])]
+
+
+def _split_archive_extract_source(path: Path) -> Path:
+    members = _split_archive_members(path)
+    if not members:
+        return path
+    base_name = _split_archive_base_name(path)
+    if base_name:
+        base = path.parent / base_name
+        if base.is_file():
+            return base
+        first = path.parent / f"{base_name}.001"
+        if first.is_file():
+            return first
+    return members[0]
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -173,6 +234,16 @@ def _extract_archive(path: Path, target_dir: Path) -> None:
             "Файл с расширением архива не является архивом. "
             f"ЭТП вернула HTML/JSON-ответ вместо файла: {fake_response}"
         )
+    if _split_archive_info(path):
+        try:
+            _extract_with_7zip(path, target_dir)
+        except Exception as sevenzip_exc:
+            raise RuntimeError(
+                "Многотомный архив не распакован через 7-Zip. "
+                "Проверьте, что рядом сохранены все части архива (.001, .002, .003 или основной .zip). "
+                f"Ошибка: {sevenzip_exc}"
+            ) from sevenzip_exc
+        return
     if suffix == ".zip":
         try:
             with zipfile.ZipFile(path) as zf:
@@ -324,8 +395,75 @@ def _read_xls_via_excel(path: Path) -> str:
         pythoncom.CoUninitialize()
 
 
+def _get_paddle_ocr():
+    global _PADDLE_OCR
+    if _PADDLE_OCR is False:
+        return None
+    if _PADDLE_OCR is not None:
+        return _PADDLE_OCR
+    try:
+        from paddleocr import PaddleOCR
+
+        try:
+            _PADDLE_OCR = PaddleOCR(lang="ru", show_log=False)
+        except TypeError:
+            _PADDLE_OCR = PaddleOCR(lang="ru")
+    except Exception:
+        _PADDLE_OCR = False
+    return _PADDLE_OCR if _PADDLE_OCR is not False else None
+
+
+def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
+    ocr = _get_paddle_ocr()
+    if ocr is None:
+        return ""
+    try:
+        import numpy as np
+        from PIL import Image
+
+        img = np.array(Image.frombytes("RGB", (width, height), rgb_bytes))
+        result = ocr.ocr(img, cls=True)
+    except Exception:
+        return ""
+    lines: list[str] = []
+    for page in result or []:
+        for item in page or []:
+            try:
+                text = item[1][0]
+            except Exception:
+                text = ""
+            if text:
+                lines.append(str(text))
+    return "\n".join(lines)
+
+
 def _read_pdf(path: Path) -> str:
     parts: list[str] = []
+    try:
+        import fitz
+
+        doc = fitz.open(path)
+        try:
+            for page_index in range(min(doc.page_count, 60)):
+                page = doc.load_page(page_index)
+                text = page.get_text("text") or ""
+                if len(text.strip()) < 20:
+                    try:
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                        ocr_text = _ocr_page_image(pix.samples, pix.width, pix.height)
+                        if len(ocr_text.strip()) > len(text.strip()):
+                            text = ocr_text
+                    except Exception:
+                        pass
+                if text.strip():
+                    parts.append(text)
+        finally:
+            doc.close()
+    except Exception:
+        pass
+    if any(p.strip() for p in parts):
+        return "\n".join(p for p in parts if p.strip())
+
     try:
         from pypdf import PdfReader
 
@@ -625,6 +763,7 @@ def prepare_documents_for_analysis(
     try:
         queue = staged_files
         seen: set[Path] = set()
+        extracted_archive_groups: set[str] = set()
         archive_count = 0
 
         while queue and len(seen) < MAX_DOCUMENT_FILES:
@@ -637,12 +776,30 @@ def prepare_documents_for_analysis(
 
             if _is_archive(source):
                 archive_count += 1
-                archive_source = source
-                if not is_inside_output:
-                    archive_copy = _unique_path(output_dir / source.name)
-                    archive_copy.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, archive_copy)
-                    archive_source = archive_copy.resolve()
+                split_base_name = _split_archive_base_name(source)
+                if split_base_name:
+                    group_key = f"{source.parent.resolve()}::{split_base_name.casefold()}"
+                    members = _split_archive_members(source) or [source]
+                    for member in members:
+                        target_member = output_dir / member.name
+                        target_member.parent.mkdir(parents=True, exist_ok=True)
+                        if not target_member.exists():
+                            shutil.copy2(member, target_member)
+                    if group_key in extracted_archive_groups:
+                        continue
+                    extracted_archive_groups.add(group_key)
+                    archive_source = _split_archive_extract_source(output_dir / source.name).resolve()
+                else:
+                    archive_source = source
+                    group_key = str(source)
+                    if group_key in extracted_archive_groups:
+                        continue
+                    extracted_archive_groups.add(group_key)
+                    if not is_inside_output:
+                        archive_copy = _unique_path(output_dir / source.name)
+                        archive_copy.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source, archive_copy)
+                        archive_source = archive_copy.resolve()
                 extract_parent = archive_source.parent
                 extract_dir = _unique_path(extract_parent / f"{archive_source.stem}_разархивировано")
                 if progress:

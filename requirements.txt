@@ -37,6 +37,8 @@ pywinauto>=0.6.8; sys_platform == "win32"
 sentence-transformers>=3.0
 faiss-cpu>=1.8
 pymupdf>=1.24
+paddleocr>=2.8
+paddlepaddle>=2.6
 numpy>=1.26
 
 # Сборка exe (Windows): pip install pyinstaller && python -m PyInstaller --clean --noconfirm ETP_GPB_Search.spec

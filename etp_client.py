@@ -234,6 +234,7 @@ def _payload_preview(raw: bytes) -> str:
 
 
 def _download_payload_error(name: str, raw: bytes, content_type: str = "") -> str | None:
+    lowered_name = str(name or "").lower()
     suffix = Path(name).suffix.lower()
     prefix = raw.lstrip()[:16].lower()
     if prefix.startswith((b"<!doctype html", b"<html", b"{")):
@@ -241,6 +242,8 @@ def _download_payload_error(name: str, raw: bytes, content_type: str = "") -> st
             "ЭТП вернула HTML/JSON-ответ вместо файла. "
             f"content-type={content_type or '—'}, preview={_payload_preview(raw)}"
         )
+    if re.search(r"\.(?:zip|rar|7z)\.\d{3}$", lowered_name):
+        return None
     if suffix == ".zip" and not raw.startswith(b"PK"):
         return f"Файл .zip не похож на ZIP-архив. content-type={content_type or '—'}, preview={_payload_preview(raw)}"
     if suffix == ".rar" and not raw.startswith(b"Rar!"):
@@ -261,7 +264,7 @@ def _purchase_form_value(value: str) -> int:
 _COLLECT_DOCUMENT_LINKS_JS = r"""
 const callback = arguments[arguments.length - 1];
 (() => {
-  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const links = [];
   const seen = new Set();
   function push(href, text) {
@@ -377,7 +380,7 @@ const callback = arguments[arguments.length - 1];
   }
   const pageText = bestPageText();
 
-  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)(?:[?#]|$)/i;
+  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
   const docLinks = [];
   const seen = new Set();
   for (const a of Array.from(document.querySelectorAll("a[href]"))) {
@@ -767,7 +770,11 @@ class EtpClient:
         text = str(link.get("text") or "").strip()
         href = str(link.get("href") or "")
         for source in (text, href.rsplit("/", 1)[-1]):
-            m = re.search(r"([^/?#]+\.(?:docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv))", source, re.I)
+            m = re.search(
+                r"([^/?#]+\.(?:docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv))",
+                source,
+                re.I,
+            )
             if m:
                 return self._safe_filename(m.group(1), f"document_{index}")
         return self._safe_filename(text or f"document_{index}", f"document_{index}")
