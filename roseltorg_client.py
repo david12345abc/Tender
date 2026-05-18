@@ -271,7 +271,34 @@ class RoseltorgClient(EtpClient):
             "token": token,
             "endpoint": endpoint,
         }
-        result = self.driver.execute_async_script(_FETCH_PROCEDURES_JS, endpoint)
+        try:
+            result = self.driver.execute_async_script(_FETCH_PROCEDURES_JS, endpoint)
+        except Exception as e:
+            if self._is_window_lost(e) and _recover_attempt < 2:
+                if self._recover_tab():
+                    self._token = ""
+                    self.pull_token()
+                    return self.fetch_page(
+                        start=start,
+                        limit=limit,
+                        date_from=date_from,
+                        date_to=date_to,
+                        query=query,
+                        tag_id=tag_id,
+                        sort=sort,
+                        direction=direction,
+                        _recover_attempt=_recover_attempt + 1,
+                    )
+            return {
+                "success": False,
+                "error": str(e),
+                "procedures": [],
+                "totalCount": None,
+                "_debug": {
+                    **request_debug,
+                    "selenium_error": str(e),
+                },
+            }
         if not isinstance(result, dict):
             return {
                 "success": False,

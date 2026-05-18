@@ -322,6 +322,8 @@ def make_search_task(
                 if w.is_stop_requested():
                     return
                 request_limit = max(1, int(params.limit or HARD_SERVER_LIMIT))
+                if is_roseltorg:
+                    request_limit = min(request_limit, 30)
                 w.progress.emit(
                     "Ищу процедуры..."
                     + (f" Найдено подходящих: {accepted_this_task}." if accepted_this_task else "")
@@ -383,8 +385,9 @@ def make_search_task(
                         or "target frame detached" in err_low
                         or "invalid session id" in err_low
                     ):
+                        platform_name = "Росэлторга" if is_roseltorg else "ЭТП"
                         short = (
-                            "Вкладка ЭТП была закрыта в Chrome. "
+                            f"Вкладка {platform_name} была закрыта или браузер потерял сессию. "
                             "Открыл её заново — попробуйте ещё раз нажать «Поиск»."
                         )
                         w.error.emit(short)

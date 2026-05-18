@@ -739,7 +739,7 @@ class EtpClient:
         )
 
     def _recover_tab(self) -> bool:
-        """Пересоединяется к Chrome и переключается на живую вкладку ЭТП."""
+        """Пересоединяется к браузеру и переключается на живую вкладку площадки."""
         # Если сам драйвер умер — пересоздаём его.
         try:
             _ = self.driver and self.driver.window_handles
@@ -747,7 +747,7 @@ class EtpClient:
             try:
                 if self.driver is not None:
                     try:
-                        self.driver.quit()
+                        self.driver.command_executor.close()
                     except Exception:
                         pass
             finally:

@@ -5,6 +5,7 @@ import re
 import shutil
 import traceback
 import webbrowser
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -731,7 +732,7 @@ class MainWindow(QMainWindow):
                 "Список ключевых слов пуст. Добавьте слова через «Редактировать список».",
             )
             return
-        self.proxy.set_filters(filters)
+        self.proxy.set_filters(self._display_filters_for_platform(filters))
         self.model.set_keywords(filters.keywords, filters.keyword_lemma_enabled)
 
         has_active_filters = self._has_active_filters(filters)
@@ -1716,9 +1717,51 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
     # --------------- клиентские фильтры
+    def _display_filters_for_platform(self, filters: ClientFilters) -> ClientFilters:
+        if self._platform_key != "roseltorg":
+            return filters
+        # Росэлторг фильтруется серверным API. В таблице оставляем только
+        # ключевые слова, иначе локальный GPB-фильтр скрывает уже найденные строки.
+        return replace(
+            filters,
+            quick_search="",
+            registry_contains="",
+            unique_number_contains="",
+            organizer_contains="",
+            customer_contains="",
+            customer_region_contains="",
+            customer_agent_contains="",
+            title_contains="",
+            okpd2_contains="",
+            okved2_contains="",
+            guarantee_min=None,
+            guarantee_max=None,
+            responsible_contains="",
+            trend_pur="",
+            trend_pur_values=(),
+            step_ids=(),
+            law_values=(),
+            purchase_form="",
+            applics_min=None,
+            applics_max=None,
+            lots_min=None,
+            lots_max=None,
+            price_min=None,
+            price_max=None,
+            published_from=None,
+            published_to=None,
+            end_from=None,
+            end_to=None,
+            results_from=None,
+            results_to=None,
+            special_features_contains="",
+            position_name_contains="",
+            national_regime_contains="",
+        )
+
     def _on_filters_changed(self) -> None:
         filters = self.sidebar.client_filters()
-        self.proxy.set_filters(filters)
+        self.proxy.set_filters(self._display_filters_for_platform(filters))
         self.model.set_keywords(filters.keywords, filters.keyword_lemma_enabled)
         self._refresh_counter()
         self._schedule_table_row_resize()
