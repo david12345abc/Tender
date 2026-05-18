@@ -151,6 +151,49 @@ const explicitToken = arguments[1] || '';
 })();
 """
 
+_SINGLE_WINDOW_GUARD_JS = r"""
+(() => {
+  if (window.__etpSingleWindowGuardInstalled) return;
+  window.__etpSingleWindowGuardInstalled = true;
+
+  const sameWindow = (url) => {
+    if (url && typeof url === 'string' && url.trim()) {
+      window.location.assign(url);
+    }
+    return window;
+  };
+
+  try {
+    window.open = sameWindow;
+  } catch (e) {}
+
+  const normalizeTargets = () => {
+    try {
+      document.querySelectorAll('a[target], form[target]').forEach((el) => {
+        el.removeAttribute('target');
+      });
+    } catch (e) {}
+  };
+
+  normalizeTargets();
+  try {
+    new MutationObserver(normalizeTargets).observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['target'],
+    });
+  } catch (e) {}
+
+  document.addEventListener('click', (event) => {
+    const link = event.target && event.target.closest ? event.target.closest('a[target="_blank"]') : null;
+    if (!link || !link.href) return;
+    event.preventDefault();
+    window.location.assign(link.href);
+  }, true);
+})();
+"""
+
 
 def _date_to_etp_iso(value: Optional[str], end_of_day: bool = False) -> str:
     if not value:
@@ -528,6 +571,22 @@ class EtpClient:
             f"{text}"
         )
 
+    def _install_single_window_guard(self) -> None:
+        """Запрещает сайту открывать авторизацию/переходы в новом окне."""
+        if not self.driver:
+            return
+        try:
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": _SINGLE_WINDOW_GUARD_JS},
+            )
+        except Exception:
+            pass
+        try:
+            self.driver.execute_script(_SINGLE_WINDOW_GUARD_JS)
+        except Exception:
+            pass
+
     def ensure_chrome(self, timeout: int = 40) -> None:
         """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
@@ -611,10 +670,15 @@ class EtpClient:
             except SessionNotCreatedException as e:
                 raise RuntimeError(self._driver_version_hint(e)) from e
         self.driver.set_script_timeout(30)
+        self._install_single_window_guard()
         self._switch_to_etp_tab()
 
     def _switch_to_etp_tab(self) -> bool:
-        """Ищет живую вкладку с etpgaz и переключается на неё. Иначе открывает новую."""
+        """Ищет живую вкладку с etpgaz и переключается на неё.
+
+        Если такой вкладки нет, переиспользует текущую живую вкладку. Это важно
+        для поиска: повторный запуск не должен плодить новые окна браузера.
+        """
         if not self.driver:
             return False
         try:
@@ -625,35 +689,40 @@ class EtpClient:
             try:
                 self.driver.switch_to.window(h)
                 if self.target_host in (self.driver.current_url or ""):
+                    self._install_single_window_guard()
                     return True
             except Exception:
                 continue
-        # Нет живой вкладки с ЭТП — открываем новую. Сначала пробуем использовать
-        # любую живую вкладку, иначе создаём новую через JS.
+        # Нет живой вкладки с ЭТП — переходим в первой живой вкладке, не открывая
+        # новую через window.open(). Так окно поиска остаётся единственным.
         for h in handles:
             try:
                 self.driver.switch_to.window(h)
-                break
+                self.driver.get(self.target_url)
+                self._install_single_window_guard()
+                return True
             except Exception:
                 continue
         try:
-            self.driver.execute_script(
-                f"window.open('{self.target_url}', '_blank');"
-            )
-        except Exception:
-            pass
-        try:
-            for h in self.driver.window_handles:
-                self.driver.switch_to.window(h)
-                if self.target_host in (self.driver.current_url or ""):
-                    return True
-        except Exception:
-            pass
-        try:
             self.driver.get(self.target_url)
+            self._install_single_window_guard()
             return True
         except Exception:
-            return False
+            pass
+        if self._open_devtools_page(self.target_url):
+            try:
+                handles = list(self.driver.window_handles)
+            except Exception:
+                handles = []
+            for h in handles:
+                try:
+                    self.driver.switch_to.window(h)
+                    if self.target_host in (self.driver.current_url or ""):
+                        self._install_single_window_guard()
+                        return True
+                except Exception:
+                    continue
+        return False
 
     def _is_window_lost(self, err: Exception) -> bool:
         msg = str(err).lower()
