@@ -405,6 +405,24 @@ def make_search_task(
                     err_text = str(res["error"])
                     err_low = err_text.lower()
                     if (
+                        "unexpected token '<'" in err_low
+                        or "not valid json" in err_low
+                        or "json.parse" in err_low
+                    ):
+                        host = str(getattr(client, "target_host", ""))
+                        login_hint = (
+                            "В Chrome откройте ГПБ Бизнес, выполните вход до конца, "
+                            "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
+                            if "etp.gpb.ru" in host
+                            else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                            "затем снова нажмите «Поиск»."
+                        )
+                        w.session.emit(
+                            False,
+                            f"Сессия не активна или требуется авторизация.\n\n{login_hint}",
+                        )
+                        return
+                    if (
                         "no such window" in err_low
                         or "web view not found" in err_low
                         or "target window already closed" in err_low
@@ -427,6 +445,9 @@ def make_search_task(
                         "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
                         "затем снова нажмите «Поиск»."
                         if "roseltorg" in host
+                        else "В Chrome откройте ГПБ Бизнес, выполните вход до конца, "
+                        "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
+                        if "etp.gpb.ru" in host
                         else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
                         "затем снова нажмите «Поиск»."
                     )

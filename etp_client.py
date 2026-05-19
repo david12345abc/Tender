@@ -91,7 +91,21 @@ const callback = arguments[arguments.length - 1];
       }),
     });
     clearTimeout(to);
-    const j = await resp.json();
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const text = await resp.text();
+    const preview = text.slice(0, 160).trim();
+    if (!contentType.includes('application/json') || preview.startsWith('<')) {
+      callback({
+        success: false,
+        no_session: true,
+        message: 'Сессия не активна или требуется авторизация.',
+        status: resp.status,
+        contentType,
+        preview,
+      });
+      return;
+    }
+    const j = JSON.parse(text);
     const r = j.result || {};
     callback({
       success: !!r.success,
@@ -133,7 +147,24 @@ const explicitToken = arguments[1] || '';
       }),
     });
     clearTimeout(to);
-    const j = await resp.json();
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
+    const text = await resp.text();
+    const preview = text.slice(0, 160).trim();
+    if (!contentType.includes('application/json') || preview.startsWith('<')) {
+      callback({
+        success: false,
+        procedures: [],
+        totalCount: null,
+        no_access: false,
+        no_session: true,
+        message: 'Сессия не активна или требуется авторизация.',
+        status: resp.status,
+        contentType,
+        preview,
+      });
+      return;
+    }
+    const j = JSON.parse(text);
     const r = j.result || {};
     callback({
       success: r.success !== false,
