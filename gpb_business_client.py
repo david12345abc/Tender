@@ -12,6 +12,32 @@ GPB_BUSINESS_URL = (
     "#com/procedure/index/223"
 )
 
+GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS = [
+    ("Аукцион на понижение", "2"),
+    ("Конкурс", "3"),
+    ("Запрос предложений", "4"),
+    ("Запрос (ценовых) котировок", "5"),
+    ("Предварительный отбор", "6"),
+    ("Редукцион", "11"),
+    ("Попозиционная", "13"),
+    ("Маркетинговые исследования", "31"),
+    ("Конкурентный отбор", "32"),
+    ("Аукцион на понижение (конкурентный)", "34"),
+    ("Запрос котировок (конкурентный)", "35"),
+    ("Конкурс в электронной форме (конкурентный)", "36"),
+    ("Закупка у единственного поставщика", "45"),
+    ("Запрос предложений (конкурентный)", "48"),
+    ("Запрос предложений в электронной форме для СМСП", "26"),
+    ("Запрос котировок в электронной форме для СМСП", "27"),
+    ("Конкурс в электронной форме для СМСП", "28"),
+    ("Аукцион на понижение в электронной форме для СМСП", "29"),
+]
+
+GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS = {
+    int(value): label
+    for label, value in GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS
+}
+
 
 class GpbBusinessClient(EtpClient):
     """Клиент ГПБ Бизнес.
@@ -31,6 +57,23 @@ class GpbBusinessClient(EtpClient):
             f"?organizationId={GPB_BUSINESS_ORGANIZATION_ID}"
             f"#com/procedure/view/procedure/{proc_id}"
         )
+
+    def fetch_page(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        res = super().fetch_page(*args, **kwargs)
+        procedures = res.get("procedures")
+        if isinstance(procedures, list):
+            for proc in procedures:
+                if not isinstance(proc, dict):
+                    continue
+                proc["source"] = "gpb_business"
+                try:
+                    type_id = int(str(proc.get("procedure_type") or "").strip())
+                except (TypeError, ValueError):
+                    continue
+                label = GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS.get(type_id)
+                if label:
+                    proc["procedure_type_name"] = label
+        return res
 
     def _prepare_fetch_payload(self, payload: dict[str, Any], client_filters: Any = None) -> None:
         # На etp.gpb.ru номер процедуры ищется через общий query. Поля

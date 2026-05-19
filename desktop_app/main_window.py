@@ -47,7 +47,7 @@ from PySide6.QtWidgets import (
 )
 
 from etp_client import EtpClient, PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS, step_id_label, trend_pur_label
-from gpb_business_client import GpbBusinessClient
+from gpb_business_client import GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS, GpbBusinessClient
 from roseltorg_client import (
     ROSELTORG_PROCEDURE_TYPE_OPTIONS,
     ROSELTORG_SEARCH_BY_OPTIONS,
@@ -663,7 +663,7 @@ class MainWindow(QMainWindow):
             self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
         elif self._platform_key == "gpb_business":
             self.sidebar.set_platform_filter_options(
-                PROCEDURE_TYPE_OPTIONS,
+                GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS,
                 STATUS_OPTIONS,
                 None,
                 platform_key="gpb_business",

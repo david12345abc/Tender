@@ -58,14 +58,10 @@ def _smsp_procedure(proc: dict[str, Any]) -> bool:
 
 
 def _with_smsp_type_qualifier(proc: dict[str, Any], label: str) -> str:
-    """Как на сайте: для закупок СМСП добавляют «в электронной форме для СМСП» после базового типа."""
+    """Как на сайте: для закупок СМСП к типу добавляют «в электронной форме для СМСП»."""
     if not label or label == "—":
         return label
-    stripped = label.strip()
-    # Только голый числовой id без расшифровки — суффикс СМСП не добавляем.
-    if re.fullmatch(r"-?\d+", stripped):
-        return label
-    low = stripped.casefold()
+    low = label.casefold()
     if "электронной форме" in low and "смсп" in low:
         return label
     if not _smsp_procedure(proc):
@@ -330,34 +326,21 @@ class ProcedureTableModel(QAbstractTableModel):
 
     def _display(self, proc: dict[str, Any], key: str) -> Any:
         if key == "trend_pur_label":
+            procedure_type = proc.get("procedure_type")
+            if procedure_type not in (None, ""):
+                label = procedure_type_label(procedure_type)
+                if label != str(procedure_type):
+                    return label
             for type_key in (
-                "procedure_type_long_title",
-                "procedure_type_short_title",
                 "trend_pur_name",
+                "trend_pur_label",
                 "procedure_type_name",
                 "type_name",
+                "procedure_type",
             ):
-                raw = proc.get(type_key)
-                if raw:
-                    text = str(raw).strip()
-                    if text and not text.isdigit():
-                        low = text.casefold()
-                        if "электронной форме" in low and "смсп" in low:
-                            return text
-                        return _with_smsp_type_qualifier(proc, text)
-            tp_raw = proc.get("trend_pur")
-            if tp_raw not in (None, ""):
-                tlab = trend_pur_label(tp_raw)
-                if tlab != "—":
-                    return _with_smsp_type_qualifier(proc, tlab)
-            pt = proc.get("procedure_type")
-            if pt not in (None, "", 0):
-                extra_pt = proc.get("_ptype_runtime_labels")
-                pmap = extra_pt if isinstance(extra_pt, dict) else None
-                plab = procedure_type_label(pt, extra_labels=pmap)
-                if plab != "—":
-                    return _with_smsp_type_qualifier(proc, plab)
-            return "—"
+                if proc.get(type_key) and not str(proc[type_key]).isdigit():
+                    return str(proc[type_key])
+            return trend_pur_label(proc.get("trend_pur"))
         if key == "step_label":
             return self._status_label(proc)
         if key == "organizer":

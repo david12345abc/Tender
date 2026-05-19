@@ -4,7 +4,7 @@ import json
 import traceback
 from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
@@ -270,6 +270,7 @@ def make_search_task(
                 # теми же полями, что использует сайт. Локально оставляем только
                 # фильтр ключевых слов, которого нет в форме ЭТП.
                 step_ids = tuple(getattr(client_filters, "step_ids", ()) or ())
+                trend_values = tuple(getattr(client_filters, "trend_pur_values", ()) or ())
                 concrete_step_ids = tuple(
                     step_id
                     for step_id in step_ids
@@ -277,13 +278,27 @@ def make_search_task(
                     and _server_status_value((step_id,)) != -2
                 )
                 local_step_ids = concrete_step_ids if step_ids else ()
-                if len(step_ids) > 1:
-                    step_ids_for_api = concrete_step_ids or step_ids
-                    server_filter_variants = [
-                        replace(client_filters, step_ids=(step_id,))
-                        for step_id in step_ids_for_api
-                        if _server_status_value((step_id,)) is not None
-                    ] or [client_filters]
+                if len(step_ids) > 1 or len(trend_values) > 1:
+                    step_ids_for_api = (
+                        tuple(
+                            step_id
+                            for step_id in (concrete_step_ids or step_ids)
+                            if _server_status_value((step_id,)) is not None
+                        )
+                        if len(step_ids) > 1
+                        else (None,)
+                    )
+                    trend_values_for_api = trend_values if len(trend_values) > 1 else (None,)
+                    server_filter_variants = []
+                    for step_id in step_ids_for_api:
+                        for trend_value in trend_values_for_api:
+                            kwargs: dict[str, Any] = {}
+                            if step_id is not None:
+                                kwargs["step_ids"] = (step_id,)
+                            if trend_value is not None:
+                                kwargs["trend_pur"] = trend_value
+                            server_filter_variants.append(replace(client_filters, **kwargs))
+                    server_filter_variants = server_filter_variants or [client_filters]
                 probe_filters = replace(
                     client_filters,
                     quick_search="",
@@ -434,7 +449,6 @@ def make_search_task(
                         if row is not None:
                             accepted.append(row)
                 deduped: list[dict] = []
-                rlabels = getattr(client, "_runtime_procedure_labels", None)
                 for row in accepted:
                     key = str(
                         row.get("id")
@@ -446,10 +460,7 @@ def make_search_task(
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
-                    out = dict(row)
-                    if isinstance(rlabels, dict) and rlabels:
-                        out["_ptype_runtime_labels"] = rlabels
-                    deduped.append(out)
+                    deduped.append(row)
                 next_start = cur_start + len(procs)
                 aggregate_processed += len(procs)
                 last_next_start = aggregate_processed
