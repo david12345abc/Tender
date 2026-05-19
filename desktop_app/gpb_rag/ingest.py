@@ -161,7 +161,7 @@ def ingest_card_page_text(
     page_text: str, registry: str, card_url: str = ""
 ) -> tuple[FileMetadata, list[tuple[int | None, str]]]:
     header_lines = [
-        "=== Текст страницы карточки процедуры на ЭТП ГПБ "
+        "=== Текст страницы карточки процедуры секции Газпром "
         "(снят из браузера: ожидание загрузки, прокрутка, обход вкладок) ===",
         f"Реестровый номер (из таблицы поиска): {registry}",
     ]

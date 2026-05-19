@@ -223,14 +223,14 @@ class MainWindow(QMainWindow):
         platform_layout.setSpacing(4)
         self.platform_group = QButtonGroup(self)
         self.platform_group.setExclusive(True)
-        self.btn_platform_gpb = QPushButton("ГПБ")
+        self.btn_platform_gpb = QPushButton("Секция Газпром")
         self.btn_platform_gpb.setObjectName("PlatformButton")
         self.btn_platform_gpb.setCheckable(True)
         self.btn_platform_gpb.setChecked(True)
         self.btn_platform_gpb.setFixedHeight(40)
         self.gpb_platform_menu = QMenu(self.btn_platform_gpb)
-        self.act_platform_etp_gpb = self.gpb_platform_menu.addAction("ЭТП ГПБ")
-        self.act_platform_gpb_business = self.gpb_platform_menu.addAction("ГПБ Бизнес")
+        self.act_platform_etp_gpb = self.gpb_platform_menu.addAction("Секция Газпром")
+        self.act_platform_gpb_business = self.gpb_platform_menu.addAction("Секция Бизнес.223")
         self.btn_platform_gpb.setMenu(self.gpb_platform_menu)
         self.btn_platform_roseltorg = QPushButton("Росэлторг")
         self.btn_platform_roseltorg.setObjectName("PlatformButton")
@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
 
         t_title_box = QVBoxLayout()
         t_title_box.setSpacing(0)
-        self.title_label = QLabel("ЭТП ГПБ — Актуальные процедуры")
+        self.title_label = QLabel("Секция Газпром — Актуальные процедуры")
         self.title_label.setObjectName("TopBarTitle")
         self.subtitle_label = QLabel("Поиск, фильтры и экспорт")
         self.subtitle_label.setObjectName("TopBarSubtitle")
@@ -393,7 +393,7 @@ class MainWindow(QMainWindow):
 
         self.btn_analyze = QPushButton("Проанализировать")
         self.btn_analyze.setToolTip(
-            "Собрать текст карточки с ЭТП ГПБ и отправить в LM Studio для заполнения таблицы анализа"
+            "Собрать текст карточки из секции Газпром и отправить в LM Studio для заполнения таблицы анализа"
         )
         self.btn_analyze.clicked.connect(self._on_analyze_procedures)
         self.btn_analyze.setEnabled(False)
@@ -634,13 +634,13 @@ class MainWindow(QMainWindow):
         if self._platform_key == "roseltorg":
             return "Росэлторг"
         if self._platform_key == "gpb_business":
-            return "ГПБ Бизнес"
-        return "ЭТП ГПБ"
+            return "Секция Бизнес.223"
+        return "Секция Газпром"
 
     def _set_platform_buttons(self) -> None:
         self.btn_platform_gpb.setChecked(self._platform_key in {"gpb", "gpb_business"})
         self.btn_platform_roseltorg.setChecked(self._platform_key == "roseltorg")
-        self.btn_platform_gpb.setText(self._platform_title() if self._platform_key in {"gpb", "gpb_business"} else "ГПБ")
+        self.btn_platform_gpb.setText(self._platform_title() if self._platform_key in {"gpb", "gpb_business"} else "Секции")
         self.act_platform_etp_gpb.setCheckable(True)
         self.act_platform_gpb_business.setCheckable(True)
         self.act_platform_etp_gpb.setChecked(self._platform_key == "gpb")
@@ -668,7 +668,7 @@ class MainWindow(QMainWindow):
                 None,
                 platform_key="gpb_business",
             )
-            self.title_label.setText("ГПБ Бизнес — Актуальные процедуры")
+            self.title_label.setText("Секция Бизнес.223 — Актуальные процедуры")
             self.subtitle_label.setText("Поиск, фильтры и экспорт")
             if not self.model.rowCount():
                 self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
@@ -681,7 +681,7 @@ class MainWindow(QMainWindow):
                 None,
                 platform_key="gpb",
             )
-            self.title_label.setText("ЭТП ГПБ — Актуальные процедуры")
+            self.title_label.setText("Секция Газпром — Актуальные процедуры")
             self.subtitle_label.setText("Поиск, фильтры и экспорт")
             if not self.model.rowCount():
                 self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
@@ -1110,7 +1110,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Анализ",
-                "Анализ карточки через LM Studio сейчас доступен только для ЭТП ГПБ.",
+                "Анализ карточки через LM Studio сейчас доступен только для секции Газпром.",
             )
             return
         procedures = self._selected_procedures()
@@ -1271,7 +1271,7 @@ class MainWindow(QMainWindow):
     def _show_analysis_table_dialog(self, rows: list[list[str]]) -> None:
         dlg = QDialog(self)
         n = len(rows)
-        dlg.setWindowTitle("Результат анализа карточки ЭТП ГПБ" + (f" ({n} процедур)" if n != 1 else ""))
+        dlg.setWindowTitle("Результат анализа карточки секции Газпром" + (f" ({n} процедур)" if n != 1 else ""))
         dlg.resize(min(1100, self.width() + 80), min(520, self.height()))
         layout = QVBoxLayout(dlg)
         hint = QLabel(

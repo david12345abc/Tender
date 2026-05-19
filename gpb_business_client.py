@@ -40,9 +40,9 @@ GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS = {
 
 
 class GpbBusinessClient(EtpClient):
-    """Клиент ГПБ Бизнес.
+    """Клиент секции Бизнес.223.
 
-    Площадка использует тот же ExtJS/RPC-контур, что и ЭТП ГПБ, но другой
+    Площадка использует тот же ExtJS/RPC-контур, что и секция Газпром, но другой
     домен и стартовый маршрут с organizationId.
     """
 

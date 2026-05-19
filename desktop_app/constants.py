@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import sys
 
-APP_TITLE = "ЭТП ГПБ — поиск тендеров"
+APP_TITLE = "Секция Газпром — поиск тендеров"
 
 if getattr(sys, "frozen", False):
     APP_ROOT = Path(sys.executable).resolve().parent

@@ -252,7 +252,7 @@ class ProcedureTableModel(QAbstractTableModel):
                     return with_suffix("Подведение итогов")
                 if lot_status == 5:
                     return with_suffix("Рассмотрение заявок")
-        # На ЭТП ГПБ у некоторых процедур технический step_id остаётся старым.
+        # В секции Газпром у некоторых процедур технический step_id остаётся старым.
         # Фактическую стадию берём из дат блока «Этапы закупочной процедуры».
         if step in {"applic_access", "registration"}:
             results_dt = self._first_date(
