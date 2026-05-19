@@ -151,6 +151,112 @@ const explicitToken = arguments[1] || '';
 })();
 """
 
+# Однократное чтение справочника типов из уже загруженной ExtJS-страницы (combobox + store):
+# id → полное наименование как в фильтре «Тип процедуры».
+_PROCEDURE_TYPES_SCAN_JS = r"""
+const callback = arguments[arguments.length - 1];
+(function(){
+  const out = {};
+  function put(rawId, title) {
+    if (rawId === null || rawId === undefined || rawId === '') return;
+    let n = null;
+    if (typeof rawId === 'number' && Number.isFinite(rawId)) {
+      n = rawId;
+    } else {
+      var s = String(rawId).trim();
+      if (!/^\-?\d+$/.test(s)) return;
+      n = parseInt(s, 10);
+    }
+    if (!Number.isFinite(n) || n <= 0) return;
+    var t = title == null ? '' : String(title).replace(/\s+/g, ' ').trim();
+    if (!t || /^[\.\-]+$/.test(t)) return;
+    var low = t.toLowerCase();
+    if (low.indexOf('не выбран') >= 0 || low === 'нет') return;
+    out[String(n)] = t;
+  }
+  function ingestStore(st) {
+    if (!st || typeof st.each !== 'function') return;
+    try {
+      st.each(function(rec) {
+        var keys = ['procedure_type', 'id', 'ptype', 'purchase_type'];
+        for (var i = 0; i < keys.length; i++) {
+          try {
+            var k = keys[i];
+            var val = rec.get(k);
+            if (val === undefined || val === null) continue;
+            var title = rec.get('procedure_type_long_title')
+              || rec.get('procedure_type_short_title')
+              || rec.get('procedure_type_title')
+              || rec.get('title_full')
+              || rec.get('title')
+              || rec.get('name')
+              || rec.get('text')
+              || rec.get('field2');
+            put(val, title);
+          } catch (e) {}
+        }
+      });
+    } catch (e) {}
+  }
+  function ingestRecord(rec) {
+    if (!rec) return;
+    var get = rec.get ? function(k) { return rec.get(k); } : function(k) { return rec[k]; };
+    var keys = ['procedure_type', 'id', 'ptype', 'purchase_type'];
+    for (var i = 0; i < keys.length; i++) {
+      var val = get(keys[i]);
+      if (val === undefined || val === null) continue;
+      var title = get('procedure_type_long_title')
+        || get('procedure_type_short_title')
+        || get('procedure_type_title')
+        || get('procedure_type_name')
+        || get('title_full')
+        || get('title')
+        || get('name')
+        || get('text')
+        || get('field2');
+      put(val, title);
+    }
+  }
+  try {
+    if (window.Ext) {
+      try {
+        Ext.ComponentQuery.query('combobox').forEach(function(cbo) {
+          ingestStore(cbo.getStore && cbo.getStore());
+        });
+      } catch (e) {}
+      try {
+        Ext.ComponentQuery.query('gridpanel, grid').forEach(function(grid) {
+          var st = grid.getStore && grid.getStore();
+          if (!st || typeof st.each !== 'function') return;
+          try {
+            st.each(function(rec) { ingestRecord(rec); });
+          } catch (e) {}
+        });
+      } catch (e) {}
+      try {
+        Ext.StoreManager.each(function(st) { ingestStore(st); });
+      } catch (e) {}
+    }
+  } catch (e) {}
+  callback(out);
+})();
+"""
+
+PROCEDURE_TYPES_CACHE_PATH = Path("C:/ETP_GPB_procedure_types.json")
+
+_PROCEDURE_TYPE_TITLE_KEYS = (
+    "procedure_type_long_title",
+    "procedure_type_short_title",
+    "procedure_type_name",
+    "procedure_type_title",
+    "type_name",
+    "ptype_name",
+    "purchase_type_name",
+)
+
+_TREND_PUR_FIELD_KEYS = ("trend_pur", "trendPur", "purchase_method", "pur_type")
+_PROCEDURE_TYPE_ID_KEYS = ("procedure_type", "ptype", "purchase_type", "procedureType")
+
 _SINGLE_WINDOW_GUARD_JS = r"""
 (() => {
   if (window.__etpSingleWindowGuardInstalled) return;
@@ -434,6 +540,151 @@ const url = arguments[0];
 """
 
 
+def _load_procedure_type_cache() -> dict[int, str]:
+    path = PROCEDURE_TYPES_CACHE_PATH
+    try:
+        if path.is_file():
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                out: dict[int, str] = {}
+                for key, value in raw.items():
+                    try:
+                        kid = int(str(key).strip())
+                    except (TypeError, ValueError):
+                        continue
+                    text = str(value or "").strip()
+                    if kid > 0 and text:
+                        out[kid] = text
+                return out
+    except Exception:
+        pass
+    return dict(PROCEDURE_TYPE_ID_LABELS)
+
+
+def _save_procedure_type_cache(labels: dict[int, str]) -> None:
+    merged = dict(PROCEDURE_TYPE_ID_LABELS)
+    merged.update(labels)
+    try:
+        PROCEDURE_TYPES_CACHE_PATH.write_text(
+            json.dumps({str(k): v for k, v in sorted(merged.items())}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _coerce_int_id(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, dict):
+        for key in ("id", "procedure_type", "ptype", "code", "value"):
+            nested = _coerce_int_id(value.get(key))
+            if nested is not None:
+                return nested
+        return None
+    if isinstance(value, (int, float)):
+        n = int(value)
+        return n if n > 0 else None
+    text = str(value).strip()
+    if not text or text in {"-", "—", "–"}:
+        return None
+    match = re.fullmatch(r"(-?\d+)(?:\.0+)?", text)
+    if match:
+        n = int(match.group(1))
+        return n if n > 0 else None
+    return None
+
+
+def _coerce_type_title(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in _PROCEDURE_TYPE_TITLE_KEYS + ("title", "name", "text", "label"):
+            title = _coerce_type_title(value.get(key))
+            if title:
+                return title
+        return ""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.isdigit():
+        return ""
+    return text
+
+
+def _pick_actual_lot(proc: dict[str, Any]) -> Optional[dict[str, Any]]:
+    lots = proc.get("lots")
+    if not isinstance(lots, list):
+        return None
+    for lot in lots:
+        if isinstance(lot, dict) and lot.get("actual"):
+            return lot
+    for lot in lots:
+        if isinstance(lot, dict):
+            return lot
+    return None
+
+
+def normalize_procedure_record(
+    proc: dict[str, Any],
+    label_cache: Optional[dict[int, str]] = None,
+) -> dict[str, Any]:
+    """Дополняет запись полями типа так, как их собирает ExtJS-таблица на сайте."""
+    out = dict(proc)
+    cache = label_cache or {}
+
+    for key in _PROCEDURE_TYPE_TITLE_KEYS:
+        title = _coerce_type_title(out.get(key))
+        if title:
+            out.setdefault("procedure_type_name", title)
+            break
+
+    pt_raw = out.get("procedure_type")
+    if isinstance(pt_raw, dict):
+        title = _coerce_type_title(pt_raw)
+        if title:
+            out["procedure_type_name"] = title
+        pid = _coerce_int_id(pt_raw)
+        if pid is not None:
+            out["procedure_type"] = pid
+
+    lot = _pick_actual_lot(out)
+    if isinstance(lot, dict):
+        if not out.get("procedure_type_name"):
+            for key in _PROCEDURE_TYPE_TITLE_KEYS:
+                title = _coerce_type_title(lot.get(key))
+                if title:
+                    out["procedure_type_name"] = title
+                    break
+        if _coerce_int_id(out.get("procedure_type")) is None:
+            for key in _PROCEDURE_TYPE_ID_KEYS:
+                lid = _coerce_int_id(lot.get(key))
+                if lid is not None:
+                    out["procedure_type"] = lid
+                    break
+        if out.get("trend_pur") in (None, ""):
+            for key in _TREND_PUR_FIELD_KEYS:
+                tv = lot.get(key)
+                if tv not in (None, ""):
+                    out["trend_pur"] = tv
+                    break
+
+    if out.get("trend_pur") in (None, ""):
+        for key in _TREND_PUR_FIELD_KEYS:
+            tv = out.get(key)
+            if tv not in (None, ""):
+                out["trend_pur"] = tv
+                break
+
+    pid = _coerce_int_id(out.get("procedure_type"))
+    if pid and not out.get("procedure_type_name"):
+        cached = cache.get(pid)
+        if cached:
+            out["procedure_type_name"] = cached
+
+    return out
+
+
 class EtpClient:
     """Thin wrapper над Selenium-сессией, привязанной к Chrome DevTools.
 
@@ -454,6 +705,8 @@ class EtpClient:
         self._token: str = ""
         self.target_url = ETP_URL
         self.target_host = "etpgaz.gazprombank.ru"
+        self._runtime_procedure_labels: dict[int, str] = _load_procedure_type_cache()
+        self._ptype_scan_attempts = 0
         self.browser = BrowserLaunchConfig(
             key="chrome",
             label="Google Chrome",
@@ -675,6 +928,7 @@ class EtpClient:
         self.driver.set_script_timeout(30)
         self._install_single_window_guard()
         self._switch_to_etp_tab()
+        self._maybe_refresh_procedure_types_from_ui()
 
     def _switch_to_etp_tab(self) -> bool:
         """Ищет живую вкладку с etpgaz и переключается на неё.
@@ -992,6 +1246,39 @@ class EtpClient:
         except Exception:
             return None
 
+    def _maybe_refresh_procedure_types_from_ui(self) -> None:
+        """Подтягивает id→название из ExtJS после загрузки UI (совпадает с сайтом)."""
+        if self.driver is None:
+            return
+        host_cf = str(getattr(self, "target_host", "") or "").casefold()
+        if "roseltorg" in host_cf:
+            return
+        if self._ptype_scan_attempts >= 12:
+            return
+        self._ptype_scan_attempts += 1
+        try:
+            raw = self.driver.execute_async_script(_PROCEDURE_TYPES_SCAN_JS)
+        except Exception:
+            return
+        if not isinstance(raw, dict) or not raw:
+            return
+        changed = False
+        for ks, vv in raw.items():
+            try:
+                ki = int(str(ks).strip())
+            except (TypeError, ValueError):
+                continue
+            if ki <= 0:
+                continue
+            text = str(vv).replace("\r", " ").replace("\n", " ").strip()
+            if len(text) < 2:
+                continue
+            if self._runtime_procedure_labels.get(ki) != text:
+                self._runtime_procedure_labels[ki] = text
+                changed = True
+        if changed:
+            _save_procedure_type_cache(self._runtime_procedure_labels)
+
     def is_session_alive(self) -> bool:
         """Быстрая проверка: Procedure.list отдаёт данные без ошибки доступа."""
         if not self.driver:
@@ -1022,6 +1309,7 @@ class EtpClient:
         assert self.driver is not None, "Сначала вызовите connect()"
         if not self._token:
             self.pull_token()
+        self._maybe_refresh_procedure_types_from_ui()
 
         payload: dict[str, Any] = {
             "sort": sort,
@@ -1229,6 +1517,16 @@ class EtpClient:
                     client_filters=client_filters,
                     _recover_attempt=_recover_attempt + 1,
                 )
+        procs = res.get("procedures")
+        if isinstance(procs, list):
+            merged_labels = dict(self._runtime_procedure_labels)
+            res["procedures"] = [
+                normalize_procedure_record(p, merged_labels)
+                if isinstance(p, dict)
+                else p
+                for p in procs
+            ]
+
         raw_res = dict(res)
         res["_debug"] = {
             **request_debug,
@@ -1238,6 +1536,8 @@ class EtpClient:
 
     def close(self) -> None:
         """Отсоединяется от Chrome, НЕ закрывая сам браузер."""
+        self._runtime_procedure_labels.clear()
+        self._ptype_scan_attempts = 0
         if self.driver is not None:
             try:
                 self.driver.command_executor.close()
@@ -1247,6 +1547,8 @@ class EtpClient:
 
 
 PROCEDURE_TYPE_ID_LABELS = {
+    # По подтверждённому кейсу пользователя (+ СМСП → « … в электронной форме для СМСП» в models).
+    29: "Аукцион на понижение",
     31: "Маркетинговые исследования",
     32: "Конкурентный отбор",
 }
@@ -1258,13 +1560,17 @@ PROCEDURE_TYPE_OPTIONS = [
 
 PROCEDURE_TYPE_LABELS = [label for label, _ in PROCEDURE_TYPE_OPTIONS]
 
+# Коды trend_pur (способ закупки) в ответах Procedure.list; синхронизировано со
+# справочником в parse_procedures.TREND_PUR_NAMES.
 TREND_PUR_LABELS = {
-    "001": "Конкурентный отбор",
-    "002": "Конкурентный отбор",
+    "001": "Открытый конкурс",
+    "002": "Открытый аукцион / редукцион",
     "003": "Запрос предложений",
-    "004": "Запрос цен",
-    "005": "Запрос цен",
-    "006": "Маркетинговые исследования",
+    "004": "Запрос котировок",
+    "005": "Закупка у единственного поставщика",
+    "006": "Конкурс с ограниченным участием",
+    "007": "Двухэтапный конкурс",
+    "008": "Предквалификационный отбор",
 }
 
 STATUS_LABELS = [
@@ -1299,20 +1605,90 @@ STEP_ID_LABELS = {
 }
 
 
+def _normalize_trend_pur_code(code: Any) -> str:
+    """Приводит trend_p к виду «001», «004» для поиска в TREND_PUR_LABELS."""
+    if code is None:
+        return ""
+    if isinstance(code, bool):
+        return ""
+    if isinstance(code, dict):
+        for key in ("code", "id", "trend_pur", "trendPur", "value"):
+            nested = _normalize_trend_pur_code(code.get(key))
+            if nested:
+                return nested
+        return ""
+    if isinstance(code, (int, float)):
+        try:
+            return f"{int(code):03d}"
+        except (TypeError, ValueError):
+            return ""
+    s_raw = str(code).strip()
+    if not s_raw:
+        return ""
+    match_float = re.fullmatch(r"(-?\d+)(?:\.0+)?", s_raw)
+    if match_float:
+        try:
+            return f"{int(match_float.group(1)):03d}"
+        except (TypeError, ValueError):
+            return s_raw
+    if s_raw.isdigit():
+        try:
+            return f"{int(s_raw):03d}"
+        except (TypeError, ValueError):
+            return s_raw
+    low = s_raw.casefold().lstrip("0")
+    if low.isdigit():
+        try:
+            return f"{int(low):03d}"
+        except (TypeError, ValueError):
+            return s_raw
+    return s_raw
+
+
 def trend_pur_label(code: Any) -> str:
-    if not code:
+    if code in ("", None):
         return "—"
-    return TREND_PUR_LABELS.get(str(code), str(code))
+    key = _normalize_trend_pur_code(code)
+    if not key:
+        return "—"
+    mapped = TREND_PUR_LABELS.get(key)
+    if mapped:
+        return mapped
+    fallback = str(code).strip()
+    return fallback if fallback else "—"
 
 
-def procedure_type_label(code: Any) -> str:
+def procedure_type_label(code: Any, extra_labels: Optional[dict[int, str]] = None) -> str:
+    """Человекочитаемый тип процедуры по полю procedure_type.
+
+    Живой справочник с вкладки (ExtJS combo/store) пробрасывается через ``extra_labels``."""
     if code in (None, ""):
         return "—"
+    if isinstance(code, dict):
+        title = _coerce_type_title(code)
+        if title:
+            return title
+        code = _coerce_int_id(code)
+        if code is None:
+            return "—"
+    numeric = _coerce_int_id(code)
+    if numeric is None:
+        text = str(code).strip()
+        return text if text and not text.isdigit() else "—"
     try:
-        numeric = int(str(code))
+        numeric = int(numeric)
     except (TypeError, ValueError):
-        return str(code)
-    return PROCEDURE_TYPE_ID_LABELS.get(numeric, str(code))
+        return "—"
+    if numeric == 0:
+        return "—"
+    if numeric in PROCEDURE_TYPE_ID_LABELS:
+        return PROCEDURE_TYPE_ID_LABELS[numeric]
+    if extra_labels:
+        scanned = extra_labels.get(numeric)
+        if scanned:
+            return scanned
+    # Не смешиваем числовой procedure_type с кодами trend_pur «001»…«008» — это разные шкалы.
+    return "—"
 
 
 def step_id_label(step: Any) -> str:

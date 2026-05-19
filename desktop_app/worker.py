@@ -434,6 +434,7 @@ def make_search_task(
                         if row is not None:
                             accepted.append(row)
                 deduped: list[dict] = []
+                rlabels = getattr(client, "_runtime_procedure_labels", None)
                 for row in accepted:
                     key = str(
                         row.get("id")
@@ -445,7 +446,10 @@ def make_search_task(
                     if key in seen_keys:
                         continue
                     seen_keys.add(key)
-                    deduped.append(row)
+                    out = dict(row)
+                    if isinstance(rlabels, dict) and rlabels:
+                        out["_ptype_runtime_labels"] = rlabels
+                    deduped.append(out)
                 next_start = cur_start + len(procs)
                 aggregate_processed += len(procs)
                 last_next_start = aggregate_processed

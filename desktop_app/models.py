@@ -35,6 +35,55 @@ for _label in STATUS_LABELS:
         SERVER_STATUS_LABEL_BY_VALUE[_value] = _label
 
 
+def _smsp_procedure(proc: dict[str, Any]) -> bool:
+    for key in ("registry_number", "procedure_number", "procedure_number2", "title", "name"):
+        if "смсп" in str(proc.get(key) or "").casefold():
+            return True
+    tags = proc.get("tags") or []
+    for item in tags:
+        if "смсп" in str(item).casefold():
+            return True
+    for flag_key in (
+        "is_for_smsp",
+        "for_smsp",
+        "smsp",
+        "is_smsp",
+        "smp_procedure",
+        "for_sme",
+        "smsp_procedure",
+    ):
+        if proc.get(flag_key):
+            return True
+    return False
+
+
+def _with_smsp_type_qualifier(proc: dict[str, Any], label: str) -> str:
+    """Как на сайте: для закупок СМСП добавляют «в электронной форме для СМСП» после базового типа."""
+    if not label or label == "—":
+        return label
+    stripped = label.strip()
+    # Только голый числовой id без расшифровки — суффикс СМСП не добавляем.
+    if re.fullmatch(r"-?\d+", stripped):
+        return label
+    low = stripped.casefold()
+    if "электронной форме" in low and "смсп" in low:
+        return label
+    if not _smsp_procedure(proc):
+        return label
+    return f"{label} в электронной форме для СМСП"
+
+
+def _applics_sort_int(value: Any) -> int:
+    text = str(value or "").strip()
+    if not text or text in {"-", "—", "–"}:
+        return 0
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        parsed = parse_price(text)
+        return int(parsed) if parsed is not None else 0
+
+
 def _server_status_label(proc: dict[str, Any]) -> Optional[str]:
     for key in ("status", "status_id"):
         value = proc.get(key)
@@ -281,21 +330,34 @@ class ProcedureTableModel(QAbstractTableModel):
 
     def _display(self, proc: dict[str, Any], key: str) -> Any:
         if key == "trend_pur_label":
-            procedure_type = proc.get("procedure_type")
-            if procedure_type not in (None, ""):
-                label = procedure_type_label(procedure_type)
-                if label != str(procedure_type):
-                    return label
             for type_key in (
+                "procedure_type_long_title",
+                "procedure_type_short_title",
                 "trend_pur_name",
-                "trend_pur_label",
                 "procedure_type_name",
                 "type_name",
-                "procedure_type",
             ):
-                if proc.get(type_key) and not str(proc[type_key]).isdigit():
-                    return str(proc[type_key])
-            return trend_pur_label(proc.get("trend_pur"))
+                raw = proc.get(type_key)
+                if raw:
+                    text = str(raw).strip()
+                    if text and not text.isdigit():
+                        low = text.casefold()
+                        if "электронной форме" in low and "смсп" in low:
+                            return text
+                        return _with_smsp_type_qualifier(proc, text)
+            tp_raw = proc.get("trend_pur")
+            if tp_raw not in (None, ""):
+                tlab = trend_pur_label(tp_raw)
+                if tlab != "—":
+                    return _with_smsp_type_qualifier(proc, tlab)
+            pt = proc.get("procedure_type")
+            if pt not in (None, "", 0):
+                extra_pt = proc.get("_ptype_runtime_labels")
+                pmap = extra_pt if isinstance(extra_pt, dict) else None
+                plab = procedure_type_label(pt, extra_labels=pmap)
+                if plab != "—":
+                    return _with_smsp_type_qualifier(proc, plab)
+            return "—"
         if key == "step_label":
             return self._status_label(proc)
         if key == "organizer":
@@ -336,7 +398,7 @@ class ProcedureTableModel(QAbstractTableModel):
         if key == "total_price":
             return parse_price(proc.get("total_price")) or 0.0
         if key == "applics_count":
-            return int(proc.get("applics_count") or 0)
+            return _applics_sort_int(proc.get("applics_count"))
         if key == "date_start_registration":
             return self._first_date(
                 proc,
@@ -352,7 +414,7 @@ class ProcedureTableModel(QAbstractTableModel):
         if key == "date_end_registration":
             return parse_dt(proc.get("date_end_registration")) or datetime.min
         if key == "trend_pur_label":
-            return str(proc.get("trend_pur") or "")
+            return str(self._display(proc, key)).casefold()
         if key == "step_label":
             return str(proc.get("step_id") or "")
         if key == "organizer":
