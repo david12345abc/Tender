@@ -11,6 +11,10 @@ from typing import Any, Callable, Optional
 from desktop_app.commercial_extractor import CommercialTerms, extract_commercial_terms
 from desktop_app.params import ClientFilters
 from desktop_app.supplier_classifier import SupplierCharacteristic, classify_supplier_characteristic
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
 from etp_client import HARD_SERVER_LIMIT, EtpClient
 
 
@@ -432,6 +436,16 @@ class TektorgRnClient(EtpClient):
                     progress("Видимая вкладка «Техническая часть предложения» не найдена, пропускаю технический этап.")
                 record_timing("Техническая часть предложения отсутствует, этап пропущен", step_started)
 
+        if progress:
+            progress("Заполняю контактный телефон участника...")
+        step_started = time.perf_counter()
+        try:
+            self._fill_application_contact_phone()
+            record_timing("Заполнение контактного телефона", step_started)
+        except Exception as e:
+            record_timing("Заполнение контактного телефона", step_started, ok=False)
+            errors.append(f"Контактный телефон: {e}")
+
         if has_technical_tab:
             step_started = time.perf_counter()
             self._clear_uploaded_files(progress=progress)
@@ -803,6 +817,401 @@ class TektorgRnClient(EtpClient):
                 pass
             time.sleep(0.3)
         raise RuntimeError("Страница подачи заявки не открылась в браузере.")
+
+    def _fill_application_contact_phone(self) -> None:
+        assert self.driver is not None
+        script = r"""
+const callback = arguments[arguments.length - 1];
+const values = {
+  country: String(arguments[0] || ""),
+  operator: String(arguments[1] || ""),
+  number: String(arguments[2] || ""),
+};
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const norm = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const digits = (value) => norm(value).replace(/\D/g, "");
+  const visible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    const rect = el.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  };
+  const isTextInput = (input) => {
+    if (!input || input.disabled || input.readOnly) return false;
+    const type = String(input.type || "text").toLowerCase();
+    return type === "text" || type === "tel" || type === "number" || type === "";
+  };
+  const eachCmp = (fn) => {
+    if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+    const all = Ext.ComponentMgr.all;
+    if (typeof all.each === "function") {
+      all.each(fn);
+      return;
+    }
+    const items = all.items || all.getRange && all.getRange() || all.map && Object.values(all.map) || Object.values(all);
+    for (const cmp of items) {
+      if (cmp && typeof cmp === "object") fn(cmp);
+    }
+  };
+  const inApplicationPage = (cmp) => {
+    const el = cmp && cmp.el && cmp.el.dom;
+    if (!el) return true;
+    const win = el.closest && el.closest(".x-window");
+    if (!win) return true;
+    return !/Письмо\s+о\s+подаче\s+заявки/i.test(String(win.innerText || win.textContent || ""));
+  };
+  const setInput = (input, value, options) => {
+    if (!input) return false;
+    const opts = options || {};
+    let expected = String(value || "");
+    if (opts.maxLen && digits(expected).length > opts.maxLen) {
+      expected = digits(expected).slice(0, opts.maxLen);
+    }
+    let matchedCmp = null;
+    eachCmp((cmp) => {
+      if (cmp.hidden || cmp.disabled || !inApplicationPage(cmp)) return;
+      const inputEl = cmp.inputEl && cmp.inputEl.dom;
+      const dom = cmp.el && cmp.el.dom;
+      if ((inputEl && inputEl === input) || (dom && dom.contains(input))) {
+        matchedCmp = cmp;
+      }
+    });
+    const applyExtThenDom = () => {
+      const applyDom = () => {
+        input.focus();
+        input.value = expected;
+        input.setAttribute("value", expected);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("blur", { bubbles: true }));
+      };
+      if (matchedCmp) {
+        if (matchedCmp.setValue) matchedCmp.setValue("");
+        if (matchedCmp.setRawValue) matchedCmp.setRawValue("");
+      }
+      if (matchedCmp) {
+        if (matchedCmp.setValue) matchedCmp.setValue(expected);
+        if (matchedCmp.setRawValue) matchedCmp.setRawValue(expected);
+        if (matchedCmp.validate) matchedCmp.validate();
+        if (matchedCmp.clearInvalid) matchedCmp.clearInvalid();
+        if (matchedCmp.fireEvent) {
+          matchedCmp.fireEvent("change", matchedCmp, expected);
+          matchedCmp.fireEvent("blur", matchedCmp);
+        }
+      }
+      applyDom();
+      if (matchedCmp && matchedCmp.fireEvent) matchedCmp.fireEvent("blur", matchedCmp);
+    };
+    applyExtThenDom();
+    return digits(input.value) === digits(expected);
+  };
+  const clearInput = (input) => {
+    setInput(input, "", {});
+  };
+  const inputsFilled = (inputs) => {
+    if (!inputs || inputs.length < 3) return false;
+    return (
+      digits(inputs[0].value) === digits(values.country)
+      && digits(inputs[1].value) === digits(values.operator)
+      && digits(inputs[2].value) === digits(values.number)
+    );
+  };
+  const sortByLeft = (inputs) => inputs
+    .filter((input) => visible(input) && isTextInput(input))
+    .map((input) => ({ input, left: input.getBoundingClientRect().left }))
+    .sort((a, b) => a.left - b.left)
+    .map((item) => item.input);
+  const sameRowInputs = (labelNode) => {
+    if (!labelNode || !visible(labelNode)) return [];
+    const labelRect = labelNode.getBoundingClientRect();
+    const labelMid = labelRect.top + labelRect.height / 2;
+    return sortByLeft(Array.from(document.querySelectorAll("input")))
+      .filter((input) => {
+        const rect = input.getBoundingClientRect();
+        const mid = rect.top + rect.height / 2;
+        return Math.abs(mid - labelMid) <= 28 && rect.left >= labelRect.right - 15;
+      });
+  };
+  const groupedInputTriplets = () => {
+    const inputs = sortByLeft(Array.from(document.querySelectorAll("input")))
+      .map((input) => {
+        const rect = input.getBoundingClientRect();
+        return {
+          input,
+          rect,
+          mid: rect.top + rect.height / 2,
+          digits: digits(input.value),
+        };
+      });
+    const rows = [];
+    for (const item of inputs) {
+      let row = rows.find((items) => Math.abs(items[0].mid - item.mid) <= 8);
+      if (!row) {
+        row = [];
+        rows.push(row);
+      }
+      row.push(item);
+    }
+    const triplets = [];
+    for (const row of rows) {
+      row.sort((a, b) => a.rect.left - b.rect.left);
+      for (let index = 0; index <= row.length - 3; index++) {
+        const trio = row.slice(index, index + 3);
+        const widths = trio.map((item) => item.rect.width);
+        const gaps = [
+          trio[1].rect.left - trio[0].rect.right,
+          trio[2].rect.left - trio[1].rect.right,
+        ];
+        const phoneShape = widths[0] <= 55 && widths[1] <= 80 && widths[2] >= 75;
+        const closeTogether = gaps.every((gap) => gap >= -5 && gap <= 45);
+        if (phoneShape && closeTogether) triplets.push(trio.map((item) => item.input));
+      }
+    }
+    return triplets;
+  };
+  const findByLabel = () => {
+    const nodes = Array.from(document.querySelectorAll("label, td, div, span, .x-form-item-label"));
+    const labelNode = nodes.find((el) => visible(el) && /контактн\w*\s+телефон/i.test(norm(el.innerText || el.textContent || "")));
+    if (!labelNode) return null;
+    const rowInputs = sameRowInputs(labelNode);
+    if (rowInputs.length >= 3) return rowInputs.slice(0, 3);
+    const containers = [
+      labelNode.closest("tr"),
+      labelNode.closest(".x-form-item"),
+      labelNode.parentElement,
+      labelNode.parentElement && labelNode.parentElement.parentElement,
+      labelNode.parentElement && labelNode.parentElement.parentElement && labelNode.parentElement.parentElement.parentElement,
+    ].filter(Boolean);
+    for (const container of containers) {
+      const inputs = sortByLeft(Array.from(container.querySelectorAll("input"))).filter((input) => {
+        const labelRect = labelNode.getBoundingClientRect();
+        const rect = input.getBoundingClientRect();
+        return Math.abs((rect.top + rect.height / 2) - (labelRect.top + labelRect.height / 2)) <= 36;
+      });
+      if (inputs.length >= 3) return inputs.slice(0, 3);
+    }
+    return null;
+  };
+  const findByExtNames = () => {
+    const patterns = [
+      [/phone.*country|country.*phone|tel.*country|country.*tel|phone_cc|cc_phone/i, values.country],
+      [/phone.*(city|area|operator|code)|city.*phone|area.*phone|operator.*phone|tel.*(city|area|code)/i, values.operator],
+      [/phone.*(number|rest|local|subscriber)|number.*phone|tel.*number|local.*phone/i, values.number],
+    ];
+    const buckets = [[], [], []];
+    eachCmp((cmp) => {
+      if (cmp.hidden || cmp.disabled || !inApplicationPage(cmp)) return;
+      const inputEl = cmp.inputEl && cmp.inputEl.dom;
+      if (!inputEl || !visible(inputEl) || !isTextInput(inputEl)) return;
+      const label = norm([
+        cmp.fieldLabel,
+        cmp.boxLabel,
+        cmp.name,
+        cmp.id,
+      ].filter(Boolean).join(" "));
+      const name = String(cmp.name || cmp.id || "");
+      for (let index = 0; index < patterns.length; index++) {
+        const [pattern] = patterns[index];
+        if (pattern.test(name) || pattern.test(label)) buckets[index].push(inputEl);
+      }
+    });
+    if (buckets[0].length && buckets[1].length && buckets[2].length) {
+      return [buckets[0][0], buckets[1][0], buckets[2][0]];
+    }
+    const byName = {};
+    eachCmp((cmp) => {
+      if (cmp.hidden || cmp.disabled || !inApplicationPage(cmp)) return;
+      const inputEl = cmp.inputEl && cmp.inputEl.dom;
+      if (!inputEl || !visible(inputEl) || !isTextInput(inputEl)) return;
+      const name = String(cmp.name || cmp.id || "");
+      if (name) byName[name] = inputEl;
+    });
+    const orderedNames = [
+      ["phone_country", "phone_country_code", "country_phone", "tel_country", "phone_cc", "contact_phone_country"],
+      ["phone_code", "phone_city", "phone_area", "phone_operator", "tel_code", "city_phone", "phone_city_code", "contact_phone_code"],
+      ["phone_number", "phone_local", "phone_rest", "phone_subscriber", "tel_number", "local_phone", "phone_num", "contact_phone_number"],
+    ];
+    const tektorgNames = ["phone[cntr_code]", "phone[city_code]", "phone[number]"];
+    const tektorgResolved = tektorgNames.map((name) => byName[name] || null);
+    if (tektorgResolved.every(Boolean)) return tektorgResolved;
+    const resolved = orderedNames.map((names) => {
+      for (const key of names) {
+        if (byName[key]) return byName[key];
+      }
+      return null;
+    });
+    return resolved.every(Boolean) ? resolved : null;
+  };
+  const findByShape = () => {
+    const triplets = groupedInputTriplets();
+    if (!triplets.length) return null;
+    const scored = triplets.map((inputs) => {
+      const rect = inputs[0].getBoundingClientRect();
+      let score = 0;
+      if (digits(inputs[0].value) === values.country) score -= 20;
+      if (digits(inputs[1].value) === values.operator) score -= 20;
+      if (digits(inputs[2].value) === values.number) score -= 20;
+      score += rect.top;
+      return { inputs, score };
+    }).sort((a, b) => a.score - b.score);
+    return scored[0].inputs;
+  };
+  const pickInputByFormName = (name) =>
+    Array.from(document.querySelectorAll("input:not([type=hidden])")).find((el) => el.name === name) || null;
+  const findByTektorgDom = () => {
+    const names = ["phone[cntr_code]", "phone[city_code]", "phone[number]"];
+    const inputs = names.map(pickInputByFormName).filter(Boolean);
+    if (inputs.length !== 3) return null;
+    if (!inputs.every((el) => !el.disabled && isTextInput(el))) return null;
+    if (!inputs.every(visible)) return null;
+    return inputs;
+  };
+  const verifyTektorgDom = () => {
+    const row = findByTektorgDom();
+    if (!row) return false;
+    return (
+      digits(row[0].value) === digits(values.country)
+      && digits(row[1].value) === digits(values.operator)
+      && digits(row[2].value) === digits(values.number)
+    );
+  };
+  const tektorgFieldsPresent = () => {
+    const a = pickInputByFormName("phone[cntr_code]");
+    const b = pickInputByFormName("phone[city_code]");
+    const c = pickInputByFormName("phone[number]");
+    return !!(a && b && c && !a.disabled && !b.disabled && !c.disabled);
+  };
+  const resolvePhoneTargets = () => (
+    findByTektorgDom()
+    || findByExtNames()
+    || findByLabel()
+    || findByShape()
+  );
+  const fillPhone = () => {
+    if (verifyTektorgDom()) return true;
+    let inputs = resolvePhoneTargets();
+    if (!inputs || inputs.length < 3) return false;
+    if (inputsFilled(inputs)) return true;
+    clearInput(inputs[0]);
+    clearInput(inputs[1]);
+    clearInput(inputs[2]);
+    const ok = (
+      setInput(inputs[0], values.country, { maxLen: 5 })
+      && setInput(inputs[1], values.operator, {})
+      && setInput(inputs[2], values.number, {})
+    );
+    if (verifyTektorgDom()) return true;
+    if (tektorgFieldsPresent()) return false;
+    return ok && inputsFilled(inputs);
+  };
+  for (let i = 0; i < 120; i++) {
+    if (fillPhone()) {
+      callback(true);
+      return;
+    }
+    await wait(250);
+  }
+  callback(false);
+})();
+"""
+        ok = self.driver.execute_async_script(script, "7", "863", "2037780")
+        if ok:
+            return
+        self._fill_application_contact_phone_via_selenium()
+
+    def _fill_application_contact_phone_via_selenium(self) -> None:
+        """Резерв: ждём появление полей `phone[*]` и выставляем значения синхронным скриптом (+ события)."""
+        assert self.driver is not None
+        driver = self.driver
+        wait = WebDriverWait(driver, 22)
+        for pname in ("phone[cntr_code]", "phone[city_code]", "phone[number]"):
+            wait.until(EC.presence_of_element_located((By.NAME, pname)))
+
+        filled = driver.execute_script(
+            r"""
+const country = String(arguments[0] || '');
+const city = String(arguments[1] || '');
+const num = String(arguments[2] || '');
+const digits = (s) => String(s || '').replace(/\D/g, '');
+const visible = (el) => {
+  if (!el) return false;
+  const style = window.getComputedStyle(el);
+  const rect = el.getBoundingClientRect();
+  return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+};
+const eachCmp = (fn) => {
+  if (!window.Ext || !Ext.ComponentMgr || !Ext.ComponentMgr.all) return;
+  const all = Ext.ComponentMgr.all;
+  if (typeof all.each === "function") {
+    all.each(fn);
+    return;
+  }
+  const items = all.items || (all.getRange && all.getRange()) || (all.map && Object.values(all.map)) || Object.values(all);
+  for (const cmp of items) if (cmp && typeof cmp === "object") fn(cmp);
+};
+const pickInputByFormNameSync = (name) =>
+  Array.from(document.querySelectorAll("input:not([type=hidden])")).find((el) => el.name === name) || null;
+const inApplicationPage = (cmp) => {
+  const el = cmp && cmp.el && cmp.el.dom;
+  if (!el) return true;
+  const win = el.closest && el.closest(".x-window");
+  if (!win) return true;
+  return !/Письмо\s+о\s+подаче\s+заявки/i.test(String(win.innerText || win.textContent || ""));
+};
+const attachExt = (input) => {
+  let cmpMatch = null;
+  eachCmp((cmp) => {
+    if (!cmp.hidden && !cmp.disabled && inApplicationPage(cmp)) {
+      const inputEl = cmp.inputEl && cmp.inputEl.dom;
+      const dom = cmp.el && cmp.el.dom;
+      if ((inputEl && inputEl === input) || (dom && dom.contains(input))) cmpMatch = cmp;
+    }
+  });
+  return cmpMatch;
+};
+const setOne = (name, value, maxLenDigits) => {
+  const expected = maxLenDigits ? digits(value).slice(0, maxLenDigits) : String(value);
+  const input = pickInputByFormNameSync(name);
+  if (!input || input.disabled || !visible(input)) return false;
+  const cmp = attachExt(input);
+  if (cmp) {
+    if (cmp.setValue) cmp.setValue("");
+    if (cmp.setRawValue) cmp.setRawValue("");
+    if (cmp.setValue) cmp.setValue(expected);
+    if (cmp.setRawValue) cmp.setRawValue(expected);
+    if (cmp.validate) cmp.validate();
+    if (cmp.clearInvalid) cmp.clearInvalid();
+    if (cmp.fireEvent) {
+      cmp.fireEvent("change", cmp, expected);
+      cmp.fireEvent("blur", cmp);
+    }
+  }
+  input.focus();
+  input.value = expected;
+  input.setAttribute("value", expected);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.dispatchEvent(new Event("blur", { bubbles: true }));
+  return digits(input.value) === digits(expected);
+};
+const a = setOne("phone[cntr_code]", country, 5);
+const b = setOne("phone[city_code]", city, undefined);
+const c = setOne("phone[number]", num, undefined);
+const aa = pickInputByFormNameSync("phone[cntr_code]");
+const bb = pickInputByFormNameSync("phone[city_code]");
+const cc = pickInputByFormNameSync("phone[number]");
+return !!(a && b && c && aa && bb && cc
+  && digits(aa.value) === digits(country)
+  && digits(bb.value) === digits(city)
+  && digits(cc.value) === digits(num));
+""",
+            "7",
+            "863",
+            "2037780",
+        )
+        if not filled:
+            raise RuntimeError("Не удалось заполнить контактный телефон на странице заявки.")
 
     def _application_offer_tabs_state(self) -> dict[str, Any]:
         assert self.driver is not None
