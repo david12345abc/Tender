@@ -559,6 +559,60 @@ class EtpClient:
         except Exception:
             return False
 
+    def _devtools_port_pids(self) -> set[int]:
+        if os.name != "nt":
+            return set()
+        try:
+            result = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            return set()
+        pids: set[int] = set()
+        port_suffix = f":{self.port}"
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local_addr = parts[1]
+            state = parts[3].upper()
+            pid_text = parts[-1]
+            if state != "LISTENING" or not local_addr.endswith(port_suffix):
+                continue
+            try:
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid > 0:
+                pids.add(pid)
+        return pids
+
+    def _release_devtools_port(self, timeout: int = 8) -> bool:
+        pids = self._devtools_port_pids()
+        for pid in pids:
+            try:
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                pass
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self.is_chrome_running():
+                return True
+            time.sleep(0.5)
+        return not self.is_chrome_running()
+
     def _ensure_devtools_page(self, timeout: int = 8) -> None:
         deadline = time.time() + timeout
         opened = False
@@ -624,7 +678,9 @@ class EtpClient:
     def ensure_chrome(self, timeout: int = 40) -> None:
         """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
-            return
+            if self._has_devtools_page() or self._open_devtools_page(self.target_url):
+                return
+            self._release_devtools_port()
         browser = self.browser
         if not browser.exe_path.exists():
             raise FileNotFoundError(f"Не найден браузер: {browser.exe_path}")
@@ -678,6 +734,15 @@ class EtpClient:
             "Закройте все окна этого браузера и попробуйте снова либо выберите другой браузер."
         )
 
+    def _restart_chrome_after_stale_devtools(self) -> bool:
+        self.close()
+        self._release_devtools_port()
+        try:
+            self.ensure_chrome(timeout=45)
+            return True
+        except Exception:
+            return False
+
     def connect(self) -> None:
         """Подключается к уже запущенному Chrome c DevTools."""
         if self.driver is not None:
@@ -686,7 +751,13 @@ class EtpClient:
             raise RuntimeError(
                 f"{self.browser.label} с DevTools на порту {self.port} не запущен."
             )
-        self._ensure_devtools_page()
+        try:
+            self._ensure_devtools_page()
+        except RuntimeError as e:
+            if "не отдаёт открытые вкладки" in str(e) and self._restart_chrome_after_stale_devtools():
+                self._ensure_devtools_page()
+            else:
+                raise
         if self.browser.key == "edge":
             edge_opts = EdgeOptions()
             edge_opts.add_experimental_option("debuggerAddress", f"127.0.0.1:{self.port}")
@@ -702,7 +773,15 @@ class EtpClient:
                 else:
                     self.driver = ChromeWebDriver(options=opts)
             except SessionNotCreatedException as e:
-                raise RuntimeError(self._driver_version_hint(e)) from e
+                if "unable to discover open pages" in str(e) and self._restart_chrome_after_stale_devtools():
+                    self._ensure_devtools_page()
+                    service = self._matching_chromedriver_service()
+                    if service is not None:
+                        self.driver = ChromeWebDriver(service=service, options=opts)
+                    else:
+                        self.driver = ChromeWebDriver(options=opts)
+                else:
+                    raise RuntimeError(self._driver_version_hint(e)) from e
         self.driver.set_script_timeout(30)
         self._install_single_window_guard()
         self._switch_to_etp_tab()

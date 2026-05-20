@@ -55,7 +55,7 @@ class GpbBusinessClient(EtpClient):
         return (
             "https://etp.gpb.ru/"
             f"?organizationId={GPB_BUSINESS_ORGANIZATION_ID}"
-            f"#com/procedure/view/procedure/{proc_id}"
+            f"#com/procedure/view/procedure/{proc_id}/223"
         )
 
     def fetch_page(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -66,6 +66,9 @@ class GpbBusinessClient(EtpClient):
                 if not isinstance(proc, dict):
                     continue
                 proc["source"] = "gpb_business"
+                proc_id = proc.get("id") or proc.get("procedure_id")
+                if proc_id:
+                    proc["url"] = self._detail_url(proc_id)
                 try:
                     type_id = int(str(proc.get("procedure_type") or "").strip())
                 except (TypeError, ValueError):
