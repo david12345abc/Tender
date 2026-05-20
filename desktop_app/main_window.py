@@ -4,7 +4,6 @@ import json
 import re
 import shutil
 import traceback
-import webbrowser
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -1832,7 +1831,7 @@ class MainWindow(QMainWindow):
         )
         copy_cell_action.setEnabled(bool(cell_value))
         menu.addSeparator()
-        menu.addAction("Открыть в Chrome", lambda: self._open_in_browser(proc))
+        menu.addAction("Открыть в текущем браузере", lambda: self._open_in_browser(proc))
         menu.addSeparator()
         menu.addAction(
             "Копировать реестровый №",
@@ -2030,13 +2029,27 @@ class MainWindow(QMainWindow):
     def _open_in_browser(self, proc: Optional[dict[str, Any]]) -> None:
         if not proc:
             return
-        pid = proc.get("id")
+        pid = proc.get("id") or proc.get("procedure_id")
         if not pid:
             return
-        if proc.get("url"):
-            webbrowser.open(str(proc["url"]))
-            return
-        webbrowser.open(VIEW_URL.format(pid=pid))
+        url = str(proc.get("url") or "")
+        if not url:
+            detail_url = getattr(self.client, "_detail_url", None)
+            url = detail_url(pid) if callable(detail_url) else VIEW_URL.format(pid=pid)
+        try:
+            if self.client.driver is None:
+                self.client.ensure_chrome(timeout=45)
+                self.client.connect()
+            assert self.client.driver is not None
+            self.client.driver.get(url)
+            self.status_msg.setText(f"Открыта карточка процедуры: {url}")
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Открытие карточки",
+                "Не удалось открыть карточку в текущем браузере.\n\n"
+                f"{e}",
+            )
 
     # --------------- экспорт
     def _on_export(self) -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+import re
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 from etp_client import EtpClient
 
@@ -37,6 +39,94 @@ GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS = {
     int(value): label
     for label, value in GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS
 }
+
+_BUSINESS_223_COLLECT_DOCUMENT_LINKS_JS = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const bodyText = () => String(document.body && document.body.innerText || "");
+  for (let i = 0; i < 70; i++) {
+    const text = bodyText();
+    if (
+      String(location.href || "").includes("procedure/view")
+      && (/Документация процедуры/i.test(text) || /Сведения о процедуре/i.test(text))
+    ) {
+      break;
+    }
+    await wait(300);
+  }
+
+  try {
+    const tabs = Array.from(document.querySelectorAll(".x-tab-inner, .x-tab-right, .x-tab"));
+    const seenTabs = new Set();
+    for (const tab of tabs) {
+      const label = String(tab.innerText || tab.textContent || "").trim();
+      if (!label || seenTabs.has(label)) continue;
+      seenTabs.add(label);
+      if (/Сведения|Лоты|Документ|Извещение/i.test(label)) {
+        try {
+          tab.click();
+          await wait(250);
+        } catch (e) {}
+      }
+    }
+  } catch (e) {}
+
+  const fileRe = /([^\\/\n\r\t<>:"|?*]+?\.(?:docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv))/i;
+  const docs = new Map();
+
+  function clean(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function filenameNear(anchor) {
+    const sources = [
+      anchor.innerText,
+      anchor.textContent,
+      anchor.getAttribute("title"),
+      anchor.getAttribute("download"),
+    ];
+    let node = anchor;
+    for (let i = 0; i < 5 && node; i++, node = node.parentElement) {
+      sources.push(node.innerText, node.textContent);
+    }
+    for (const source of sources) {
+      for (const line of String(source || "").split(/\r?\n/)) {
+        const lineText = clean(line);
+        const lineMatch = lineText.match(fileRe);
+        if (lineMatch) return lineMatch[1];
+      }
+      const text = clean(source);
+      const match = text.match(fileRe);
+      if (match) return match[1];
+    }
+    return clean(anchor.innerText || anchor.textContent || anchor.href || "document");
+  }
+
+  function add(anchor) {
+    const href = anchor.href || anchor.getAttribute("href") || "";
+    if (!href || href === "javascript:;") return;
+    const name = filenameNear(anchor);
+    const ownText = clean([
+      anchor.innerText,
+      anchor.textContent,
+      anchor.getAttribute("title"),
+      anchor.getAttribute("download"),
+    ].filter(Boolean).join(" "));
+    const isDoc = /\/file\/get\/t\/(?:LotDocuments|ProcedureDocuments)\b/i.test(href)
+      || fileRe.test(href)
+      || fileRe.test(ownText);
+    if (!isDoc) return;
+    const current = docs.get(href);
+    if (!current || (!fileRe.test(current.text) && fileRe.test(name))) {
+      docs.set(href, { href, text: name });
+    }
+  }
+
+  Array.from(document.querySelectorAll("a[href]")).forEach(add);
+  callback(Array.from(docs.values()));
+})();
+"""
 
 
 class GpbBusinessClient(EtpClient):
@@ -77,6 +167,81 @@ class GpbBusinessClient(EtpClient):
                 if label:
                     proc["procedure_type_name"] = label
         return res
+
+    def _business_document_links(self) -> list[dict[str, Any]]:
+        assert self.driver is not None, "Сначала вызовите connect()"
+        try:
+            self.driver.set_script_timeout(120)
+            links = self.driver.execute_async_script(_BUSINESS_223_COLLECT_DOCUMENT_LINKS_JS)
+        finally:
+            self.driver.set_script_timeout(30)
+        if not isinstance(links, list):
+            return []
+        cleaned: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in links:
+            if not isinstance(item, dict):
+                continue
+            href = str(item.get("href") or "").strip()
+            if not href or href in seen:
+                continue
+            seen.add(href)
+            text = str(item.get("text") or "").strip()
+            ext_match = re.fullmatch(r"(?i)(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml|csv)", text)
+            if ext_match:
+                text = f"document_{len(cleaned) + 1}.{ext_match.group(1).lower()}"
+            cleaned.append({"href": href, "text": text})
+        return cleaned
+
+    def download_procedure_documents(
+        self,
+        proc: dict[str, Any],
+        output_root: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        """Скачивает документы карточки секции Бизнес.223.
+
+        В Бизнес.223 URL файла часто выглядит как /file/get/... без расширения,
+        поэтому имя файла берём из соседнего DOM-блока документации.
+        """
+        assert self.driver is not None, "Сначала вызовите connect()"
+        proc_id = proc.get("id") or proc.get("procedure_id")
+        if not proc_id:
+            raise RuntimeError("У процедуры нет id для открытия подробной страницы.")
+
+        registry = str(proc.get("registry_number") or proc.get("procedure_number") or proc_id)
+        title = str(proc.get("title") or "")
+        folder_name = self._safe_filename(f"{registry}_{title[:80]}", str(proc_id))
+        registry_digits = re.sub(r"\D+", "", registry)
+        output_digits = re.sub(r"\D+", "", output_root.name)
+        out_dir = output_root if registry_digits and registry_digits in output_digits else output_root / folder_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        url = self._detail_url(proc_id)
+        if progress:
+            progress(f"Открываю подробную страницу {registry}: {url}")
+        self.driver.get(url)
+
+        links = self._business_document_links()
+        saved: list[str] = []
+        errors: list[str] = []
+
+        for index, link in enumerate(links, start=1):
+            if progress:
+                progress(f"Скачиваю {registry}: {link.get('text') or index}")
+            try:
+                saved.append(str(self.download_document_link(link, out_dir, index=index)))
+            except Exception as e:
+                errors.append(f"{link.get('text') or link.get('href') or index}: {e}")
+
+        return {
+            "procedure": registry,
+            "url": url,
+            "folder": str(out_dir),
+            "found": len(links),
+            "saved": saved,
+            "errors": errors,
+        }
 
     def _prepare_fetch_payload(self, payload: dict[str, Any], client_filters: Any = None) -> None:
         # На etp.gpb.ru номер процедуры ищется через общий query. Поля
