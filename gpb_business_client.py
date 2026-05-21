@@ -152,6 +152,24 @@ class GpbBusinessClient(EtpClient):
         res = super().fetch_page(*args, **kwargs)
         procedures = res.get("procedures")
         if isinstance(procedures, list):
+            # На etp.gpb.ru имущественные торги (is_type_property=True) живут в
+            # отдельном разделе и в стандартном реестре закупок не показываются.
+            # У нас RPC отдаёт их вперемешку, поэтому отсеиваем тут — иначе в
+            # выдаче появляются «фантомные» процедуры (например, ГП531972),
+            # которые на сайте через обычный поиск не находятся.
+            filtered: list[dict[str, Any]] = []
+            for proc in procedures:
+                if isinstance(proc, dict) and bool(proc.get("is_type_property")):
+                    continue
+                filtered.append(proc)
+            procedures = filtered
+            res["procedures"] = procedures
+
+            total = res.get("totalCount")
+            if isinstance(total, int) and total > len(procedures):
+                # totalCount теперь рассинхронизирован, но это лучше, чем
+                # показывать в реестре закупки, отфильтрованные сайтом.
+                pass
             for proc in procedures:
                 if not isinstance(proc, dict):
                     continue
@@ -159,13 +177,29 @@ class GpbBusinessClient(EtpClient):
                 proc_id = proc.get("id") or proc.get("procedure_id")
                 if proc_id:
                     proc["url"] = self._detail_url(proc_id)
-                try:
-                    type_id = int(str(proc.get("procedure_type") or "").strip())
-                except (TypeError, ValueError):
-                    continue
-                label = GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS.get(type_id)
-                if label:
-                    proc["procedure_type_name"] = label
+
+                # На etp.gpb.ru тип в карточке/реестре строится так:
+                #   1) если у процедуры заполнен contragent_purchasemethod —
+                #      показывается именно он (например, «Сбор коммерческих
+                #      предложений»), независимо от procedure_type;
+                #   2) иначе — серверный procedure_type_name;
+                #   3) иначе — маппинг по числовому procedure_type.
+                # Это отличается от секции Газпром, поэтому правим только тут.
+                method_label = str(proc.get("contragent_purchasemethod") or "").strip()
+                server_type_name = str(proc.get("procedure_type_name") or "").strip()
+                if method_label:
+                    proc["procedure_type_name"] = method_label
+                elif server_type_name:
+                    proc["procedure_type_name"] = server_type_name
+                else:
+                    try:
+                        type_id = int(str(proc.get("procedure_type") or "").strip())
+                    except (TypeError, ValueError):
+                        type_id = None
+                    if type_id is not None:
+                        label = GPB_BUSINESS_PROCEDURE_TYPE_ID_LABELS.get(type_id)
+                        if label:
+                            proc["procedure_type_name"] = label
         return res
 
     def _business_document_links(self) -> list[dict[str, Any]]:
