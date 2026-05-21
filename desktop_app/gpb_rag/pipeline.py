@@ -28,6 +28,7 @@ def ragged_analysis_available() -> bool:
     try:
         import faiss  # noqa: F401
         import numpy  # noqa: F401
+        import torch  # noqa: F401
         import sentence_transformers  # noqa: F401
     except ImportError:
         return False

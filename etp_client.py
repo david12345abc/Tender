@@ -1042,6 +1042,17 @@ class EtpClient:
             page_text = page_text[:max_page_chars] + "\n\n[…текст обрезан…]"
 
         doc_links = raw.get("docLinks") or []
+        if not doc_links:
+            deadline = time.time() + 20
+            while time.time() < deadline:
+                try:
+                    found = self.driver.execute_async_script(_COLLECT_DOCUMENT_LINKS_JS)
+                except Exception:
+                    found = None
+                if isinstance(found, list) and found:
+                    doc_links = found
+                    break
+                time.sleep(1)
         primary_file = ""
         if isinstance(doc_links, list):
             for item in doc_links:

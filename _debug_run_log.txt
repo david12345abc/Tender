@@ -1,0 +1,160 @@
+﻿[init] LM=http://192.168.1.157:1234 model=yandexgpt-5-lite-8b-instruct
+[init] ╨Я╨╛╨┤╨║╨╗╤О╤З╨░╤О╤Б╤М ╨║ DevToolsтАж
+[found] 32616025062 id=251103 title='╨Я╨╛╤Б╤В╨░╨▓╨║╨░ ╤Г╨╖╨╗╨╛╨▓ ╨╕╨╖╨╝╨╡╤А╨╡╨╜╨╕╤П ╤А╨░╤Б╤Е╨╛╨┤╨░ ╨│╨░╨╖╨░ ╨┤╨╗╤П ╨╛╨▒╤К╨╡╨║╤В╨╛╨▓ "╨в╨╡╤Е╨╜╨╕╤З╨╡╤Б╨║╨╛╨╡ ╨┐╨╡╤А╨╡╨▓╨╛╨╛╤А╤Г╨╢╨╡╨╜╨╕╨╡ ╨У'
+[progress] ╨б╨▒╨╛╤А ╤В╨╡╨║╤Б╤В╨░ ╨║╨░╤А╤В╨╛╤З╨║╨╕ 1/1: 32616025062
+[progress] ╨з╨╕╤В╨░╤О ╨║╨░╤А╤В╨╛╤З╨║╤Г 32616025062: https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/251103
+[progress] ╨б╨║╨░╤З╨╕╨▓╨░╤О ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В 1/2 ╨┤╨╗╤П ╨░╨╜╨░╨╗╨╕╨╖╨░: 32616025062
+[progress] ╨б╨║╨░╤З╨╕╨▓╨░╤О ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В 2/2 ╨┤╨╗╤П ╨░╨╜╨░╨╗╨╕╨╖╨░: 32616025062
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: bs_documentation_2.rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: 0050939_╨У╨Я╨Ъ_╨Я╨а_╨У╨Ю╨б_╨С╨б_╨Х╨а_2.zip
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨Ш╨╜╤Б╤В╤А╤Г╨║╤Ж╨╕╨╕ ╨╕ ╤А╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨░.rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨Ю╤В╨║╤А╤Л╤В╨╕╨╡ ╤Б╤З╨╡╤В╨░.rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨б╨╜╤П╤В╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨г╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨Ш╨╜╤Б╤В╤А╤Г╨║╤Ж╨╕╨╕ ╨╕ ╤А╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨░.rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨Ю╤В╨║╤А╤Л╤В╨╕╨╡ ╤Б╤З╨╡╤В╨░.rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨б╨╜╤П╤В╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Ф╨Ч╨Ю ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨а╨░╤Б╨┐╨░╨║╨╛╨▓╤Л╨▓╨░╤О ╨░╤А╤Е╨╕╨▓: ╨г╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Ф╨Ч╨Ю ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 1: 0050939_╨У╨Я╨Ъ_╨Я╨а_╨У╨Ю╨б_╨С╨б_╨Х╨а_2.zip
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 2: ╨Ф╨╛╨║╤Г╨╝╨╡╨╜╤В╨░╤Ж╨╕╤П ╨Ь╨Ш.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 3: ╨Я╤А╨╛╨╡╨║╤В ╨┤╨╛╨│╨╛╨▓╨╛╤А╨░.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 4: 1100677902000010 ╨У╨а╨б ╤Е. ╨С╨╛╨╣╨║╨╕╨╡ ╨Ф╨▓╨╛╤А╨╕╨║╨╕.PDF
+py : ИНФОРМАЦИЯ: не удается найти файлы по заданным шаблонам.
+C:\Users\d.mangasaryan\AppData\Local\Temp\ps-script-046acf1a-ffef-4377-ba09-ae959d3c2d96.ps1:79 знак:32
++ ... NG='utf-8'; py _debug_run_analysis.py --registry 32616025062 *>&1 | O ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ИНФОРМАЦИЯ: не ...анным шаблонам.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+C:\Users\d.mangasaryan\AppData\Roaming\Python\Python313\site-packages\paddle\utils\cpp_extension\extension_utils.py:712
+: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and
+ install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[2026/05/21 11:55:39] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:40] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:40] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:40] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:41] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:45] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:46] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:47] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:47] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:47] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:47] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:55:47] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 5: 1100677905000010 ╨У╨а╨б ╨Ю╨┐╤Л╤В╨╜╨░╤П ╤Б╤В╨░╨╜╤Ж╨╕╤П ╨Э╨Ю╨Т.PDF
+[2026/05/21 11:56:01] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 6: 1100677905000020 ╨У╨а╨б ╨Ю╨┐╤Л╤В╨╜╨░╤П ╤Б╤В╨░╨╜╤Ж╨╕╤П ╨Э╨Ю╨Т.PDF
+[2026/05/21 11:56:01] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 7: 1100677906000020 ╨а╤Г╨┤╨╜╤П ╨Э╨Ю╨Т.PDF
+[2026/05/21 11:56:01] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 8: 1100677906000030 ╨а╤Г╨┤╨╜╤П ╨Э╨Ю╨Т.PDF
+[2026/05/21 11:56:01] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 9: ╨в╨░╨▒╨╗╨╕╤Ж╨░ ╨Р.xlsx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 10: ╨в╨Ч.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 11: ╨Ь╨╡╤В╨╛╨┤╨╕╨║╨░ ╨Ь╨Ш_╨Х╨а.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 12: ╨д╨╛╤А╨╝╨░ 1.1.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 13: ╨д╨╛╤А╨╝╨░ 1.2.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 14: ╨д╨╛╤А╨╝╨░ 1.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 15: ╨д╨╛╤А╨╝╨░ 2.1.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 16: ╨д╨╛╤А╨╝╨░ 2.2.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 17: ╨д╨╛╤А╨╝╨░ 2.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 18: ╨д╨╛╤А╨╝╨░ 3.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 19: ╨д╨╛╤А╨╝╨░ 4.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 20: ╨д╨╛╤А╨╝╨░ 5.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 21: bs_documentation_2.rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 22: ╨Ч╨░╤П╨▓╨╗╨╡╨╜╨╕╨╡ ╨╜╨░ ╤А╨╡╨╖╨╡╤А╨▓╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡ ╨╜╨╛╨╝╨╡╤А╨░ ╨▒╨░╨╜╨║╨╛╨▓╤Б╨║╨╛╨│╨╛ ╤Б╤З╨╡╤В╨░.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 23: ╨Ш╨╜╤Б╤В╤А╤Г╨║╤Ж╨╕╨╕ ╨╕ ╤А╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨░.rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 24: ╨Я╨░╨╝╤П╤В╨║╨░ ╨┐╨╛ ╨▒╨░╨╜╨║╨╛╨▓╤Б╨║╨╛╨╝╤Г ╤Б╨╛╨┐╤А╨╛╨▓╨╛╨╢╨┤╨╡╨╜╨╕╤О ╨║╨╛╨╜╤В╤А╨░╨║╤В╨╛╨▓ ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝.ppt
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 25: ╨Я╨╡╤А╨╡╤З╨╡╨╜╤М ╨╛╨▒╨╛╤Б╨╜╨╛╨▓╤Л╨▓╨░╤О╤Й╨╕╤Е ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨╛╨▓ ╨┤╨╗╤П ╨┐╤А╨╛╨▓╨╡╨┤╨╡╨╜╨╕╤П ╨┐╨╗╨░╤В╨╡╨╢╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 26: ╨Я╨╛╤А╤В╨░╨╗ ╨┐╤А╨╕╨╡╨╝╨░ ╨╛╨▒╨╛╤Б╨╜╨╛╨▓╤Л╨▓╨░╤О╤Й╨╕╤Е ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨╛╨▓. ╨а╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨╛ ╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╤В╨╡╨╗╤П.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 27: ╨а╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨╛ ╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╤В╨╡╨╗╤П ╨╗╨╕╤З╨╜╨╛╨│╨╛ ╨║╨░╨▒╨╕╨╜╨╡╤В╨░ ╨Я╨╛╤Б╤В╨░╨▓╤Й╨╕╨║╨░ ╨╜╨░ ╨н╨в╨Я ╨У╨Я╨С.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 28: ╨Ю╤В╨║╤А╤Л╤В╨╕╨╡ ╤Б╤З╨╡╤В╨░.rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 29: 10Soprovod pismo rez.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 30: 16Oprosniy list UL.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 31: 18Kartochka.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 32: 19Oferta kartochka.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 33: 20Accept kartochki.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 34: 3Perechen rez ul.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 35: 9Perechen 2nd acc.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 36: ╨Р╨╜╨║╨╡╤В╨░ ╨▒╨╡╨╜╨╡╤Д╨╕╤Ж╨╕╨░╤А╨╜╨╛╨│╨╛ ╨▓╨╗╨░╨┤╨╡╨╗╤М╤Ж╨░.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 37: ╨Р╨╜╨║╨╡╤В╤Л ╨▓╤Л╨│╨╛╨┤╨╛╨┐╤А╨╕╨╛╨▒╤А╨╡╤В╨░╤В╨╡╨╗╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 38: ╨Р╨╜╨║╨╡╤В╤Л ╨┐╤А╨╡╨┤╤Б╤В╨░╨▓╨╕╤В╨╡╨╗╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 39: ╨Ч╨░╤П╨▓╨╗╨╡╨╜╨╕╨╡ 1 ╨Я14╨░ ╨Ш55.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 40: ╨Я2 ╨Ф╨╛╨│╨╛╨▓╨╛╤А.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 41: ╨б╨╜╤П╤В╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 42: ╨Ч╨░╤П╨▓╨║╨░ ╨╜╨░ ╨╛╤Д╨╛╤А╨╝╨╗╨╡╨╜╨╕╨╡ ╨┤╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╤П.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 43: ╨г╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 44: ╨Ф╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨╡ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╨╡.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 45: ╨Ч╨░╤П╨▓╨║╨░ ╨╜╨░ ╨╛╤Д╨╛╤А╨╝╨╗╨╡╨╜╨╕╨╡ ╨┤╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╤П.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 46: ╨Я╨╛╤А╤П╨┤╨╛╨║ ╨╕╤Б╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╨╜╨╕╤П ╨╛╤В╨┤╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╤З╨╡╤В╨░.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 47: ╨Ч╨░╤П╨▓╨╗╨╡╨╜╨╕╨╡ ╨╜╨░ ╤А╨╡╨╖╨╡╤А╨▓╨╕╤А╨╛╨▓╨░╨╜╨╕╨╡ ╨╜╨╛╨╝╨╡╤А╨░ ╨▒╨░╨╜╨║╨╛╨▓╤Б╨║╨╛╨│╨╛ ╤Б╤З╨╡╤В╨░.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 48: ╨Ш╨╜╤Б╤В╤А╤Г╨║╤Ж╨╕╨╕ ╨╕ ╤А╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨░.rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 49: ╨Я╨░╨╝╤П╤В╨║╨░ ╨┐╨╛ ╨▒╨░╨╜╨║╨╛╨▓╤Б╨║╨╛╨╝╤Г ╤Б╨╛╨┐╤А╨╛╨▓╨╛╨╢╨┤╨╡╨╜╨╕╤О ╨║╨╛╨╜╤В╤А╨░╨║╤В╨╛╨▓ ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝.ppt
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 50: ╨Я╨╡╤А╨╡╤З╨╡╨╜╤М ╨╛╨▒╨╛╤Б╨╜╨╛╨▓╤Л╨▓╨░╤О╤Й╨╕╤Е ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨╛╨▓ ╨┤╨╗╤П ╨┐╤А╨╛╨▓╨╡╨┤╨╡╨╜╨╕╤П ╨┐╨╗╨░╤В╨╡╨╢╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 51: ╨Я╨╛╤А╤В╨░╨╗ ╨┐╤А╨╕╨╡╨╝╨░ ╨╛╨▒╨╛╤Б╨╜╨╛╨▓╤Л╨▓╨░╤О╤Й╨╕╤Е ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨╛╨▓. ╨а╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨╛ ╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╤В╨╡╨╗╤П.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 52: ╨а╤Г╨║╨╛╨▓╨╛╨┤╤Б╤В╨▓╨╛ ╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╤В╨╡╨╗╤П ╨╗╨╕╤З╨╜╨╛╨│╨╛ ╨║╨░╨▒╨╕╨╜╨╡╤В╨░ ╨Я╨╛╤Б╤В╨░╨▓╤Й╨╕╨║╨░ ╨╜╨░ ╨н╨в╨Я ╨У╨Я╨С.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 53: ╨Ю╤В╨║╤А╤Л╤В╨╕╨╡ ╤Б╤З╨╡╤В╨░.rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 54: 10Soprovod pismo rez.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 55: 16Oprosniy list UL.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 56: 18Kartochka.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 57: 19Oferta kartochka.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 58: 20Accept kartochki.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 59: 3Perechen rez ul.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 60: 9Perechen 2nd acc.pdf
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 61: ╨Р╨╜╨║╨╡╤В╨░ ╨▒╨╡╨╜╨╡╤Д╨╕╤Ж╨╕╨░╤А╨╜╨╛╨│╨╛ ╨▓╨╗╨░╨┤╨╡╨╗╤М╤Ж╨░.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 62: ╨Р╨╜╨║╨╡╤В╤Л ╨▓╤Л╨│╨╛╨┤╨╛╨┐╤А╨╕╨╛╨▒╤А╨╡╤В╨░╤В╨╡╨╗╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 63: ╨Р╨╜╨║╨╡╤В╤Л ╨┐╤А╨╡╨┤╤Б╤В╨░╨▓╨╕╤В╨╡╨╗╨╡╨╣.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 64: ╨Ч╨░╤П╨▓╨╗╨╡╨╜╨╕╨╡ 1 ╨Я14╨░ ╨Ш55.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 65: ╨Я2 ╨Ф╨╛╨│╨╛╨▓╨╛╤А.doc
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 66: ╨б╨╜╤П╤В╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Ф╨Ч╨Ю ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 67: ╨Ф╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨╡ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╨╡ (╤Б╨╜╤П╤В╨╕╨╡).docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 68: ╨Ч╨░╤П╨▓╨║╨░ ╨╜╨░ ╨╛╤Д╨╛╤А╨╝╨╗╨╡╨╜╨╕╨╡ ╨┤╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╤П (╤Б╨╜╤П╤В╨╕╨╡).docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 69: ╨г╤Б╤В╨░╨╜╨╛╨▓╨╗╨╡╨╜╨╕╨╡ ╤А╨╡╨╢╨╕╨╝╨░ ╨Ю╨С╨б (╨Ф╨Ч╨Ю ╨Я╨Р╨Ю ╨У╨░╨╖╨┐╤А╨╛╨╝).rar
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 70: ╨Ф╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨╡ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╨╡.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 71: ╨Ч╨░╤П╨▓╨║╨░ ╨╜╨░ ╨╛╤Д╨╛╤А╨╝╨╗╨╡╨╜╨╕╨╡ ╨┤╨╛╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╨╛╨│╨╗╨░╤И╨╡╨╜╨╕╤П.docx
+[progress] ╨Ш╨╖╨▓╨╗╨╡╨║╨░╤О ╤В╨╡╨║╤Б╤В ╨┤╨╛╨║╤Г╨╝╨╡╨╜╤В╨░ 72: ╨Я╨╛╤А╤П╨┤╨╛╨║ ╨╕╤Б╨┐╨╛╨╗╤М╨╖╨╛╨▓╨░╨╜╨╕╤П ╨╛╤В╨┤╨╡╨╗╤М╨╜╨╛╨│╨╛ ╤Б╤З╨╡╤В╨░.docx
+[progress] RAG: ╨╕╨╜╨┤╨╡╨║╤Б╨░╤Ж╨╕╤П ╨╕ ╨╕╨╖╨▓╨╗╨╡╤З╨╡╨╜╨╕╨╡ ╨┐╨╛╨╗╨╡╨╣ ╨┤╨╗╤П 32616025062тАж
+[2026/05/21 11:56:27] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:27] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:27] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:27] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:27] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[2026/05/21 11:56:28] ppocr WARNING: Since the angle classifier is not initialized, it will not be used during the forward process
+[progress] RAG: embeddings (intfloat/multilingual-e5-small), ╤З╨░╨╜╨║╨╛╨▓: 949тАж
+[2026-05-21 11:56:42,797] [    INFO] SentenceTransformer.py:219 - Use pytorch device_name: cpu
+[2026-05-21 11:56:42,798] [    INFO] SentenceTransformer.py:227 - Load pretrained SentenceTransformer: intfloat/multili
+ngual-e5-small
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Э╨░╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╨╡ ╨Ч╨░╨║╨░╨╖╤З╨╕╨║╨░┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Э╨░╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╨╡ ╤В╨╡╨╜╨┤╨╡╤А╨░┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Я╤А╨╡╨┤╨╝╨╡╤В ╨╖╨░╨║╤Г╨┐╨║╨╕ (╨╜╨░╨╕╨╝╨╡╨╜╨╛╨▓╨░╨╜╨╕╨╡ ╨┐╨╛╤Б╤В╨░╨▓╨╗╤П╨╡╨╝╨╛╨│╨╛ ╨╛╨▒╨╛╤А╤Г╨┤╨╛╨▓╨░╨╜╨╕╤П)┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Ф╨░╤В╨░ ╨╛╨│╤А╨░╨╜╨╕╤З╨╡╨╜╨╕╤П ╨┐╨╛╨┤╨░╤З╨╕ ╨╖╨░╤П╨▓╨║╨╕┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Ф╨░╤В╨░ ╨┐╨╡╤А╨╡╤В╨╛╤А╨│╨░┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Ф╨░╤В╨░ ╨┐╨╛╨┤╨▓╨╡╨┤╨╡╨╜╨╕╤П ╨╕╤В╨╛╨│╨╛╨▓ ╨┐╨╛ ╨╖╨░╨║╤Г╨┐╨║╨╡┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Э╨░╤З╨░╨╗╤М╨╜╨░╤П ╨╝╨╕╨╜╨╕╨╝╨░╨╗╤М╨╜╨░╤П ╤Ж╨╡╨╜╨░ (╨Э╨Ь╨ж)┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Т╨╛╨╖╨╝╨╛╨╢╨╜╨░ ╨╗╨╕ ╨┐╨╛╤Б╤В╨░╨▓╨║╨░ ╤З╨░╤Б╤В╨╕ ╨╛╨▒╨╛╤А╤Г╨┤╨╛╨▓╨░╨╜╨╕╤П (╨┤╨╡╨╗╨╕╨╝ ╨╗╨╕ ╨╗╨╛╤В)┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨б╤А╨╛╨║ ╨┐╨╛╤Б╤В╨░╨▓╨║╨╕┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨г╤Б╨╗╨╛╨▓╨╕╤П ╨╛╨┐╨╗╨░╤В╤Л┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨в╤А╨╡╨▒╨╛╨▓╨░╨╜╨╕╤П ╨║ ╤Б╨╡╤А╤В╨╕╤Д╨╕╨║╨░╤Ж╨╕╨╕┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨Ю╨▒╨╡╤Б╨┐╨╡╤З╨╡╨╜╨╕╨╡ ╨╕╤Б╨┐╨╛╨╗╨╜╨╡╨╜╨╕╤П ╨┤╨╛╨│╨╛╨▓╨╛╤А╨░┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨б╤В╨╛╨╕╨╝╨╛╤Б╤В╤М ╨┐╨╛╨┤╨░╤З╨╕ ╨╖╨░╤П╨▓╨║╨╕ ╨╜╨░ ╤Г╤З╨░╤Б╤В╨╕╨╡┬╗тАж
+[progress] RAG: ╨┐╨╛╨╗╨╡ ┬л╨а╨╕╤Б╨║╨╕ ╨Я╨╛╤Б╤В╨░╨▓╤Й╨╕╨║╨░/╨Ш╤Б╨┐╨╛╨╗╨╜╨╕╤В╨╡╨╗╤П ╨┐╤А╨╕ ╨╜╨░╤А╤Г╤И╨╡╨╜╨╕╨╕ ╤Г╤Б╨╗╨╛╨▓╨╕╨╣ ╨┤╨╛╨│╨╛╨▓╨╛╤А╨░┬╗тАж
+[session ok=True] ╨Р╨╜╨░╨╗╨╕╨╖ ╨╖╨░╨▓╨╡╤А╤И╤С╨╜: 1 ╨┐╤А╨╛╤Ж╨╡╨┤╤Г╤А. LM Studio: http://192.168.1.157:1234, ╨╝╨╛╨┤╨╡╨╗╤М yandexgpt-5-lite-8b-instruct.
+
+[done] ╨Р╨╜╨░╨╗╨╕╨╖ ╨╖╨░╨╜╤П╨╗ 224.6s
+[saved] ╨Я╨╛╨╗╨╜╤Л╨╣ ╤А╨╡╨╖╤Г╨╗╤М╤В╨░╤В тЖТ C:\Users\d.mangasaryan\Downloads\╨в╨╡╨╜╨┤╨╡╤А╨╜╤Л╨╣ ╨┐╤А╨╛╨╡╨║╤В\_debug_analysis_result.json
+
+=== ╨Ш╤В╨╛╨│╨╛╨▓╤Л╨╡ ╤Б╤В╤А╨╛╨║╨╕ ╤В╨░╨▒╨╗╨╕╤Ж╤Л ===
+  32616025062: ╨╖╨░╨┐╨╛╨╗╨╜╨╡╨╜╨╛ 10/14 ╨┐╨╛╨╗╨╡╨╣
+
+[target 32616025062] filled=10/14

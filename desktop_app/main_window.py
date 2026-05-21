@@ -485,7 +485,7 @@ class MainWindow(QMainWindow):
     def _apply_table_column_widths(self) -> None:
         """Фиксированные ширины колонок — иначе заголовок сжимает их под вьюпорт и скролл не появляется."""
         hh = self.table.horizontalHeader()
-        widths = [170, 180, 230, 280, 220, 80, 95, 145, 145, 170, 200]
+        widths = [170, 180, 230, 280, 220, 80, 130, 95, 145, 145, 170, 200]
         n = min(len(widths), self.proxy.columnCount())
         for i in range(n):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
@@ -1199,9 +1199,12 @@ class MainWindow(QMainWindow):
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
         unpacked_by_registry = self._analysis_sink.get("unpacked_docs_by_registry") or {}
         summary_rows: list[list[str]] = []
+        lot_divisibility_by_registry: dict[str, str] = {}
 
         for row in rows:
             registry = str(row[0] if len(row) > 0 else "").strip() or "unknown"
+            if len(row) > 10:
+                lot_divisibility_by_registry[registry] = str(row[10] or "").strip()
             parsed_title = str(row[4] if len(row) > 4 else "").strip()
             source_title = str(title_by_registry.get(registry) or "").strip()
             title = parsed_title if parsed_title and parsed_title not in {"—", "не указано"} else source_title
@@ -1265,6 +1268,10 @@ class MainWindow(QMainWindow):
             )
 
         self._analysis_sink["summary_rows"] = summary_rows
+        self.model.set_analysis_lot_divisibility(lot_divisibility_by_registry)
+        self.proxy.invalidate()
+        self._apply_table_column_widths()
+        self._schedule_table_row_resize()
         return summary_rows
 
     def _show_analysis_table_dialog(self, rows: list[list[str]]) -> None:

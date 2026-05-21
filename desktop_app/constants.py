@@ -53,7 +53,7 @@ VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 
 # LM Studio (OpenAI-совместимый API) для разбора карточки процедуры
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://192.168.1.157:1234")
-LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "openai/gpt-oss-120b")
+LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "yandexgpt-5-lite-8b-instruct")
 
 COLUMNS: list[tuple[str, str]] = [
     ("registry_number", "Реестровый №"),
@@ -62,6 +62,7 @@ COLUMNS: list[tuple[str, str]] = [
     ("title", "Наименование"),
     ("keyword_matches", "Ключевые слова"),
     ("tags_label", "Теги"),
+    ("lot_divisibility", "Делимость лота"),
     ("applics_count", "Намерений"),
     ("date_start_registration", "Приём заявок с"),
     ("date_end_registration", "Приём заявок до"),

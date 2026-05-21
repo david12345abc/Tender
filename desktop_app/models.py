@@ -130,6 +130,48 @@ def _server_status_values(proc: dict[str, Any]) -> tuple[int, ...]:
     return tuple(values)
 
 
+def _lot_divisibility_label(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return "—"
+    low = text.casefold().replace("ё", "е")
+    if low in {"—", "-", "null", "none", "не указано", "нет данных"}:
+        return "—"
+    if any(marker in low for marker in ("неделим", "не делим", "единый лот")):
+        return "Неделимый"
+    if any(
+        marker in low
+        for marker in (
+            "не допуска",
+            "не предусмотр",
+            "не разреш",
+            "невозмож",
+            "нельзя",
+            "поставка части не",
+            "частичная поставка не",
+        )
+    ):
+        return "Неделимый"
+    if low in {"нет", "no", "false", "0"}:
+        return "Неделимый"
+    if any(
+        marker in low
+        for marker in (
+            "делим",
+            "допуска",
+            "разреш",
+            "возмож",
+            "част",
+            "можно",
+            "отдельн",
+        )
+    ):
+        return "Делимый"
+    if low in {"да", "yes", "true", "1"}:
+        return "Делимый"
+    return text
+
+
 class ProcedureTableModel(QAbstractTableModel):
     COL_KEYS = [c[0] for c in COLUMNS]
     COL_TITLES = [c[1] for c in COLUMNS]
@@ -348,6 +390,12 @@ class ProcedureTableModel(QAbstractTableModel):
         if key == "tags_label":
             tags = proc.get("tags") or []
             return ", ".join(str(t) for t in tags) if tags else ""
+        if key == "lot_divisibility":
+            return _lot_divisibility_label(
+                proc.get("lot_divisibility")
+                or proc.get("analysis_partial_supply_allowed")
+                or proc.get("partial_supply_allowed")
+            )
         if key == "date_start_registration":
             return fmt_date(
                 self._first_date(
@@ -408,6 +456,8 @@ class ProcedureTableModel(QAbstractTableModel):
             return str(proc.get("registry_number") or proc.get("procedure_number") or "")
         if key == "keyword_matches":
             return self._display(proc, key)
+        if key == "lot_divisibility":
+            return str(self._display(proc, key)).casefold()
         return str(proc.get(key) or "")
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
@@ -495,6 +545,34 @@ class ProcedureTableModel(QAbstractTableModel):
         if 0 <= row < len(self._rows):
             return self._rows[row]
         return None
+
+    def set_analysis_lot_divisibility(self, values_by_registry: dict[str, str]) -> None:
+        if not values_by_registry:
+            return
+        key = "lot_divisibility"
+        try:
+            col = self.COL_KEYS.index(key)
+        except ValueError:
+            col = -1
+        changed_rows: list[int] = []
+        for row, proc in enumerate(self._rows):
+            registry = str(
+                proc.get("registry_number")
+                or proc.get("procedure_number")
+                or proc.get("procedure_number2")
+                or proc.get("id")
+                or ""
+            ).strip()
+            value = values_by_registry.get(registry)
+            if value is None:
+                continue
+            proc["analysis_partial_supply_allowed"] = value
+            proc["lot_divisibility"] = _lot_divisibility_label(value)
+            changed_rows.append(row)
+        if col >= 0:
+            for row in changed_rows:
+                idx = self.index(row, col)
+                self.dataChanged.emit(idx, idx, [Qt.DisplayRole, Qt.UserRole])
 
 
 class ProcedureFilterProxy(QSortFilterProxyModel):

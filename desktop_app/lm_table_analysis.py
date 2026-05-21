@@ -216,7 +216,18 @@ def call_lm_studio_chat(
         raise RuntimeError(f"Пустой ответ API: {raw[:1500]}")
     msg = (choices[0] or {}).get("message") or {}
     content = msg.get("content")
-    if not content:
+    # Reasoning-модели (например, gpt-oss harmony) часто кладут полезный текст
+    # в reasoning_content/reasoning, а в content оставляют служебную метку.
+    def _looks_like_harmony_marker(s: str) -> bool:
+        s = (s or "").strip()
+        return (not s) or s.startswith("<|") or s in {"final", "<|channel|>final"}
+    if _looks_like_harmony_marker(str(content or "")):
+        for alt_key in ("reasoning_content", "reasoning"):
+            alt = msg.get(alt_key)
+            if isinstance(alt, str) and alt.strip():
+                content = alt
+                break
+    if not content or not str(content).strip():
         raise RuntimeError(f"Нет content в ответе: {raw[:1500]}")
     return str(content)
 

@@ -37,6 +37,17 @@ def _trim_for_llm(text: str, limit: int) -> str:
     return text[:limit] + "\n\n[текст обрезан для повторного запроса к модели]"
 
 
+def _analysis_filled_count(parsed: dict[str, str] | None) -> int:
+    if not parsed:
+        return 0
+    empty_values = {"", "—", "-", "null", "none", "не указано", "нет данных"}
+    return sum(
+        1
+        for value in parsed.values()
+        if str(value or "").strip().casefold() not in empty_values
+    )
+
+
 def _safe_int(value, default: int = 0) -> int:
     text = str(value or "").strip()
     if not text or text in {"-", "—", "–"}:
@@ -627,6 +638,9 @@ def make_analyze_procedure_task(
                 w.error.emit(f"Ошибка подключения к Chrome: {e}")
                 return
 
+        # Важно сделать это ДО чтения документов: OCR может загрузить Paddle,
+        # после чего на Windows импорт torch иногда падает на shm.dll.
+        rag_available = ragged_analysis_available()
         rows: list[list[str]] = []
 
         for index, proc in enumerate(procedures, start=1):
@@ -743,7 +757,7 @@ def make_analyze_procedure_task(
             err_msg: str | None = None
             rag_used = False
 
-            if ragged_analysis_available():
+            if rag_available:
                 try:
                     w.progress.emit(f"RAG: индексация и извлечение полей для {registry}…")
                     ingest_notes: list[str] = []
@@ -762,6 +776,19 @@ def make_analyze_procedure_task(
                     )
                     rag_used = True
                     sink["raw_by_registry"][registry] = raw_llm
+                    if _analysis_filled_count(parsed) < 3:
+                        rag_used = False
+                        sink["document_issues"].append(
+                            {
+                                "severity": "important",
+                                "registry": registry,
+                                "file": "RAG",
+                                "message": (
+                                    "RAG вернул слишком мало заполненных полей; "
+                                    "повторяю анализ одним запросом по полному тексту карточки и документов."
+                                ),
+                            }
+                        )
                     for note in ingest_notes:
                         sink["document_issues"].append(
                             {
