@@ -328,7 +328,7 @@ class MainWindow(QMainWindow):
             "total_price": 170,
             "total_price_with_vat": 170,
             "step_label": 220,
-            "quick_actions": 88,
+            "quick_actions": 132,
         }
         visible_columns = [
             i for i in range(self.proxy.columnCount())
@@ -342,7 +342,7 @@ class MainWindow(QMainWindow):
         for i, (key, _) in enumerate(COLUMNS[: self.proxy.columnCount()]):
             if key == "quick_actions":
                 hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
-                hh.resizeSection(i, widths_by_key.get(key, 88))
+                hh.resizeSection(i, widths_by_key.get(key, 132))
                 continue
             mode = (
                 QHeaderView.ResizeMode.Stretch
@@ -376,16 +376,16 @@ class MainWindow(QMainWindow):
                     vr = self.table.visualRect(idx)
                     if vr.contains(pos):
                         proc = self._proc_from_index(idx)
-                        rel = pos.x() - vr.left()
-                        half = max(vr.width() // 2, 1)
-                        if rel < half:
-                            self._run_tektorg_row_application_workflow(proc)
+                        rel_x = pos.x() - vr.left()
+                        cw = max(vr.width(), 1)
+                        t1 = cw // 3
+                        t2 = 2 * cw // 3
+                        if rel_x < t1:
+                            self._run_tektorg_prep_workflow(proc)
+                        elif rel_x < t2:
+                            self._run_tektorg_application_finishing_workflow(proc)
                         else:
-                            QMessageBox.information(
-                                self,
-                                "Оферта",
-                                "Подача заявки оферты (в разработке)",
-                            )
+                            QMessageBox.information(self, "Информация", "3 сценарий")
                         return True
 
         if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
@@ -1306,7 +1306,70 @@ class MainWindow(QMainWindow):
             return
         self._application_workflow_started_at = time.perf_counter()
         self._open_in_browser(proc)
-        self._start_tektorg_row_download(proc)
+        self._start_tektorg_row_download(proc, follow_up="full")
+
+    def _run_tektorg_prep_workflow(self, proc: Optional[dict[str, Any]]) -> None:
+        """Сценарий 1: открыть карточку, скачать файлы → «Готово» → распределить по папкам, без перехода к заявке."""
+        if not proc or self._platform_key != "tektorg_rn":
+            return
+        self._application_workflow_started_at = time.perf_counter()
+        self._open_in_browser(proc)
+        self._start_tektorg_row_download(proc, follow_up="prep")
+
+    def _run_tektorg_application_finishing_workflow(self, proc: Optional[dict[str, Any]]) -> None:
+        """Сценарий 2: переход на страницу создания заявки и робот до конца (без скачивания и распределения)."""
+        if not proc or self._platform_key != "tektorg_rn":
+            return
+        if self.row_download_runner.is_running():
+            self.status_msg.setText("Сначала дождитесь завершения скачивания документов.")
+            return
+        if self.technical_upload_runner.is_running():
+            self.status_msg.setText("Технические файлы уже загружаются в форму заявки.")
+            return
+
+        proc_copy = dict(proc)
+        folder = self._ensure_procedure_folder(proc_copy)
+        if folder is None:
+            return
+        technical_dir = folder / "Технические"
+        try:
+            technical_dir.mkdir(parents=True, exist_ok=True)
+            has_technical = any(
+                p for p in technical_dir.iterdir() if p.is_file() or (p.is_dir() and not p.name.startswith("."))
+            )
+        except OSError:
+            QMessageBox.warning(
+                self,
+                "Папка технических документов",
+                f"Не удалось получить доступ к каталогу:\n{technical_dir}",
+            )
+            return
+
+        if not has_technical:
+            mb = QMessageBox(self)
+            mb.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+            mb.setIcon(QMessageBox.Warning)
+            mb.setWindowTitle("Технические файлы не найдены")
+            mb.setText(
+                f"В папке «Технические» нет файлов:\n{technical_dir}\n\n"
+                "Выполните сценарий подготовки (первая иконка), отсортируйте документы, "
+                "или скопируйте технические файлы вручную.\n\n"
+                "Открыть страницу подачи заявки и запустить робота всё равно?"
+            )
+            mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            mb.setDefaultButton(QMessageBox.StandardButton.No)
+            if mb.exec() != QMessageBox.StandardButton.Yes:
+                return
+
+        self._application_workflow_started_at = time.perf_counter()
+        self._row_download_sink.clear()
+        self._row_download_sink["proc"] = proc_copy
+        self._row_download_sink["folder"] = str(folder)
+
+        application_url = self._open_application_create_tab(proc_copy)
+        if not application_url:
+            return
+        self._start_technical_upload(application_url, technical_dir)
 
     def _on_row_double_clicked(self, idx: QModelIndex) -> None:
         if idx.column() == self._quick_actions_column:
@@ -1316,7 +1379,7 @@ class MainWindow(QMainWindow):
             if self._application_workflow_started_at is None:
                 self._application_workflow_started_at = time.perf_counter()
             self._open_in_browser(proc)
-            self._start_tektorg_row_download(proc)
+            self._start_tektorg_row_download(proc, follow_up="full")
             return
         self._open_in_browser(proc)
 
@@ -1388,7 +1451,12 @@ class MainWindow(QMainWindow):
             )
         return True
 
-    def _start_tektorg_row_download(self, proc: Optional[dict[str, Any]]) -> None:
+    def _start_tektorg_row_download(
+        self,
+        proc: Optional[dict[str, Any]],
+        *,
+        follow_up: str = "full",
+    ) -> None:
         if not proc or self._platform_key != "tektorg_rn":
             return
         if self.row_download_runner.is_running():
@@ -1396,6 +1464,7 @@ class MainWindow(QMainWindow):
             return
         self._row_download_sink.clear()
         self._row_download_sink["proc"] = dict(proc)
+        self._row_download_sink["follow_up"] = follow_up if follow_up in {"prep", "full"} else "full"
         fn = make_tektorg_row_documents_task(self.client, proc, sink=self._row_download_sink)
         try:
             self.row_download_runner.start(
@@ -1413,16 +1482,26 @@ class MainWindow(QMainWindow):
         if not ok:
             QMessageBox.warning(self, "Скачивание документов", message)
             return
+        follow_up = str(self._row_download_sink.get("follow_up") or "full")
         self._bring_window_to_front()
         box = QMessageBox(self)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.setIcon(QMessageBox.Information)
         box.setWindowTitle("Файлы скачаны")
-        box.setText(
-            "Документация по выбранной процедуре успешно загружена.\n\n"
-            "Пожалуйста, заполните необходимые документы. "
-            "После завершения заполнения нажмите «Готово» для продолжения работы."
-        )
+        if follow_up == "prep":
+            box.setText(
+                "Документация по выбранной процедуре успешно загружена.\n\n"
+                "Заполните необходимые документы. После этого нажмите «Готово» — "
+                "робот распределит файлы по папкам «Коммерческие» и «Технические».\n\n"
+                "Этот сценарий завершается после распределения; переход к странице "
+                "заявки не выполняется."
+            )
+        else:
+            box.setText(
+                "Документация по выбранной процедуре успешно загружена.\n\n"
+                "Пожалуйста, заполните необходимые документы. "
+                "После завершения заполнения нажмите «Готово» для продолжения работы."
+            )
         btn_done = box.addButton("Готово", QMessageBox.AcceptRole)
         box.exec()
         if box.clickedButton() is btn_done:
@@ -1461,6 +1540,16 @@ class MainWindow(QMainWindow):
                 "Часть файлов не удалось переместить:\n\n" + "\n".join(str(e) for e in errors[:10]),
             )
             return
+        follow_up = str(self._row_download_sink.get("follow_up") or "full")
+        if follow_up == "prep":
+            QMessageBox.information(
+                self,
+                "Распределение завершено",
+                "Файлы распределены по папкам «Коммерческие» и «Технические».\n\n"
+                f"Коммерческих файлов в папке: {commercial_count}, технических: {technical_count}.\n\n"
+                "Сценарий подготовки документов завершён.",
+            )
+            return
         application_url = self._open_application_create_tab()
         if application_url:
             self._start_technical_upload(application_url, folder / "Технические")
@@ -1484,8 +1573,9 @@ class MainWindow(QMainWindow):
         """Не выводить окно браузера на передний план Selenium/OS — пользователь переключается сам."""
         return None
 
-    def _application_create_url(self) -> str:
-        proc = self._row_download_sink.get("proc") or {}
+    def _application_create_url_for_proc(self, proc: Optional[dict[str, Any]]) -> str:
+        if not proc:
+            return ""
         proc_id = (
             proc.get("procedure_id")
             or proc.get("procedureId")
@@ -1500,11 +1590,24 @@ class MainWindow(QMainWindow):
         )
         if not proc_id or not lot_id:
             return ""
-        return f"https://rn.tektorg.ru/index.php#com/applic/create/lot/{lot_id}/procedure/{proc_id}"
+        return (
+            "https://rn.tektorg.ru/index.php#com/applic/create/lot/"
+            f"{lot_id}/procedure/{proc_id}"
+        )
 
-    def _open_application_create_tab(self) -> str:
+    def _application_create_url(self) -> str:
+        raw = self._row_download_sink.get("proc")
+        proc_dict = raw if isinstance(raw, dict) else None
+        return self._application_create_url_for_proc(proc_dict)
+
+    def _open_application_create_tab(self, proc: Optional[dict[str, Any]] = None) -> str:
         try:
-            url = self._application_create_url()
+            proc_dict = proc
+            if proc_dict is None:
+                raw_sink = self._row_download_sink.get("proc")
+                proc_dict = raw_sink if isinstance(raw_sink, dict) else {}
+
+            url = self._application_create_url_for_proc(proc_dict)
             if not url:
                 QMessageBox.warning(
                     self,
@@ -1838,7 +1941,7 @@ class MainWindow(QMainWindow):
                 [self.model._display(p, key) for key, _ in COLUMNS]
                 + [p.get("id"), fmt_date(parse_dt(p.get("date_published")))]
             )
-        widths = [18, 36, 18, 20, 20, 20, 28, 10, 12, 14, 20]
+        widths = [18, 36, 18, 20, 20, 20, 28, 10, 18, 14, 20]
         for i, w in enumerate(widths, start=1):
             col_letter = ws.cell(row=1, column=i).column_letter
             ws.column_dimensions[col_letter].width = w

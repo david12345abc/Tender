@@ -1,4 +1,4 @@
-"""Делегат для колонки «быстрые действия»: две иконки в одной ячейке."""
+"""Делегат для колонки «быстрые действия»: три разные системные иконки в одной ячейке."""
 
 from __future__ import annotations
 
@@ -8,9 +8,10 @@ from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleO
 
 
 class QuickActionsDelegate(QStyledItemDelegate):
-    """Рисует две стандартные пиктограммы по центру строки."""
+    """Рисует три пиктограммы разного семейства (табличный вид / подтверждение / инфо)."""
 
     ICON_SIZE = 20
+    GAP_RATIO = 0.08  # минимальный зазор относительно ширины ячейки
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         opt = QStyleOptionViewItem(option)
@@ -24,30 +25,32 @@ class QuickActionsDelegate(QStyledItemDelegate):
         painter.restore()
 
         style = widget.style() if widget is not None else QApplication.style()
-        px1 = style.standardPixmap(
-            QStyle.StandardPixmap.SP_ArrowForward,
-            None,
-            widget,
-        )
-        px2 = style.standardPixmap(
-            QStyle.StandardPixmap.SP_CommandLink,
-            None,
-            widget,
-        )
+        px_specs = [
+            QStyle.StandardPixmap.SP_FileDialogDetailedView,
+            QStyle.StandardPixmap.SP_DialogApplyButton,
+            QStyle.StandardPixmap.SP_MessageBoxInformation,
+        ]
+        raw = [
+            style.standardPixmap(spx, None, widget)
+            for spx in px_specs
+        ]
 
         iz = max(14, min(self.ICON_SIZE, option.rect.height() - 4))
-        p1 = px1.scaled(iz, iz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-        p2 = px2.scaled(iz, iz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        scaled = [
+            px.scaled(iz, iz, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            for px in raw
+        ]
 
         r = option.rect
-        gap = max(6, r.width() // 12)
-        total_w = p1.width() + gap + p2.width()
-        x0 = r.left() + max(4, (r.width() - total_w) // 2)
-        y0 = r.top() + (r.height() - p1.height()) // 2
+        gap = max(5, int(r.width() * self.GAP_RATIO))
+        total_w = sum(p.width() for p in scaled) + gap * (len(scaled) - 1)
+        x = r.left() + max(2, (r.width() - total_w) // 2)
 
-        painter.drawPixmap(x0, y0, p1)
-        painter.drawPixmap(x0 + p1.width() + gap, y0, p2)
+        for pix in scaled:
+            vy = r.top() + (r.height() - pix.height()) // 2
+            painter.drawPixmap(x, vy, pix)
+            x += pix.width() + gap
 
     def sizeHint(self, option: QStyleOptionViewItem, index) -> QSize:
         h = super().sizeHint(option, index).height()
-        return QSize(88, max(h, self.ICON_SIZE + 8))
+        return QSize(132, max(h, self.ICON_SIZE + 8))
