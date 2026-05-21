@@ -36,7 +36,7 @@ from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
 # Значение строки быстрого поиска при первом открытии (режим «по номеру» по умолчанию).
-DEFAULT_QUICK_SEARCH_VALUE = "РН60500923"
+DEFAULT_QUICK_SEARCH_VALUE = ""
 
 
 class StatusMultiSelect(QWidget):

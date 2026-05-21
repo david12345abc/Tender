@@ -68,4 +68,6 @@ COLUMNS: list[tuple[str, str]] = [
     ("total_price", "НМЦ"),
     ("total_price_with_vat", "НМЦ с НДС"),
     ("step_label", "Стадия"),
+    # Без заголовка: быстрые действия (иконки в ячейке рисует делегат).
+    ("quick_actions", ""),
 ]

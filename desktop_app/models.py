@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Optional
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QObject, QSortFilterProxyModel, Qt
 from PySide6.QtGui import QColor
 
 from etp_client import procedure_type_label, step_id_label, trend_pur_label
@@ -267,6 +267,8 @@ class ProcedureTableModel(QAbstractTableModel):
             return proc.get("title") or ""
         if key == "registry_number":
             return proc.get("registry_number") or proc.get("procedure_number") or ""
+        if key == "quick_actions":
+            return ""
         if key == "keyword_matches":
             return ", ".join(self._keyword_matches(proc))
         return proc.get(key, "")
@@ -302,6 +304,8 @@ class ProcedureTableModel(QAbstractTableModel):
             return str(proc.get("title") or "").lower()
         if key == "registry_number":
             return str(proc.get("registry_number") or proc.get("procedure_number") or "")
+        if key == "quick_actions":
+            return ""
         if key == "keyword_matches":
             return self._display(proc, key)
         return str(proc.get(key) or "")
@@ -320,6 +324,8 @@ class ProcedureTableModel(QAbstractTableModel):
         if role == Qt.UserRole:
             return self._sort_value(proc, col_key)
         if role == Qt.TextAlignmentRole:
+            if col_key == "quick_actions":
+                return int(Qt.AlignCenter | Qt.AlignVCenter)
             if col_key in ("total_price", "applics_count"):
                 return int(Qt.AlignRight | Qt.AlignVCenter)
             return int(Qt.AlignLeft | Qt.AlignVCenter)
@@ -362,6 +368,12 @@ class ProcedureTableModel(QAbstractTableModel):
                         info.append(f"{k}: {v}")
                 info.append(f"id: {proc.get('id')}")
                 return "\n".join(info)
+            if col_key == "quick_actions":
+                return (
+                    "Слева: подать заявку ТКП (открыть карточку и докачать документы, "
+                    "как при работе через «Поиск по номеру»).\n"
+                    "Справа: подача заявки на оферту (скоро)."
+                )
         if role == Qt.BackgroundRole:
             return self._status_background_color(proc)
         return None

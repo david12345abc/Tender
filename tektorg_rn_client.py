@@ -3894,52 +3894,139 @@ return true;
             return False
 
     def _choose_file_in_windows_dialog(self, hwnd: int, path: Path) -> None:
-        from pywinauto import Desktop
-        from pywinauto.keyboard import send_keys
+        """Подставить путь без активации диалога и проводника (WM_SETTEXT / BM_CLICK)."""
+        import win32con
+        import win32gui
 
-        dialog = Desktop(backend="win32").window(handle=hwnd)
-        dialog.wait("visible enabled ready", timeout=3)
-        dialog.set_focus()
-        edits = [
-            edit for edit in dialog.descendants(class_name="Edit")
-            if edit.is_visible() and edit.is_enabled()
-        ]
-        if not edits:
-            self._choose_file_in_windows_dialog_via_clipboard(path)
-            return
-        edits.sort(key=lambda edit: edit.rectangle().top, reverse=True)
-        file_name_edit = edits[0]
+        path_str = str(path)
+
+        def child_hwnds(parent: int) -> list[int]:
+            found: list[int] = []
+
+            def _cb(ch: int, _):
+                found.append(ch)
+
+            try:
+                win32gui.EnumChildWindows(parent, _cb, None)
+            except Exception:
+                return []
+            return found
+
+        def all_descendants(root: int) -> list[int]:
+            acc: list[int] = []
+            stack = [root]
+            while stack:
+                cur = stack.pop()
+                for ch in child_hwnds(cur):
+                    acc.append(ch)
+                    stack.append(ch)
+            return acc
+
+        descendants = all_descendants(hwnd)
+        edit_hwnds = []
+        for eh in descendants:
+            try:
+                if str(win32gui.GetClassName(eh) or "").lower() == "edit":
+                    edit_hwnds.append(eh)
+            except Exception:
+                continue
+        if not edit_hwnds:
+            try:
+                from pywinauto import Desktop
+
+                dialog = Desktop(backend="win32").window(handle=hwnd)
+                dialog.wait("exists enabled visible", timeout=3)
+                wrappers = [
+                    e
+                    for e in dialog.descendants(class_name="Edit")
+                    if e.is_visible() and e.is_enabled()
+                ]
+                for w in wrappers:
+                    try:
+                        edit_hwnds.append(int(w.handle))
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        def sort_key(eh: int) -> tuple[float, float]:
+            try:
+                left, top, right, bottom = win32gui.GetWindowRect(eh)
+                width = max(0.0, float(right - left))
+                top_f = float(top)
+                return (-width, -top_f)
+            except Exception:
+                return (0.0, 0.0)
+
+        if edit_hwnds:
+            edit_hwnds.sort(key=sort_key)
+            for candidate in edit_hwnds:
+                try:
+                    if win32gui.SendMessage(candidate, win32con.WM_SETTEXT, 0, path_str):
+                        break
+                except Exception:
+                    continue
+            else:
+                try:
+                    win32gui.SendMessage(edit_hwnds[0], win32con.WM_SETTEXT, 0, path_str)
+                except Exception:
+                    pass
+
+        # Кнопки «Открыть» / «Open» — BM_CLICK без перевода фокуса
+        button_hwnds = []
+        for bh in descendants:
+            try:
+                if str(win32gui.GetClassName(bh) or "").lower() == "button":
+                    button_hwnds.append(bh)
+            except Exception:
+                continue
+        if not button_hwnds:
+            try:
+                from pywinauto import Desktop
+
+                dialog = Desktop(backend="win32").window(handle=hwnd)
+                for w in dialog.descendants(class_name="Button"):
+                    if w.is_visible() and w.is_enabled():
+                        try:
+                            button_hwnds.append(int(w.handle))
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+        for btn in button_hwnds:
+            try:
+                raw = str(win32gui.GetWindowText(btn) or "")
+                title = raw.replace("&", "").strip()
+                if re.search(r"^(Открыть|Open|Выбрать|Choose)$", title, re.I):
+                    win32gui.SendMessage(btn, win32con.BM_CLICK, 0, None)
+                    return
+            except Exception:
+                continue
+        # Попытка умолчальной кнопки диалога (#32770 часто IDOK=1)
         try:
-            file_name_edit.set_focus()
-            file_name_edit.set_edit_text(str(path))
+            kid = win32gui.GetDlgItem(hwnd, 1)
+            if kid:
+                win32gui.SendMessage(kid, win32con.BM_CLICK, 0, None)
+                return
         except Exception:
-            self._set_windows_clipboard_text(str(path))
-            file_name_edit.click_input()
-            send_keys("^a")
-            send_keys("^v")
-        buttons = [
-            button for button in dialog.descendants(class_name="Button")
-            if button.is_visible() and button.is_enabled()
-        ]
-        open_button = None
-        for button in buttons:
-            title = str(button.window_text() or "").replace("&", "").strip()
-            if re.search(r"^(Открыть|Open|Выбрать|Choose)$", title, re.I):
-                open_button = button
-                break
-        if open_button is not None:
-            open_button.click_input()
-            return
-        dialog.set_focus()
-        send_keys("{ENTER}")
+            pass
 
-    def _choose_file_in_windows_dialog_via_clipboard(self, path: Path) -> None:
-        self._set_windows_clipboard_text(str(path))
-        from pywinauto.keyboard import send_keys
+        # Крайний случай: pywinauto только для клика сообщением, без set_focus окна
+        try:
+            from pywinauto import Desktop
 
-        send_keys("^v")
-        time.sleep(0.05)
-        send_keys("{ENTER}")
+            dlg = Desktop(backend="win32").window(handle=hwnd)
+            for btn in dlg.descendants(class_name="Button"):
+                title = str(btn.window_text() or "").replace("&", "").strip()
+                if re.search(r"^(Открыть|Open|Выбрать|Choose)$", title, re.I):
+                    try:
+                        win32gui.SendMessage(int(btn.handle), win32con.BM_CLICK, 0, None)
+                    except Exception:
+                        pass
+                    return
+        except Exception:
+            pass
 
     def _wait_for_windows_file_dialog(self, timeout_seconds: float = 5.0) -> int | None:
         try:
@@ -3987,8 +4074,8 @@ return true;
             if candidates:
                 hwnd = candidates[0]
                 try:
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNORMAL)
-                    win32gui.SetForegroundWindow(hwnd)
+                    # Показать без активации — не перебивать окно приложения
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOWNOACTIVATE)
                 except Exception:
                     pass
                 return hwnd
@@ -4010,16 +4097,6 @@ return true;
             time.sleep(0.1)
         return False
 
-    def _set_windows_clipboard_text(self, text: str) -> None:
-        import win32clipboard
-        import win32con
-
-        win32clipboard.OpenClipboard()
-        try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text)
-        finally:
-            win32clipboard.CloseClipboard()
 
     def _switch_to_etp_tab(self) -> bool:
         switched = super()._switch_to_etp_tab()

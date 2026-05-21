@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QTimer, Qt, Slot
-from PySide6.QtGui import QAction, QColor, QFont, QKeySequence
+from PySide6.QtGui import QAction, QColor, QFont, QKeySequence, QMouseEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -61,6 +61,7 @@ from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
 from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
+from .quick_actions_delegate import QuickActionsDelegate
 from .sidebar import Sidebar
 from .utils import fmt_date, parse_dt
 from .worker import (
@@ -222,6 +223,14 @@ class MainWindow(QMainWindow):
         self.table.doubleClicked.connect(self._on_row_double_clicked)
         self.proxy.modelReset.connect(self._apply_table_column_widths)
         self.table.viewport().installEventFilter(self)
+
+        self._quick_actions_column = next(
+            i for i, (k, _) in enumerate(COLUMNS) if k == "quick_actions"
+        )
+        self.table.setItemDelegateForColumn(
+            self._quick_actions_column, QuickActionsDelegate(self.table)
+        )
+
         self._apply_table_column_widths()
         main_area_layout.addWidget(self.table, 1)
 
@@ -319,13 +328,22 @@ class MainWindow(QMainWindow):
             "total_price": 170,
             "total_price_with_vat": 170,
             "step_label": 220,
+            "quick_actions": 88,
         }
         visible_columns = [
             i for i in range(self.proxy.columnCount())
             if not self.table.isColumnHidden(i)
         ]
-        last_visible = visible_columns[-1] if visible_columns else -1
+        stretch_candidates = [
+            i for i in visible_columns
+            if COLUMNS[i][0] != "quick_actions"
+        ]
+        last_visible = stretch_candidates[-1] if stretch_candidates else -1
         for i, (key, _) in enumerate(COLUMNS[: self.proxy.columnCount()]):
+            if key == "quick_actions":
+                hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Fixed)
+                hh.resizeSection(i, widths_by_key.get(key, 88))
+                continue
             mode = (
                 QHeaderView.ResizeMode.Stretch
                 if i == last_visible
@@ -335,15 +353,41 @@ class MainWindow(QMainWindow):
             hh.resizeSection(i, widths_by_key.get(key, 160))
 
     def _apply_search_mode_column_visibility(self) -> None:
-        hidden_keys = (
-            {"lots_count", "total_price_with_vat"}
-            if self.sidebar.btn_search_by_number.isChecked()
-            else set()
-        )
+        hidden_keys: set[str] = set()
+        if self.sidebar.btn_search_by_number.isChecked():
+            hidden_keys.update({"lots_count", "total_price_with_vat"})
+        if self._platform_key != "tektorg_rn":
+            hidden_keys.add("quick_actions")
         for i, (key, _) in enumerate(COLUMNS):
             self.table.setColumnHidden(i, key in hidden_keys)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.table.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
+            me = event
+            if isinstance(me, QMouseEvent) and me.button() == Qt.MouseButton.LeftButton:
+                pos = me.position().toPoint()
+                idx = self.table.indexAt(pos)
+                if (
+                    idx.isValid()
+                    and idx.column() == self._quick_actions_column
+                    and not self.table.isColumnHidden(self._quick_actions_column)
+                    and self._platform_key == "tektorg_rn"
+                ):
+                    vr = self.table.visualRect(idx)
+                    if vr.contains(pos):
+                        proc = self._proc_from_index(idx)
+                        rel = pos.x() - vr.left()
+                        half = max(vr.width() // 2, 1)
+                        if rel < half:
+                            self._run_tektorg_row_application_workflow(proc)
+                        else:
+                            QMessageBox.information(
+                                self,
+                                "Оферта",
+                                "Подача заявки оферты (в разработке)",
+                            )
+                        return True
+
         if watched is self.table.viewport() and event.type() == QEvent.Type.Wheel:
             wheel = event
             if wheel.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -419,6 +463,7 @@ class MainWindow(QMainWindow):
         self._refresh_counter()
         self._apply_platform_ui()
         self._update_controls()
+        self._apply_table_column_widths()
 
     def _ensure_platform_ready(self) -> bool:
         if self._is_platform_ready():
@@ -1251,12 +1296,21 @@ class MainWindow(QMainWindow):
     def _on_row_clicked(self, idx: QModelIndex) -> None:
         if not idx.isValid() or not self.sidebar.btn_search_by_number.isChecked():
             return
+        if idx.column() == self._quick_actions_column:
+            return
         proc = self._proc_from_index(idx)
+        self._run_tektorg_row_application_workflow(proc)
+
+    def _run_tektorg_row_application_workflow(self, proc: Optional[dict[str, Any]]) -> None:
+        if not proc or self._platform_key != "tektorg_rn":
+            return
         self._application_workflow_started_at = time.perf_counter()
         self._open_in_browser(proc)
         self._start_tektorg_row_download(proc)
 
     def _on_row_double_clicked(self, idx: QModelIndex) -> None:
+        if idx.column() == self._quick_actions_column:
+            return
         proc = self._proc_from_index(idx)
         if self.sidebar.btn_search_by_number.isChecked():
             if self._application_workflow_started_at is None:
@@ -1427,60 +1481,7 @@ class MainWindow(QMainWindow):
         self.show()
 
     def _bring_browser_to_front(self) -> Optional[int]:
-        try:
-            driver = self.client.driver
-            if driver is None:
-                return None
-            title = str(driver.title or "").strip()
-            browser_hint = str(getattr(self.client.browser, "label", "") or "").casefold()
-        except Exception:
-            return None
-
-        try:
-            self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
-            self.show()
-
-            import win32con
-            import win32gui
-
-            candidates: list[int] = []
-
-            def enum_handler(hwnd, _) -> None:
-                if not win32gui.IsWindowVisible(hwnd):
-                    return
-                window_title = win32gui.GetWindowText(hwnd)
-                if not window_title:
-                    return
-                low = window_title.casefold()
-                title_match = bool(title and title.casefold() in low)
-                browser_match = bool(
-                    ("chrome" in low or "edge" in low or browser_hint and browser_hint in low)
-                    and "cursor" not in low
-                )
-                if title_match or browser_match:
-                    candidates.append(hwnd)
-
-            win32gui.EnumWindows(enum_handler, None)
-            if not candidates:
-                return None
-
-            hwnd = candidates[0]
-            win32gui.SetWindowPos(
-                hwnd,
-                win32con.HWND_TOP,
-                0,
-                0,
-                0,
-                0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
-            )
-            win32gui.SetForegroundWindow(hwnd)
-            return hwnd
-        except Exception:
-            try:
-                self.showMinimized()
-            except Exception:
-                pass
+        """Не выводить окно браузера на передний план Selenium/OS — пользователь переключается сам."""
         return None
 
     def _application_create_url(self) -> str:
@@ -1788,7 +1789,6 @@ class MainWindow(QMainWindow):
                     driver.get(url)
             else:
                 driver.get(url)
-            self._bring_browser_to_front()
             return True
         except Exception as e:
             self.status_msg.setText(f"Не удалось открыть страницу в управляемом браузере: {e}")
@@ -1838,7 +1838,7 @@ class MainWindow(QMainWindow):
                 [self.model._display(p, key) for key, _ in COLUMNS]
                 + [p.get("id"), fmt_date(parse_dt(p.get("date_published")))]
             )
-        widths = [18, 36, 18, 20, 20, 20, 28, 10, 20]
+        widths = [18, 36, 18, 20, 20, 20, 28, 10, 12, 14, 20]
         for i, w in enumerate(widths, start=1):
             col_letter = ws.cell(row=1, column=i).column_letter
             ws.column_dimensions[col_letter].width = w
