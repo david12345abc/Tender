@@ -57,15 +57,12 @@ LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "yandexgpt-5-lite-8b-instruc
 
 COLUMNS: list[tuple[str, str]] = [
     ("registry_number", "Реестровый №"),
-    ("trend_pur_label", "Тип"),
     ("organizer", "Организатор"),
     ("title", "Наименование"),
     ("keyword_matches", "Ключевые слова"),
-    ("tags_label", "Теги"),
-    ("lot_divisibility", "Делимость лота"),
-    ("applics_count", "Намерений"),
     ("date_start_registration", "Приём заявок с"),
     ("date_end_registration", "Приём заявок до"),
     ("total_price", "Сумма"),
     ("step_label", "Статус"),
+    ("lot_divisibility", "Делимость лота"),
 ]

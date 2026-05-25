@@ -92,7 +92,7 @@ class LimitedWrapDelegate(QStyledItemDelegate):
     MIN_ROW_HEIGHT = 44
     PADDING = 14
 
-    BADGE_COLUMNS = {1, 5, 10}
+    BADGE_COLUMNS = {7}
 
     def initStyleOption(self, option: QStyleOptionViewItem, index: QModelIndex) -> None:  # noqa: N802
         super().initStyleOption(option, index)
@@ -123,11 +123,7 @@ class LimitedWrapDelegate(QStyledItemDelegate):
 
     def _badge_colors(self, column: int, text: str) -> tuple[QColor, QColor, QColor]:
         t = text.casefold()
-        if column == 5:
-            if "223" in t:
-                return QColor("#0f5132"), QColor("#1f9d55"), QColor("#bdf7d3")
-            return QColor("#123a74"), QColor("#2563eb"), QColor("#c9ddff")
-        if column == 10:
+        if column == 7:
             if "отмен" in t:
                 return QColor("#4a1625"), QColor("#9f2944"), QColor("#ffc2cf")
             if "итог" in t or "рассмотр" in t or "подвед" in t:
@@ -485,7 +481,7 @@ class MainWindow(QMainWindow):
     def _apply_table_column_widths(self) -> None:
         """Фиксированные ширины колонок — иначе заголовок сжимает их под вьюпорт и скролл не появляется."""
         hh = self.table.horizontalHeader()
-        widths = [170, 180, 230, 280, 220, 80, 130, 95, 145, 145, 170, 200]
+        widths = [170, 240, 340, 250, 145, 145, 170, 200, 150]
         n = min(len(widths), self.proxy.columnCount())
         for i in range(n):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
