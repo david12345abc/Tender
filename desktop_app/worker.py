@@ -731,14 +731,30 @@ def make_analyze_procedure_task(
                             f"[не удалось скачать: {e}]\n"
                         )
                 if downloaded_docs:
-                    extracted_text, extracted_folder = prepare_documents_for_analysis(
-                        downloaded_docs,
-                        unpacked_dir,
-                        progress=w.progress.emit,
-                        issues=sink["document_issues"],
-                        registry=registry,
-                    )
+                    try:
+                        extracted_text, extracted_folder = prepare_documents_for_analysis(
+                            downloaded_docs,
+                            unpacked_dir,
+                            progress=w.progress.emit,
+                            issues=sink["document_issues"],
+                            registry=registry,
+                        )
+                    except Exception as prep_exc:
+                        sink["document_issues"].append(
+                            {
+                                "severity": "critical",
+                                "registry": registry,
+                                "file": "",
+                                "message": f"Не удалось подготовить документы: {prep_exc}",
+                            }
+                        )
+                        extracted_text = ""
+                        extracted_folder = unpacked_dir
                     documents_text += "\n" + extracted_text
+                    try:
+                        Path(extracted_folder).mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
                     sink["unpacked_docs_by_registry"][registry] = str(extracted_folder)
                 else:
                     note = "Ссылки на документы были найдены, но скачать документы не удалось."

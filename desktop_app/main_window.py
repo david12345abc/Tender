@@ -1256,6 +1256,16 @@ class MainWindow(QMainWindow):
                 fallback_unpacked = ANALYSIS_DIR / "разархивированные_документы" / self._safe_folder_name(registry)
                 if fallback_unpacked.is_dir():
                     unpacked_path = fallback_unpacked
+                else:
+                    # Если рабочая папка пропала к моменту показа диалога
+                    # (например, временная очистка или ошибка распаковки),
+                    # пересоздаём её, чтобы кнопки «Скачать»/«Чат» работали и
+                    # не пугать пользователя «критической» ошибкой.
+                    try:
+                        fallback_unpacked.mkdir(parents=True, exist_ok=True)
+                        unpacked_path = fallback_unpacked
+                    except Exception:
+                        pass
             chat_dir = ANALYSIS_DIR / "rag_debug" / self._safe_folder_name(registry)
             summary_rows.append(
                 [
@@ -1329,15 +1339,26 @@ class MainWindow(QMainWindow):
             registry = str(row[0] if row else "").strip()
             docs_dir = row_docs_dir(row)
             if not docs_dir.is_dir():
-                display_issues.append(
-                    {
-                        "severity": "critical",
-                        "registry": registry,
-                        "file": "",
-                        "message": f"Папка разархивированных документов не найдена: {docs_dir or 'путь не задан'}",
-                    }
-                )
-            elif not any(p.is_file() for p in docs_dir.rglob("*")):
+                # Пытаемся восстановить папку, чтобы UI оставался рабочим:
+                # ошибки про реальные документы (не скачано, не распаковано и
+                # т.п.) уже добавлены воркером отдельным сообщением, дублировать
+                # критическую ошибку про «папка не найдена» бессмысленно.
+                try:
+                    docs_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as mkdir_exc:
+                    display_issues.append(
+                        {
+                            "severity": "important",
+                            "registry": registry,
+                            "file": "",
+                            "message": (
+                                f"Папка разархивированных документов недоступна "
+                                f"({docs_dir or 'путь не задан'}): {mkdir_exc}"
+                            ),
+                        }
+                    )
+                    continue
+            if not any(p.is_file() for p in docs_dir.rglob("*")):
                 display_issues.append(
                     {
                         "severity": "critical",
