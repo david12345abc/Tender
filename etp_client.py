@@ -319,118 +319,123 @@ const callback = arguments[arguments.length - 1];
 (async () => {
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   const bodyLen = () => String(document.body && document.body.innerText || "").length;
+  let done = false;
+  const finish = (payload) => {
+    if (done) return;
+    done = true;
+    callback(payload);
+  };
 
-  for (let i = 0; i < 60; i++) {
-    const t = String(document.body && document.body.innerText || "");
-    if (
-      /Сведения о процедуре/i.test(t)
-      || /Извещение о проведении/i.test(t)
-      || String(location.href || "").includes("procedure/view")
-    ) {
-      if (bodyLen() > 200) break;
-    }
-    await wait(400);
-  }
+  const guard = setTimeout(() => {
+    const fallbackText = String(document.body && document.body.innerText || "").trim();
+    finish({
+      ok: true,
+      pageText: fallbackText,
+      docLinks: [],
+      url: location.href,
+      charCount: fallbackText.length,
+      timedOut: true,
+    });
+  }, 18000);
 
-  const scrollMax = Math.max(
-    document.body ? document.body.scrollHeight : 0,
-    document.documentElement ? document.documentElement.scrollHeight : 0,
-    1500
-  );
-  for (let y = 0; y <= scrollMax; y += 450) {
-    window.scrollTo(0, y);
-    await wait(100);
-  }
-  window.scrollTo(0, scrollMax);
-  await wait(200);
-  window.scrollTo(0, 0);
-  await wait(150);
-
-  // Часть блоков карточки подгружается только на активной вкладке ExtJS — по очереди кликаем вкладки.
   try {
-    const tabInners = Array.from(
-      document.querySelectorAll(".x-tab-inner, .x-tab-inner-default, .x-tab-inner-el")
+    for (let i = 0; i < 45; i++) {
+      const t = String(document.body && document.body.innerText || "");
+      if (
+        (/Сведения о процедуре/i.test(t) || /Извещение о проведении/i.test(t)
+          || String(location.href || "").includes("procedure/view"))
+        && bodyLen() > 200
+      ) {
+        break;
+      }
+      await wait(250);
+    }
+
+    const scrollMax = Math.max(
+      document.body ? document.body.scrollHeight : 0,
+      document.documentElement ? document.documentElement.scrollHeight : 0,
+      1500
     );
-    const seenLabels = new Set();
-    for (const el of tabInners) {
-      const label = String(el.innerText || el.textContent || "").trim().slice(0, 160);
-      if (!label || seenLabels.has(label)) continue;
-      seenLabels.add(label);
-      try {
-        el.click();
-        await wait(320);
-      } catch (e) {}
+    for (let y = 0; y <= Math.min(scrollMax, 9000); y += 900) {
+      window.scrollTo(0, y);
+      await wait(60);
     }
-  } catch (e) {}
+    window.scrollTo(0, 0);
+    await wait(80);
 
-  await wait(450);
+    // Кликаем только вкладки, которые важны для карточки и лотов.
+    try {
+      const tabInners = Array.from(
+        document.querySelectorAll(".x-tab-inner, .x-tab-inner-default, .x-tab-inner-el")
+      );
+      const seenLabels = new Set();
+      for (const el of tabInners) {
+        const label = String(el.innerText || el.textContent || "").trim().slice(0, 160);
+        if (!label || seenLabels.has(label)) continue;
+        if (!/Сведения|Лот|Документ|Извещение|Товар/i.test(label)) continue;
+        seenLabels.add(label);
+        try {
+          el.click();
+          await wait(220);
+        } catch (e) {}
+      }
+    } catch (e) {}
 
-  const scrollMax2 = Math.max(
-    document.body ? document.body.scrollHeight : 0,
-    document.documentElement ? document.documentElement.scrollHeight : 0,
-    scrollMax,
-    1500
-  );
-  for (let y = 0; y <= scrollMax2; y += 450) {
-    window.scrollTo(0, y);
-    await wait(90);
-  }
-  window.scrollTo(0, scrollMax2);
-  await wait(220);
-  window.scrollTo(0, 0);
-  await wait(150);
-
-  function bestPageText() {
-    const chunks = [];
-    const pushEl = (el) => {
-      if (!el) return;
-      const t = String(el.innerText || el.textContent || "").trim();
-      if (t.length > 400) chunks.push(t);
-    };
-    pushEl(document.body);
-    const sels = [
-      ".x-region-center",
-      ".x-border-region-center",
-      ".x-panel-body-default",
-      ".x-panel-body",
-      "#procedureview",
-      "#procedure-view",
-      "[id*=procedure][id*=view]",
-      ".x-viewport-body",
-      "[role='main']",
-    ];
-    for (const sel of sels) {
-      try {
-        document.querySelectorAll(sel).forEach((el) => pushEl(el));
-      } catch (e) {}
+    function bestPageText() {
+      const chunks = [];
+      const pushEl = (el) => {
+        if (!el) return;
+        const t = String(el.innerText || el.textContent || "").trim();
+        if (t.length > 120) chunks.push(t);
+      };
+      pushEl(document.body);
+      const sels = [
+        ".x-region-center",
+        ".x-border-region-center",
+        ".x-panel-body-default",
+        ".x-panel-body",
+        "#procedureview",
+        "#procedure-view",
+        "[id*=procedure][id*=view]",
+        ".x-viewport-body",
+        "[role='main']",
+      ];
+      for (const sel of sels) {
+        try {
+          document.querySelectorAll(sel).forEach((el) => pushEl(el));
+        } catch (e) {}
+      }
+      chunks.sort((a, b) => b.length - a.length);
+      const body = String(document.body && document.body.innerText || "").trim();
+      const richest = chunks.length ? chunks[0] : "";
+      return body.length >= richest.length ? body : richest;
     }
-    chunks.sort((a, b) => b.length - a.length);
-    const body = String(document.body && document.body.innerText || "").trim();
-    const richest = chunks.length ? chunks[0] : "";
-    return body.length >= richest.length ? body : richest;
-  }
-  const pageText = bestPageText();
 
-  const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
-  const docLinks = [];
-  const seen = new Set();
-  for (const a of Array.from(document.querySelectorAll("a[href]"))) {
-    const href = a.href || "";
-    const tx = (a.innerText || a.textContent || "").trim();
-    if (!href || seen.has(href)) continue;
-    if (exts.test(href) || exts.test(tx) || /download|attach|file|document/i.test(href)) {
-      seen.add(href);
-      docLinks.push({ href, text: tx.slice(0, 240) });
+    const pageText = bestPageText();
+    const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
+    const docLinks = [];
+    const seen = new Set();
+    for (const a of Array.from(document.querySelectorAll("a[href]"))) {
+      const href = a.href || "";
+      const tx = (a.innerText || a.textContent || "").trim();
+      if (!href || seen.has(href)) continue;
+      if (exts.test(href) || exts.test(tx) || /download|attach|file|document/i.test(href)) {
+        seen.add(href);
+        docLinks.push({ href, text: tx.slice(0, 240) });
+      }
     }
+    clearTimeout(guard);
+    finish({
+      ok: true,
+      pageText,
+      docLinks,
+      url: location.href,
+      charCount: pageText.length,
+    });
+  } catch (e) {
+    clearTimeout(guard);
+    finish({ok: false, error: String(e), url: location.href});
   }
-
-  callback({
-    ok: true,
-    pageText,
-    docLinks,
-    url: location.href,
-    charCount: pageText.length,
-  });
 })();
 """
 

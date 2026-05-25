@@ -1201,6 +1201,7 @@ class MainWindow(QMainWindow):
             registry = str(row[0] if len(row) > 0 else "").strip() or "unknown"
             if len(row) > 10:
                 lot_divisibility_by_registry[registry] = str(row[10] or "").strip()
+            lot_count = str(row[11] if len(row) > 11 else "").strip() or "—"
             parsed_title = str(row[4] if len(row) > 4 else "").strip()
             source_title = str(title_by_registry.get(registry) or "").strip()
             title = parsed_title if parsed_title and parsed_title not in {"—", "не указано"} else source_title
@@ -1267,6 +1268,7 @@ class MainWindow(QMainWindow):
                 [
                     registry,
                     title or "—",
+                    lot_count,
                     str(path),
                     str(unpacked_path) if unpacked_path else "",
                     str(chat_dir),
@@ -1293,17 +1295,25 @@ class MainWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        headers = ["Реестровый номер", "Наименование", "Таблица анализа", "Разархивированные документы", "Чат"]
+        headers = [
+            "Реестровый номер",
+            "Наименование",
+            "Количество лотов",
+            "Таблица анализа",
+            "Разархивированные документы",
+            "Чат",
+        ]
         table = QTableWidget(len(rows), len(headers))
         table.setHorizontalHeaderLabels(headers)
         hh = table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hh.setStretchLastSection(False)
         table.setColumnWidth(0, 150)
-        table.setColumnWidth(1, 520)
-        table.setColumnWidth(2, 130)
-        table.setColumnWidth(3, 180)
-        table.setColumnWidth(4, 110)
+        table.setColumnWidth(1, 420)
+        table.setColumnWidth(2, 170)
+        table.setColumnWidth(3, 130)
+        table.setColumnWidth(4, 180)
+        table.setColumnWidth(5, 110)
         table.setWordWrap(True)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -1318,7 +1328,7 @@ class MainWindow(QMainWindow):
             return holder
 
         def row_docs_dir(row: list[str]) -> Path:
-            source = str(row[3] if len(row) > 3 else "").strip()
+            source = str(row[4] if len(row) > 4 else "").strip()
             registry = str(row[0] if row else "").strip()
             candidates = []
             if source:
@@ -1376,7 +1386,7 @@ class MainWindow(QMainWindow):
                 n += 1
 
         def copy_analysis_files(row_index: int) -> None:
-            source = rows[row_index][2] if 0 <= row_index < len(rows) and len(rows[row_index]) > 2 else ""
+            source = rows[row_index][3] if 0 <= row_index < len(rows) and len(rows[row_index]) > 3 else ""
             if not source:
                 return
             destination_dir = QFileDialog.getExistingDirectory(
@@ -1432,7 +1442,7 @@ class MainWindow(QMainWindow):
             registry = str(row[0] if len(row) > 0 else "")
             title = str(row[1] if len(row) > 1 else "")
             docs_dir = row_docs_dir(row)
-            index_dir = Path(str(row[4] if len(row) > 4 else ""))
+            index_dir = Path(str(row[5] if len(row) > 5 else ""))
             has_index = (index_dir / "index.faiss").is_file() and (index_dir / "metadata.json").is_file()
             if not has_index and not docs_dir.is_dir():
                 QMessageBox.information(
@@ -1500,16 +1510,18 @@ class MainWindow(QMainWindow):
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 item.setToolTip(val[:2000] if val else "")
-                if c in {2, 3, 4}:
+                if c in {3, 4, 5}:
                     item.setText("")
                 if c == 1:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                if c == 2:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 table.setItem(r, c, item)
 
             btn_table = QPushButton("Скачать")
-            btn_table.setEnabled(bool(row[2] if len(row) > 2 else ""))
+            btn_table.setEnabled(bool(row[3] if len(row) > 3 else ""))
             btn_table.clicked.connect(lambda _checked=False, row_index=r: copy_analysis_files(row_index))
-            table.setCellWidget(r, 2, centered_cell_widget(btn_table))
+            table.setCellWidget(r, 3, centered_cell_widget(btn_table))
 
             btn_docs = QPushButton("Скачать")
             docs_dir = row_docs_dir(row)
@@ -1517,10 +1529,10 @@ class MainWindow(QMainWindow):
             if not btn_docs.isEnabled():
                 btn_docs.setToolTip(f"Документы недоступны: {docs_dir or 'путь не задан'}")
             btn_docs.clicked.connect(lambda _checked=False, row_index=r: copy_unpacked_documents(row_index))
-            table.setCellWidget(r, 3, centered_cell_widget(btn_docs))
+            table.setCellWidget(r, 4, centered_cell_widget(btn_docs))
 
             btn_chat = QPushButton("Чат")
-            chat_source = Path(str(row[4] if len(row) > 4 else ""))
+            chat_source = Path(str(row[5] if len(row) > 5 else ""))
             docs_source = row_docs_dir(row)
             btn_chat.setEnabled(
                 (
@@ -1530,12 +1542,23 @@ class MainWindow(QMainWindow):
                 or docs_source.is_dir()
             )
             btn_chat.clicked.connect(lambda _checked=False, row_index=r: open_analysis_chat(row_index))
-            table.setCellWidget(r, 4, centered_cell_widget(btn_chat))
+            table.setCellWidget(r, 5, centered_cell_widget(btn_chat))
 
             title_len = len(str(row[1] if len(row) > 1 else ""))
             table.setRowHeight(r, min(112, max(72, 54 + (title_len // 90) * 18)))
 
         layout.addWidget(table, 1)
+
+        lot_summary = QLabel(
+            "Количество лотов: "
+            + "; ".join(
+                f"{str(row[0] if row else '').strip()}: {str(row[2] if len(row) > 2 else '—').strip() or '—'}"
+                for row in rows
+            )
+        )
+        lot_summary.setWordWrap(True)
+        lot_summary.setStyleSheet("font-weight: 600; margin-top: 6px;")
+        layout.addWidget(lot_summary)
 
         issues_label = QLabel("Ошибки обработки документов")
         issues_label.setStyleSheet("font-weight: 600; margin-top: 6px;")

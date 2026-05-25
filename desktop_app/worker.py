@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import traceback
 from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
@@ -46,6 +47,158 @@ def _analysis_filled_count(parsed: dict[str, str] | None) -> int:
         for value in parsed.values()
         if str(value or "").strip().casefold() not in empty_values
     )
+
+
+def _is_empty_analysis_value(value: Any) -> bool:
+    text = str(value or "").strip().casefold()
+    return text in {"", "—", "-", "null", "none", "не указано", "нет данных"}
+
+
+def _first_json_object(text: str) -> dict[str, Any]:
+    dec = json.JSONDecoder()
+    for i, ch in enumerate(str(text or "")):
+        if ch != "{":
+            continue
+        try:
+            value, _ = dec.raw_decode(text[i:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            return value
+    raise ValueError("В ответе модели не найден JSON-объект.")
+
+
+def _lot_count_number(value: Any) -> int:
+    text = str(value or "").strip()
+    match = re.search(r"\d{1,4}", text)
+    if not match:
+        return 0
+    return _safe_int(match.group(0), default=0)
+
+
+def _looks_negative_divisibility(value: Any) -> bool:
+    text = str(value or "").casefold()
+    return any(marker in text for marker in ("нет", "неделим", "единый лот", "одна позиция", "1 позиция"))
+
+
+def _parse_lot_count_response(raw: str) -> tuple[str, str]:
+    obj = _first_json_object(raw)
+    lot_count = "" if obj.get("lot_count") is None else str(obj.get("lot_count") or "").strip()
+    partial = (
+        ""
+        if obj.get("partial_supply_allowed") is None
+        else str(obj.get("partial_supply_allowed") or "").strip()
+    )
+    return lot_count, partial
+
+
+def _extract_lot_count_from_card_via_lm(
+    *,
+    registry: str,
+    detail_url: str,
+    page_text: str,
+    documents_text: str,
+    lm_base_url: str,
+    lm_model: str,
+) -> tuple[str, str, str]:
+    """Отдельный запрос к LM: всегда отдаём полную карточку для количества лотов."""
+    system_prompt = (
+        "Ты аналитик закупок секции Газпром. Твоя задача — определить делимость заявки "
+        "и количество лотов/товарных позиций. Не считай регулярными выражениями, а проанализируй "
+        "смысл карточки извещения и документов. Ответь только JSON-объектом без markdown."
+    )
+    user_prompt = (
+        f"Реестровый номер: {registry}\n"
+        f"URL карточки: {detail_url}\n\n"
+        "Определи:\n"
+        "1. lot_count — количество лотов или самостоятельных товарных позиций.\n"
+        "2. partial_supply_allowed — делимая заявка/лот или нет.\n\n"
+        "Правила:\n"
+        "- Главный источник — полный текст страницы карточки/извещения ниже. Его нужно анализировать всегда.\n"
+        "- Сначала ищи список лотов и строку вроде «Позиций всего: N»/«Список лотов».\n"
+        "- Если слово «лот» отсутствует, смотри перечень товаров: если самостоятельных товаров больше одного, "
+        "укажи количество товаров как количество товарных позиций и признак делимости.\n"
+        "- Если lot_count больше 1, partial_supply_allowed обязан быть положительным: "
+        "«Да, делимая: N товарных позиций/лотов».\n"
+        "- Если lot_count равен 1, partial_supply_allowed должен быть отрицательным или нейтральным: "
+        "«Нет, одна позиция/единый лот», если нет другой прямой формулировки.\n"
+        "- Документы используй как дополнительное подтверждение, если карточки недостаточно.\n"
+        "- Если число определить нельзя, верни null для lot_count и объясни в partial_supply_allowed, "
+        "что делимость не определена по доступному тексту.\n\n"
+        "Формат ответа строго:\n"
+        "{\"lot_count\": string|null, \"partial_supply_allowed\": string|null}\n\n"
+        "ПОЛНЫЙ ТЕКСТ СТРАНИЦЫ КАРТОЧКИ / ИЗВЕЩЕНИЯ:\n"
+        "-----\n"
+        f"{page_text or '[текст карточки не извлечён]'}\n"
+        "-----\n\n"
+        "РЕЛЕВАНТНЫЙ/ИЗВЛЕЧЁННЫЙ ТЕКСТ ДОКУМЕНТОВ ДЛЯ ПОДТВЕРЖДЕНИЯ:\n"
+        "-----\n"
+        f"{_trim_for_llm(documents_text, 80_000) or '[текст документов не извлечён]'}\n"
+        "-----\n"
+    )
+    raw = call_lm_studio_chat(
+        lm_base_url,
+        lm_model,
+        system_prompt,
+        user_prompt,
+        timeout_sec=900,
+        max_tokens=1200,
+    )
+    lot_count, partial = _parse_lot_count_response(raw)
+    if _lot_count_number(lot_count) > 1 and _looks_negative_divisibility(partial):
+        correction_prompt = (
+            "Ты вернул противоречивый ответ по закупке.\n"
+            f"Предыдущий JSON/ответ:\n{raw}\n\n"
+            f"В нём lot_count = {lot_count!r}, то есть товарных позиций/лотов больше одной, "
+            f"но partial_supply_allowed = {partial!r}, что означает неделимость.\n\n"
+            "Перепроверь полный текст карточки ниже и верни исправленный JSON. "
+            "Если lot_count больше 1, partial_supply_allowed должен быть положительным: "
+            "«Да, делимая: N товарных позиций/лотов». Ответ строго JSON без markdown.\n\n"
+            "ПОЛНЫЙ ТЕКСТ СТРАНИЦЫ КАРТОЧКИ / ИЗВЕЩЕНИЯ:\n"
+            "-----\n"
+            f"{page_text or '[текст карточки не извлечён]'}\n"
+            "-----\n\n"
+            "Формат ответа строго:\n"
+            "{\"lot_count\": string|null, \"partial_supply_allowed\": string|null}\n"
+        )
+        corrected_raw = call_lm_studio_chat(
+            lm_base_url,
+            lm_model,
+            system_prompt,
+            correction_prompt,
+            timeout_sec=900,
+            max_tokens=1200,
+        )
+        corrected_lot_count, corrected_partial = _parse_lot_count_response(corrected_raw)
+        return corrected_lot_count, corrected_partial, raw + "\n\n### lot_count_full_card_correction\n" + corrected_raw
+    return lot_count, partial, raw
+
+
+def _apply_lot_count_from_card_lm(
+    parsed: dict[str, str] | None,
+    *,
+    registry: str,
+    detail_url: str,
+    page_text: str,
+    documents_text: str,
+    lm_base_url: str,
+    lm_model: str,
+) -> tuple[dict[str, str] | None, str]:
+    lot_count, partial, raw = _extract_lot_count_from_card_via_lm(
+        registry=registry,
+        detail_url=detail_url,
+        page_text=page_text,
+        documents_text=documents_text,
+        lm_base_url=lm_base_url,
+        lm_model=lm_model,
+    )
+    if parsed is None:
+        parsed = {}
+    if not _is_empty_analysis_value(lot_count):
+        parsed["lot_count"] = lot_count
+    if not _is_empty_analysis_value(partial):
+        parsed["partial_supply_allowed"] = partial
+    return parsed, raw
 
 
 def _safe_int(value, default: int = 0) -> int:
@@ -888,6 +1041,36 @@ def make_analyze_procedure_task(
                             + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
                         )
 
+            try:
+                w.progress.emit(f"LM Studio: определяю количество лотов по полной карточке {registry}…")
+                parsed, lot_raw = _apply_lot_count_from_card_lm(
+                    parsed,
+                    registry=registry,
+                    detail_url=detail_url,
+                    page_text=page_text,
+                    documents_text=documents_text,
+                    lm_base_url=lm_base_url,
+                    lm_model=lm_model,
+                )
+                previous_raw = str(sink["raw_by_registry"].get(registry) or "")
+                sink["raw_by_registry"][registry] = (
+                    previous_raw
+                    + ("\n\n" if previous_raw else "")
+                    + "### lot_count_full_card\n"
+                    + lot_raw
+                )
+            except Exception as lot_exc:
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "LM Studio",
+                        "message": (
+                            "Не удалось отдельно определить количество лотов "
+                            f"по полной карточке: {lot_exc}"
+                        ),
+                    }
+                )
             rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
 
         sink["rows"] = rows

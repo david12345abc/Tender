@@ -9,7 +9,7 @@ import urllib.request
 BASE = "http://192.168.1.157:1234"
 MODELS_TO_TRY = [
     "openai/gpt-oss-120b",
-    "yandexgpt-5-lite-8b-instruct",
+    # "yandexgpt-5-lite-8b-instruct",
 ]
 
 
