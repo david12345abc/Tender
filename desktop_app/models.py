@@ -838,6 +838,22 @@ class ProcedureFilterProxy(QSortFilterProxyModel):
             ):
                 return False
 
+        if f.blacklist_keyword_search_enabled:
+            haystack = self._blob(
+                proc,
+                ("title", "name", "procedure_name"),
+            )
+            blacklist_keywords = tuple(k for k in f.blacklist_keywords if k.strip())
+            if blacklist_keywords and any(
+                contains_token_sequence(
+                    haystack,
+                    keyword,
+                    lemmatize=f.blacklist_keyword_lemma_enabled,
+                )
+                for keyword in blacklist_keywords
+            ):
+                return False
+
         if f.registry_contains:
             if not self._contains(
                 proc,

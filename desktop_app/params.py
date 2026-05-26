@@ -21,6 +21,9 @@ class ClientFilters:
     keyword_search_enabled: bool = False
     keyword_lemma_enabled: bool = False
     keywords: tuple[str, ...] = ()
+    blacklist_keyword_search_enabled: bool = False
+    blacklist_keyword_lemma_enabled: bool = False
+    blacklist_keywords: tuple[str, ...] = ()
     registry_contains: str = ""
     unique_number_contains: str = ""
     organizer_contains: str = ""

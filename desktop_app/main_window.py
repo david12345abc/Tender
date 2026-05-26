@@ -69,7 +69,14 @@ from .constants import (
 )
 from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
 from .gpb_rag.chat import answer_question_from_saved_index
-from .keywords import load_keyword_items, parse_keyword_items, save_keyword_items
+from .keywords import (
+    load_blacklist_keyword_items,
+    load_keyword_items,
+    parse_keyword_items,
+    save_blacklist_keyword_items,
+    save_keyword_items,
+    user_blacklist_keywords_path,
+)
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
@@ -83,7 +90,11 @@ from .worker import (
 
 
 DELETED_TENDERS_FILE = user_writable_root() / "deleted_tenders.json"
-TABLE_LAYOUT_FILE = Path("C:/ETP_GPB_Search_table_layout.json")
+TABLE_LAYOUT_CANDIDATES = (
+    Path("C:/ETP_GPB_Search_table_layout.json"),
+    user_writable_root() / "table_layout.json",
+    Path.home() / "ETP_GPB_Search_table_layout.json",
+)
 
 
 class LimitedWrapDelegate(QStyledItemDelegate):
@@ -268,6 +279,7 @@ class MainWindow(QMainWindow):
         self.sidebar.resetRequested.connect(self._on_reset_filters)
         self.sidebar.clientFiltersChanged.connect(self._on_filters_changed)
         self.sidebar.editKeywordsRequested.connect(self._on_edit_keywords)
+        self.sidebar.editBlacklistKeywordsRequested.connect(self._on_edit_blacklist_keywords)
 
         main_area = QWidget()
         main_area.setMinimumHeight(360)
@@ -503,41 +515,61 @@ class MainWindow(QMainWindow):
             return COLUMNS[logical_index][0]
         return ""
 
+    def _table_layout_payload(self) -> dict[str, Any]:
+        hh = self.table.horizontalHeader()
+        order: list[str] = []
+        for visual in range(hh.count()):
+            key = self._table_column_key(hh.logicalIndex(visual))
+            if key:
+                order.append(key)
+        widths = {
+            self._table_column_key(logical): hh.sectionSize(logical)
+            for logical in range(hh.count())
+            if self._table_column_key(logical)
+        }
+        return {
+            "version": 1,
+            "order": order,
+            "widths": widths,
+        }
+
+    def _write_table_layout_payload(self, payload: dict[str, Any]) -> Path | None:
+        last_error: Exception | None = None
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+        for path in TABLE_LAYOUT_CANDIDATES:
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+                return path
+            except Exception as exc:
+                last_error = exc
+                continue
+        if last_error is not None:
+            # Не печатаем traceback на каждое движение колонки: это UI-событие
+            # может срабатывать десятки раз подряд. Достаточно статус-бара.
+            self.status_msg.setText(f"Не удалось сохранить структуру таблицы: {last_error}")
+        return None
+
+    def _read_table_layout_payload(self) -> dict[str, Any] | None:
+        for path in TABLE_LAYOUT_CANDIDATES:
+            try:
+                if path.is_file():
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    return data if isinstance(data, dict) else None
+            except Exception:
+                continue
+        return None
+
     def _save_table_layout(self) -> None:
         if getattr(self, "_restoring_table_layout", False):
             return
-        try:
-            hh = self.table.horizontalHeader()
-            order: list[str] = []
-            for visual in range(hh.count()):
-                key = self._table_column_key(hh.logicalIndex(visual))
-                if key:
-                    order.append(key)
-            widths = {
-                self._table_column_key(logical): hh.sectionSize(logical)
-                for logical in range(hh.count())
-                if self._table_column_key(logical)
-            }
-            TABLE_LAYOUT_FILE.write_text(
-                json.dumps(
-                    {
-                        "version": 1,
-                        "order": order,
-                        "widths": widths,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-        except Exception:
-            traceback.print_exc()
+        self._write_table_layout_payload(self._table_layout_payload())
 
     def _restore_table_layout(self) -> None:
         try:
-            if not TABLE_LAYOUT_FILE.is_file():
+            data = self._read_table_layout_payload()
+            if data is None:
                 return
-            data = json.loads(TABLE_LAYOUT_FILE.read_text(encoding="utf-8"))
             saved_order = data.get("order") if isinstance(data, dict) else None
             saved_widths = data.get("widths") if isinstance(data, dict) else None
             if not isinstance(saved_order, list):
@@ -849,6 +881,13 @@ class MainWindow(QMainWindow):
                 "Список ключевых слов пуст. Добавьте слова через «Редактировать список».",
             )
             return
+        if filters.blacklist_keyword_search_enabled and not filters.blacklist_keywords:
+            QMessageBox.information(
+                self,
+                "Нет слов черного списка",
+                "Список черного списка пуст. Добавьте слова через «Список ЧС».",
+            )
+            return
         self.proxy.set_filters(self._display_filters_for_platform(filters))
         self.model.set_keywords(filters.keywords, filters.keyword_lemma_enabled)
 
@@ -886,6 +925,10 @@ class MainWindow(QMainWindow):
         )
         hint.setWordWrap(True)
         layout.addWidget(hint)
+        file_path_label = QLabel(f"Файл списка: {user_blacklist_keywords_path()}")
+        file_path_label.setWordWrap(True)
+        file_path_label.setStyleSheet("color: #94a3b8;")
+        layout.addWidget(file_path_label)
 
         keyword_list = QListWidget()
         keyword_list.setAlternatingRowColors(True)
@@ -1010,6 +1053,139 @@ class MainWindow(QMainWindow):
             self,
             "Список сохранён",
             f"Активных ключевых слов/фраз: {len(active_keywords)} из {len(items)}.",
+        )
+
+    def _on_edit_blacklist_keywords(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Черный список ключевых слов")
+        dialog.resize(720, 560)
+
+        layout = QVBoxLayout(dialog)
+        hint = QLabel(
+            "Отметьте галочками слова и фразы, которые нужно исключать из результатов. "
+            "Если включён фильтр «Черный список слов», будут показаны только процедуры, "
+            "где эти слова не встречаются в наименовании."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        keyword_list = QListWidget()
+        keyword_list.setAlternatingRowColors(True)
+        keyword_list.setSelectionMode(QListWidget.ExtendedSelection)
+        try:
+            keyword_items = load_blacklist_keyword_items()
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Не удалось открыть список",
+                "Не удалось открыть файл черного списка ключевых слов.\n\n"
+                f"Путь: {user_blacklist_keywords_path()}\n\n"
+                f"Подробности: {e}",
+            )
+            return
+        for enabled, keyword in keyword_items:
+            item = QListWidgetItem(keyword)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+                | Qt.ItemIsEditable
+                | Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+            )
+            item.setCheckState(Qt.Checked if enabled else Qt.Unchecked)
+            keyword_list.addItem(item)
+        layout.addWidget(keyword_list, 1)
+
+        actions = QHBoxLayout()
+        btn_all = QPushButton("Все")
+        btn_none = QPushButton("Снять все")
+        btn_add = QPushButton("Добавить")
+        btn_remove = QPushButton("Удалить выбранные")
+        actions.addWidget(btn_all)
+        actions.addWidget(btn_none)
+        actions.addStretch(1)
+        actions.addWidget(btn_add)
+        actions.addWidget(btn_remove)
+        layout.addLayout(actions)
+
+        def set_all(state: Qt.CheckState) -> None:
+            for i in range(keyword_list.count()):
+                keyword_list.item(i).setCheckState(state)
+
+        def add_keyword() -> None:
+            text, ok = QInputDialog.getText(
+                dialog,
+                "Добавить слово в черный список",
+                "Слово или фраза:",
+            )
+            if not ok:
+                return
+            rows = parse_keyword_items(text.strip())
+            if not rows:
+                QMessageBox.information(
+                    dialog,
+                    "Не добавлено",
+                    "Текст не принят: пустая строка, служебный фрагмент или слишком короткая фраза.",
+                )
+                return
+            _, keyword = rows[0]
+            item = QListWidgetItem(keyword)
+            item.setFlags(
+                item.flags()
+                | Qt.ItemIsUserCheckable
+                | Qt.ItemIsEditable
+                | Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+            )
+            item.setCheckState(Qt.Checked)
+            keyword_list.addItem(item)
+
+        def remove_selected() -> None:
+            for item in keyword_list.selectedItems():
+                keyword_list.takeItem(keyword_list.row(item))
+
+        btn_all.clicked.connect(lambda: set_all(Qt.Checked))
+        btn_none.clicked.connect(lambda: set_all(Qt.Unchecked))
+        btn_add.clicked.connect(add_keyword)
+        btn_remove.clicked.connect(remove_selected)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        items: list[tuple[bool, str]] = []
+        for i in range(keyword_list.count()):
+            item = keyword_list.item(i)
+            rows = parse_keyword_items(item.text())
+            if not rows:
+                continue
+            _, keyword = rows[0]
+            items.append((item.checkState() == Qt.Checked, keyword))
+        try:
+            save_blacklist_keyword_items(items)
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                "Не удалось сохранить",
+                "Не удалось записать файл черного списка ключевых слов.\n\n"
+                f"Путь: {user_blacklist_keywords_path()}\n\n"
+                f"Подробности: {e}",
+            )
+            return
+        self.sidebar.refresh_keywords_count()
+        self._on_filters_changed()
+        active = sum(1 for enabled, _keyword in items if enabled)
+        QMessageBox.information(
+            self,
+            "Черный список сохранён",
+            f"Активных слов/фраз черного списка: {active} из {len(items)}.",
         )
 
     def _ask_cache_choice(self) -> str:
@@ -1722,6 +1898,7 @@ class MainWindow(QMainWindow):
             (
                 bool(filters.quick_search),
                 bool(filters.keyword_search_enabled),
+                bool(filters.blacklist_keyword_search_enabled),
                 bool(filters.registry_contains),
                 bool(filters.unique_number_contains),
                 bool(filters.organizer_contains),

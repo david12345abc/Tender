@@ -411,7 +411,47 @@ const callback = arguments[arguments.length - 1];
       return body.length >= richest.length ? body : richest;
     }
 
+    function extractProductRowsInfo() {
+      const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
+      const candidates = Array.from(document.querySelectorAll(".x-fieldset-bwrap"));
+      let best = null;
+      for (const bwrap of candidates) {
+        const container = bwrap.closest(".x-fieldset") || bwrap.parentElement || bwrap;
+        const text = clean(container.innerText || container.textContent || "");
+        if (!/Перечень\s+товаров|Позиций\s+всего|Список\s+лотов/i.test(text)) {
+          continue;
+        }
+
+        const totalMatch = text.match(/(?:Позиций\s+всего|Всего\s+позиций)\s*[:\-]?\s*(\d{1,4})/i)
+          || text.match(/(?:Лотов\s+всего|Всего\s+лотов)\s*[:\-]?\s*(\d{1,4})/i);
+
+        const rows = Array.from(bwrap.querySelectorAll(
+          ".x-grid3-row, .x-grid-row, .x-grid-item, tr.x-grid-row, tbody tr"
+        )).filter((row) => {
+          const rowText = clean(row.innerText || row.textContent || "");
+          if (!rowText) return false;
+          if (/^(№|Наименование|Код\s+МТР|Количество|ЕИ)\b/i.test(rowText)) return false;
+          if (/Позиций\s+всего|Страница\s+\d+|Поиск/i.test(rowText)) return false;
+          return rowText.length > 3;
+        });
+
+        const total = totalMatch ? parseInt(totalMatch[1], 10) : 0;
+        const count = total || rows.length;
+        const item = {
+          count: Number.isFinite(count) ? count : 0,
+          source: total ? "fieldset_total" : "fieldset_rows",
+          text: text.slice(0, 6000),
+          rows: rows.map((row) => clean(row.innerText || row.textContent || "").slice(0, 1200)).slice(0, 50),
+        };
+        if (!best || item.count > best.count || (item.text.length > best.text.length && item.count === best.count)) {
+          best = item;
+        }
+      }
+      return best || {count: 0, source: "", text: "", rows: []};
+    }
+
     const pageText = bestPageText();
+    const productRowsInfo = extractProductRowsInfo();
     const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
     const docLinks = [];
     const seen = new Set();
@@ -429,6 +469,7 @@ const callback = arguments[arguments.length - 1];
       ok: true,
       pageText,
       docLinks,
+      productRowsInfo,
       url: location.href,
       charCount: pageText.length,
     });
@@ -1079,6 +1120,7 @@ class EtpClient:
             "page_text": page_text,
             "doc_links": doc_links if isinstance(doc_links, list) else [],
             "primary_doc_url": primary_file,
+            "product_rows_info": raw.get("productRowsInfo") if isinstance(raw.get("productRowsInfo"), dict) else {},
             "char_count": int(raw.get("charCount") or len(page_text)),
         }
 

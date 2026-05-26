@@ -33,7 +33,12 @@ from etp_client import PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS
 
 from .assets import asset_path
 from .browsers import BrowserConfig, available_browsers
-from .keywords import load_keyword_items, load_keywords
+from .keywords import (
+    load_blacklist_keyword_items,
+    load_blacklist_keywords,
+    load_keyword_items,
+    load_keywords,
+)
 from .params import ClientFilters, SearchParams
 
 DEFAULT_REQUEST_LIMIT = 500
@@ -368,6 +373,7 @@ class Sidebar(QWidget):
     loadAllRequested = Signal()
     stopRequested = Signal()
     editKeywordsRequested = Signal()
+    editBlacklistKeywordsRequested = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -662,6 +668,30 @@ class Sidebar(QWidget):
         self.lbl_keywords_count = QLabel()
         self.lbl_keywords_count.setObjectName("KeywordsCountLabel")
         actions_row.addWidget(self.lbl_keywords_count)
+
+        self.cb_blacklist_keyword_search = QCheckBox("Черный список слов")
+        self.cb_blacklist_keyword_search.setToolTip(
+            "Исключать процедуры, где в наименовании встречается хотя бы одно слово из черного списка"
+        )
+        actions_row.addWidget(self.cb_blacklist_keyword_search)
+        self.btn_blacklist_keyword_lemma = QPushButton("Лемматизация ЧС")
+        self.btn_blacklist_keyword_lemma.setObjectName("Ghost")
+        self.btn_blacklist_keyword_lemma.setCheckable(True)
+        self.btn_blacklist_keyword_lemma.setChecked(True)
+        self.btn_blacklist_keyword_lemma.setToolTip(
+            "Исключать по нормальным формам слов из черного списка."
+        )
+        self.btn_blacklist_keyword_lemma.setMinimumHeight(40)
+        self.btn_blacklist_keyword_lemma.setMaximumHeight(42)
+        actions_row.addWidget(self.btn_blacklist_keyword_lemma)
+        self.btn_edit_blacklist_keywords = QPushButton("Список ЧС")
+        self.btn_edit_blacklist_keywords.setObjectName("Ghost")
+        self.btn_edit_blacklist_keywords.setMinimumHeight(40)
+        self.btn_edit_blacklist_keywords.setMaximumHeight(42)
+        actions_row.addWidget(self.btn_edit_blacklist_keywords)
+        self.lbl_blacklist_keywords_count = QLabel()
+        self.lbl_blacklist_keywords_count.setObjectName("KeywordsCountLabel")
+        actions_row.addWidget(self.lbl_blacklist_keywords_count)
         actions_row.addStretch(1)
         self.btn_reset = QPushButton("Сбросить")
         self.btn_reset.setObjectName("Ghost")
@@ -947,6 +977,9 @@ class Sidebar(QWidget):
         self.cb_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         self.btn_keyword_lemma.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
         self.btn_edit_keywords.clicked.connect(self.editKeywordsRequested)
+        self.cb_blacklist_keyword_search.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.btn_blacklist_keyword_lemma.toggled.connect(lambda *_: self.clientFiltersChanged.emit())
+        self.btn_edit_blacklist_keywords.clicked.connect(self.editBlacklistKeywordsRequested)
 
     def _set_extra_visible(self, visible: bool) -> None:
         self.extra_scroll.setVisible(visible)
@@ -1241,6 +1274,10 @@ class Sidebar(QWidget):
 
     def client_filters(self) -> ClientFilters:
         keywords = tuple(load_keywords()) if self.cb_keyword_search.isChecked() else ()
+        blacklist_keywords = (
+            tuple(load_blacklist_keywords())
+            if self.cb_blacklist_keyword_search.isChecked() else ()
+        )
         quick_trends = self.cb_quick_trend.selected_values()
         quick_laws = self.cb_quick_law.selected_values()
         if self._platform_key == "roseltorg":
@@ -1249,6 +1286,9 @@ class Sidebar(QWidget):
                 keyword_search_enabled=self.cb_keyword_search.isChecked(),
                 keyword_lemma_enabled=self.btn_keyword_lemma.isChecked(),
                 keywords=keywords,
+                blacklist_keyword_search_enabled=self.cb_blacklist_keyword_search.isChecked(),
+                blacklist_keyword_lemma_enabled=self.btn_blacklist_keyword_lemma.isChecked(),
+                blacklist_keywords=blacklist_keywords,
                 organizer_contains=self.ed_organizer.text().strip(),
                 trend_pur=quick_trends[0] if len(quick_trends) == 1 else (self.cb_trend.currentData() or ""),
                 trend_pur_values=quick_trends,
@@ -1291,6 +1331,9 @@ class Sidebar(QWidget):
             keyword_search_enabled=self.cb_keyword_search.isChecked(),
             keyword_lemma_enabled=self.btn_keyword_lemma.isChecked(),
             keywords=keywords,
+            blacklist_keyword_search_enabled=self.cb_blacklist_keyword_search.isChecked(),
+            blacklist_keyword_lemma_enabled=self.btn_blacklist_keyword_lemma.isChecked(),
+            blacklist_keywords=blacklist_keywords,
             registry_contains=self.ed_registry.text().strip(),
             unique_number_contains=self.ed_unique_number.text().strip(),
             organizer_contains=self.ed_organizer.text().strip(),
@@ -1351,6 +1394,8 @@ class Sidebar(QWidget):
         self.ed_quick_search.clear()
         self.cb_keyword_search.setChecked(False)
         self.btn_keyword_lemma.setChecked(True)
+        self.cb_blacklist_keyword_search.setChecked(False)
+        self.btn_blacklist_keyword_lemma.setChecked(True)
         self.ed_registry.clear()
         self.ed_unique_number.clear()
         self.ed_organizer.clear()
@@ -1398,6 +1443,11 @@ class Sidebar(QWidget):
         items = load_keyword_items()
         active = sum(1 for enabled, _ in items if enabled)
         self.lbl_keywords_count.setText(f"Активных слов: {active}/{len(items)}")
+        blacklist_items = load_blacklist_keyword_items()
+        blacklist_active = sum(1 for enabled, _ in blacklist_items if enabled)
+        self.lbl_blacklist_keywords_count.setText(
+            f"ЧС: {blacklist_active}/{len(blacklist_items)}"
+        )
 
     def selected_browser(self) -> BrowserConfig:
         browser = self.cb_browser.currentData()

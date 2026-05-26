@@ -92,16 +92,39 @@ def _parse_lot_count_response(raw: str) -> tuple[str, str]:
     return lot_count, partial
 
 
+def _product_rows_count(product_rows_info: Any) -> int:
+    if not isinstance(product_rows_info, dict):
+        return 0
+    return _safe_int(product_rows_info.get("count"), default=0)
+
+
 def _extract_lot_count_from_card_via_lm(
     *,
     registry: str,
     detail_url: str,
     page_text: str,
     documents_text: str,
+    product_rows_info: Any = None,
     lm_base_url: str,
     lm_model: str,
 ) -> tuple[str, str, str]:
     """Отдельный запрос к LM: всегда отдаём полную карточку для количества лотов."""
+    parsed_product_count = _product_rows_count(product_rows_info)
+    product_info_text = ""
+    if isinstance(product_rows_info, dict) and product_rows_info:
+        product_info_text = json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:12000]
+    if parsed_product_count > 1:
+        return (
+            str(parsed_product_count),
+            f"Да, делимая: {parsed_product_count} товарных позиций/лотов",
+            (
+                "### product_rows_dom\n"
+                "Количество лотов/товарных позиций определено первым этапом из DOM-блока "
+                "div.x-fieldset-bwrap.\n"
+                f"{product_info_text}"
+            ),
+        )
+
     system_prompt = (
         "Ты аналитик закупок секции Газпром. Твоя задача — определить делимость заявки "
         "и количество лотов/товарных позиций. Не считай регулярными выражениями, а проанализируй "
@@ -115,6 +138,9 @@ def _extract_lot_count_from_card_via_lm(
         "2. partial_supply_allowed — делимая заявка/лот или нет.\n\n"
         "Правила:\n"
         "- Главный источник — полный текст страницы карточки/извещения ниже. Его нужно анализировать всегда.\n"
+        "- Первый этап приложения уже попытался прочитать DOM-блок div.x-fieldset-bwrap с перечнем товаров. "
+        "Если ниже указано, что найден 1 товар/строка, не меняй lot_count без явного основания, "
+        "но обязательно проверь документы на формулировки о делимости заявки.\n"
         "- Сначала ищи список лотов и строку вроде «Позиций всего: N»/«Список лотов».\n"
         "- Если слово «лот» отсутствует, смотри перечень товаров: если самостоятельных товаров больше одного, "
         "укажи количество товаров как количество товарных позиций и признак делимости.\n"
@@ -127,6 +153,10 @@ def _extract_lot_count_from_card_via_lm(
         "что делимость не определена по доступному тексту.\n\n"
         "Формат ответа строго:\n"
         "{\"lot_count\": string|null, \"partial_supply_allowed\": string|null}\n\n"
+        "ДАННЫЕ ПЕРВОГО ЭТАПА ИЗ DOM-БЛОКА div.x-fieldset-bwrap:\n"
+        "-----\n"
+        f"{product_info_text or '[перечень товаров в DOM не найден или не распознан]'}\n"
+        "-----\n\n"
         "ПОЛНЫЙ ТЕКСТ СТРАНИЦЫ КАРТОЧКИ / ИЗВЕЩЕНИЯ:\n"
         "-----\n"
         f"{page_text or '[текст карточки не извлечён]'}\n"
@@ -145,6 +175,8 @@ def _extract_lot_count_from_card_via_lm(
         max_tokens=1200,
     )
     lot_count, partial = _parse_lot_count_response(raw)
+    if parsed_product_count == 1 and _is_empty_analysis_value(lot_count):
+        lot_count = "1"
     if _lot_count_number(lot_count) > 1 and _looks_negative_divisibility(partial):
         correction_prompt = (
             "Ты вернул противоречивый ответ по закупке.\n"
@@ -181,6 +213,7 @@ def _apply_lot_count_from_card_lm(
     detail_url: str,
     page_text: str,
     documents_text: str,
+    product_rows_info: Any = None,
     lm_base_url: str,
     lm_model: str,
 ) -> tuple[dict[str, str] | None, str]:
@@ -189,6 +222,7 @@ def _apply_lot_count_from_card_lm(
         detail_url=detail_url,
         page_text=page_text,
         documents_text=documents_text,
+        product_rows_info=product_rows_info,
         lm_base_url=lm_base_url,
         lm_model=lm_model,
     )
@@ -818,6 +852,7 @@ def make_analyze_procedure_task(
             detail_url = str(snap.get("url") or "")
             doc_primary = str(snap.get("primary_doc_url") or "")
             doc_list = snap.get("doc_links") or []
+            product_rows_info = snap.get("product_rows_info") or {}
             doc_summary = "; ".join(
                 str((d or {}).get("href") or "")
                 for d in (doc_list if isinstance(doc_list, list) else [])
@@ -1049,6 +1084,7 @@ def make_analyze_procedure_task(
                     detail_url=detail_url,
                     page_text=page_text,
                     documents_text=documents_text,
+                    product_rows_info=product_rows_info,
                     lm_base_url=lm_base_url,
                     lm_model=lm_model,
                 )

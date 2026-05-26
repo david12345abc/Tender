@@ -7,6 +7,7 @@ from typing import Iterable
 from .constants import KEYWORDS_FILE, bundled_keywords_template_path, user_writable_root
 
 USER_KEYWORDS_FILE = user_writable_root() / "keywords.txt"
+USER_BLACKLIST_KEYWORDS_FILE = user_writable_root() / "blacklist_keywords.txt"
 
 
 def _resolve_path(path: Path | None) -> Path:
@@ -15,6 +16,12 @@ def _resolve_path(path: Path | None) -> Path:
     if path is None:
         return USER_KEYWORDS_FILE
     return path
+
+
+def _ensure_file(path: Path, default_text: str = "") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(default_text, encoding="utf-8")
 
 DEFAULT_KEYWORDS_TEXT = """[x] ультразвуковой
 [x] кориолисовый
@@ -258,3 +265,32 @@ def keywords_as_text(path: Path | None = None) -> str:
 
 def user_keywords_path() -> Path:
     return USER_KEYWORDS_FILE
+
+
+def _read_blacklist_keywords_text(path: Path | None = None) -> str:
+    target = path or USER_BLACKLIST_KEYWORDS_FILE
+    _ensure_file(target)
+    try:
+        return target.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def load_blacklist_keywords(path: Path | None = None) -> list[str]:
+    return parse_keywords(_read_blacklist_keywords_text(path))
+
+
+def load_blacklist_keyword_items(path: Path | None = None) -> list[tuple[bool, str]]:
+    return parse_keyword_items(_read_blacklist_keywords_text(path))
+
+
+def save_blacklist_keyword_items(
+    items: Iterable[tuple[bool, str]],
+    path: Path | None = None,
+) -> None:
+    save_keyword_items(items, path or USER_BLACKLIST_KEYWORDS_FILE)
+
+
+def user_blacklist_keywords_path() -> Path:
+    _ensure_file(USER_BLACKLIST_KEYWORDS_FILE)
+    return USER_BLACKLIST_KEYWORDS_FILE
