@@ -113,7 +113,7 @@ def iter_analysis_files(root: Path) -> list[Path]:
         if not p.is_file():
             continue
         name = p.name.lower()
-        if name.startswith("~$") or name.startswith("_"):
+        if name.startswith("~$") or name.startswith("_") or name.startswith(".access"):
             continue
         suf = p.suffix.lower()
         if suf in _SKIP_SUFFIXES:

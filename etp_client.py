@@ -425,13 +425,20 @@ const callback = arguments[arguments.length - 1];
         const totalMatch = text.match(/(?:Позиций\s+всего|Всего\s+позиций)\s*[:\-]?\s*(\d{1,4})/i)
           || text.match(/(?:Лотов\s+всего|Всего\s+лотов)\s*[:\-]?\s*(\d{1,4})/i);
 
+        const headerCells = Array.from(container.querySelectorAll(
+          ".x-grid3-hd-inner, .x-column-header-text, th, .x-grid-header-ct .x-box-inner"
+        )).map((cell) => clean(cell.innerText || cell.textContent || "")).filter(Boolean);
+
+        const seenRowTexts = new Set();
         const rows = Array.from(bwrap.querySelectorAll(
           ".x-grid3-row, .x-grid-row, .x-grid-item, tr.x-grid-row, tbody tr"
         )).filter((row) => {
           const rowText = clean(row.innerText || row.textContent || "");
           if (!rowText) return false;
           if (/^(№|Наименование|Код\s+МТР|Количество|ЕИ)\b/i.test(rowText)) return false;
-          if (/Позиций\s+всего|Страница\s+\d+|Поиск/i.test(rowText)) return false;
+          if (/Позиций\s+всего|Страница|Поиск|^\d+\s+из\s+\d+$/i.test(rowText)) return false;
+          if (seenRowTexts.has(rowText)) return false;
+          seenRowTexts.add(rowText);
           return rowText.length > 3;
         });
 
@@ -441,7 +448,24 @@ const callback = arguments[arguments.length - 1];
           count: Number.isFinite(count) ? count : 0,
           source: total ? "fieldset_total" : "fieldset_rows",
           text: text.slice(0, 6000),
-          rows: rows.map((row) => clean(row.innerText || row.textContent || "").slice(0, 1200)).slice(0, 50),
+          headers: headerCells.slice(0, 30),
+          rows: rows.map((row) => {
+            let cellNodes = Array.from(row.querySelectorAll(".x-grid3-cell-inner, .x-grid-cell-inner"));
+            if (!cellNodes.length) {
+              cellNodes = Array.from(row.querySelectorAll("td"));
+            }
+            const seenCells = new Set();
+            const cells = cellNodes.map((cell) => clean(cell.innerText || cell.textContent || ""))
+              .filter((txt) => {
+                if (!txt || seenCells.has(txt)) return false;
+                seenCells.add(txt);
+                return true;
+              });
+            return {
+              text: clean(row.innerText || row.textContent || "").slice(0, 1200),
+              cells: cells.slice(0, 30),
+            };
+          }).slice(0, 50),
         };
         if (!best || item.count > best.count || (item.text.length > best.text.length && item.count === best.count)) {
           best = item;
@@ -450,8 +474,50 @@ const callback = arguments[arguments.length - 1];
       return best || {count: 0, source: "", text: "", rows: []};
     }
 
-    const pageText = bestPageText();
-    const productRowsInfo = extractProductRowsInfo();
+    let productRowsInfo = extractProductRowsInfo();
+    const tabTexts = [];
+    try {
+      const tabInners = Array.from(
+        document.querySelectorAll(".x-tab-inner, .x-tab-inner-default, .x-tab-inner-el")
+      );
+      const seenLabels = new Set();
+      for (const el of tabInners) {
+        const label = String(el.innerText || el.textContent || "").trim().slice(0, 160);
+        if (!label || seenLabels.has(label)) continue;
+        if (!/Сведения|Лот|Документ|Извещение|Товар|Перечень/i.test(label)) continue;
+        seenLabels.add(label);
+        try {
+          el.click();
+          await wait(260);
+          const t = bestPageText();
+          if (t && t.length > 120) {
+            tabTexts.push(`=== Текст вкладки карточки: ${label} ===\n${t}`);
+          }
+          const candidate = extractProductRowsInfo();
+          if (candidate && candidate.count && (!productRowsInfo || candidate.count > productRowsInfo.count)) {
+            productRowsInfo = candidate;
+          }
+        } catch (e) {}
+      }
+    } catch (e) {}
+
+    let pageText = bestPageText();
+    if (tabTexts.length) {
+      pageText += "\n\n=== Тексты вкладок карточки, собранные для анализа ===\n" + tabTexts.join("\n\n");
+    }
+    if (productRowsInfo && productRowsInfo.count) {
+      const rowsText = (productRowsInfo.rows || []).map((row, idx) => {
+        const cells = row && Array.isArray(row.cells) ? row.cells.join(" | ") : String(row && row.text || "");
+        return `${idx + 1}. ${cells}`;
+      }).join("\n");
+      pageText += "\n\n=== ВАЖНЫЙ ФРАГМЕНТ: таблица перечня товаров из div.x-fieldset-bwrap ===\n";
+      pageText += `Источник: ${productRowsInfo.source}; Количество строк/позиций: ${productRowsInfo.count}\n`;
+      if (productRowsInfo.headers && productRowsInfo.headers.length) {
+        pageText += `Заголовки: ${productRowsInfo.headers.join(" | ")}\n`;
+      }
+      pageText += `Текст блока:\n${productRowsInfo.text || ""}\n`;
+      pageText += `Строки таблицы:\n${rowsText}\n`;
+    }
     const exts = /\.(docx?|xlsx?|xlsm|pdf|zip(?:\.\d{3})?|rar(?:\.\d{3})?|7z(?:\.\d{3})?|rtf|txt|xml|csv)(?:[?#]|$)/i;
     const docLinks = [];
     const seen = new Set();

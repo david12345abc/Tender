@@ -648,10 +648,16 @@ def _walk_files(paths: Iterable[Path]) -> list[Path]:
     files: list[Path] = []
     for path in paths:
         if path.is_file():
-            files.append(path)
+            if not _is_service_metadata_file(path):
+                files.append(path)
         elif path.is_dir():
-            files.extend(p for p in path.rglob("*") if p.is_file())
+            files.extend(p for p in path.rglob("*") if p.is_file() and not _is_service_metadata_file(p))
     return files
+
+
+def _is_service_metadata_file(path: Path) -> bool:
+    name = path.name.strip().casefold()
+    return name.startswith(".access") or name in {"thumbs.db", ".ds_store"}
 
 
 def _unique_path(path: Path) -> Path:
@@ -834,7 +840,7 @@ def prepare_documents_for_analysis(
         shutil.rmtree(staging_dir, ignore_errors=True)
 
     readable_files = sorted(
-        (p for p in output_dir.rglob("*") if p.is_file()),
+        (p for p in output_dir.rglob("*") if p.is_file() and not _is_service_metadata_file(p)),
         key=lambda p: str(p).lower(),
     )
     text = _read_documents_text_from_files(

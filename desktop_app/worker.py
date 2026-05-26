@@ -98,6 +98,148 @@ def _product_rows_count(product_rows_info: Any) -> int:
     return _safe_int(product_rows_info.get("count"), default=0)
 
 
+def _cell_by_header(headers: list[str], cells: list[str], *needles: str) -> str:
+    folded_needles = tuple(n.casefold() for n in needles)
+    for i, header in enumerate(headers):
+        h = str(header or "").casefold()
+        if all(n in h for n in folded_needles) and i < len(cells):
+            return str(cells[i] or "").strip()
+    return ""
+
+
+def _lot_items_from_product_rows(product_rows_info: Any) -> list[dict[str, str]]:
+    if not isinstance(product_rows_info, dict):
+        return []
+    headers = [str(h or "").strip() for h in (product_rows_info.get("headers") or [])]
+    raw_rows = product_rows_info.get("rows") or []
+    items: list[dict[str, str]] = []
+    for idx, row in enumerate(raw_rows, start=1):
+        if isinstance(row, dict):
+            cells = [str(c or "").strip() for c in (row.get("cells") or []) if str(c or "").strip()]
+            row_text = str(row.get("text") or "").strip()
+        else:
+            cells = []
+            row_text = str(row or "").strip()
+        if not cells and row_text:
+            cells = [p.strip() for p in re.split(r"\s{2,}|\|", row_text) if p.strip()]
+        if not cells and not row_text:
+            continue
+        if any("страница" in c.casefold() for c in cells) or any("позиций всего" in c.casefold() for c in cells):
+            continue
+
+        number = _cell_by_header(headers, cells, "№") or (cells[0] if cells and cells[0].isdigit() else str(idx))
+        name = _cell_by_header(headers, cells, "наименование")
+        if not name:
+            text_candidates = [
+                c for c in cells
+                if not re.fullmatch(r"[\d\s.,]+", c)
+                and "условная единица" not in c.casefold()
+                and "руб" not in c.casefold()
+            ]
+            name = max(text_candidates, key=len, default=(cells[0] if cells else row_text))
+        price_with_vat = (
+            _cell_by_header(headers, cells, "цена", "ндс")
+            or _cell_by_header(headers, cells, "сумма", "ндс")
+        )
+        price_without_vat = (
+            _cell_by_header(headers, cells, "цена", "без")
+            or _cell_by_header(headers, cells, "сумма", "без")
+        )
+        if not price_with_vat and len(cells) >= 6:
+            # Типовая таблица ЭТП: №, Наименование, Код МТР, Количество, ЕИ,
+            # Цена за весь объем с НДС, ...
+            price_with_vat = cells[5]
+        money_cells = [
+            c for c in cells
+            if re.search(r"\d[\d\s]*,\d{2}\b", c)
+        ]
+        if money_cells:
+            price_with_vat = money_cells[0]
+        price = price_with_vat or price_without_vat
+        items.append(
+            {
+                "number": str(number or idx),
+                "name": name[:1200],
+                "price": price,
+                "row_text": row_text,
+            }
+        )
+    return items
+
+
+def _rows_for_lots(
+    *,
+    registry: str,
+    detail_url: str,
+    doc_primary: str,
+    parsed: dict[str, str] | None,
+    err_msg: str | None,
+    product_rows_info: Any,
+) -> list[list[str]]:
+    items = _lot_items_from_product_rows(product_rows_info)
+    if len(items) <= 1:
+        return [build_result_row(registry, detail_url, doc_primary, parsed, err_msg)]
+
+    out: list[list[str]] = []
+    total_count = str(_product_rows_count(product_rows_info) or len(items))
+    base = dict(parsed or {})
+    for item in items:
+        lot_parsed = dict(base)
+        lot_name = str(item.get("name") or "").strip()
+        lot_no = str(item.get("number") or "").strip()
+        if lot_name:
+            lot_parsed["procurement_subject"] = lot_name
+            lot_parsed["tender_title"] = lot_name
+        if item.get("price"):
+            lot_parsed["starting_price"] = str(item["price"]).strip()
+        lot_parsed["lot_count"] = total_count
+        lot_parsed["partial_supply_allowed"] = f"Да, делимая: {total_count} товарных позиций/лотов"
+        row_registry = f"{registry} / позиция {lot_no or len(out) + 1}"
+        out.append(build_result_row(row_registry, detail_url, doc_primary, lot_parsed, err_msg))
+    return out
+
+
+def _apply_proc_defaults(
+    parsed: dict[str, str] | None,
+    proc: dict[str, Any],
+    proc_title: str,
+) -> dict[str, str]:
+    out = dict(parsed or {})
+
+    def empty(value: Any) -> bool:
+        return _is_empty_analysis_value(value) or str(value or "").strip().casefold() in {
+            "не указана в контексте",
+            "не указано в контексте",
+        }
+
+    organizer = str(proc.get("organizer") or proc.get("customer_name") or "").strip()
+    customer = str(out.get("customer_name") or "").casefold()
+    if organizer and (
+        empty(out.get("customer_name"))
+        or "наименование участника" in customer
+        or "участник конкурентной закупки" in customer
+    ):
+        out["customer_name"] = organizer
+
+    if proc_title and empty(out.get("tender_title")):
+        out["tender_title"] = proc_title
+
+    deadline = str(
+        proc.get("date_end_registration")
+        or proc.get("application_deadline")
+        or proc.get("date_end")
+        or ""
+    ).strip()
+    if deadline and empty(out.get("application_deadline")):
+        out["application_deadline"] = deadline
+
+    total_price = str(proc.get("total_price") or proc.get("price") or "").strip()
+    if total_price and empty(out.get("starting_price")):
+        out["starting_price"] = total_price
+
+    return out
+
+
 def _extract_lot_count_from_card_via_lm(
     *,
     registry: str,
@@ -1076,6 +1218,7 @@ def make_analyze_procedure_task(
                             + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
                         )
 
+            parsed = _apply_proc_defaults(parsed, proc, proc_title)
             try:
                 w.progress.emit(f"LM Studio: определяю количество лотов по полной карточке {registry}…")
                 parsed, lot_raw = _apply_lot_count_from_card_lm(
@@ -1107,7 +1250,16 @@ def make_analyze_procedure_task(
                         ),
                     }
                 )
-            rows.append(build_result_row(registry, detail_url, doc_primary, parsed, err_msg))
+            rows.extend(
+                _rows_for_lots(
+                    registry=registry,
+                    detail_url=detail_url,
+                    doc_primary=doc_primary,
+                    parsed=parsed,
+                    err_msg=err_msg,
+                    product_rows_info=product_rows_info,
+                )
+            )
 
         sink["rows"] = rows
         w.session.emit(

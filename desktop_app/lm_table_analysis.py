@@ -117,7 +117,13 @@ def single_field_system_prompt(field_label_ru: str) -> str:
 def parse_single_field_json(raw: str, field_key: str) -> str | None:
     """Разбор ответа модели для одного поля."""
     text = _strip_code_fence(raw)
-    obj = _first_json_decode(text)
+    try:
+        obj = _first_json_decode(text)
+    except ValueError:
+        fallback = text.strip()
+        fallback = re.sub(r"^```(?:json)?\s*|\s*```$", "", fallback, flags=re.I).strip()
+        fallback = re.sub(rf"^\s*{re.escape(field_key)}\s*[:=]\s*", "", fallback, flags=re.I).strip()
+        return fallback or None
     if not isinstance(obj, dict):
         raise ValueError("Ожидался JSON-объект.")
     if field_key in obj:

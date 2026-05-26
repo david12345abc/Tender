@@ -118,7 +118,7 @@ def main() -> int:
         filled = sum(1 for c in row[3:] if c and c != "—")
         print(f"  {registry}: заполнено {filled}/{len(row)-3} полей")
 
-    target = next((r for r in rows if r and r[0] == args.registry), None)
+    target = next((r for r in rows if r and str(r[0]).startswith(args.registry)), None)
     if not target:
         print("[warn] Целевой процедуры нет в результатах")
         return 1
