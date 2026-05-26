@@ -51,7 +51,40 @@ def _analysis_filled_count(parsed: dict[str, str] | None) -> int:
 
 def _is_empty_analysis_value(value: Any) -> bool:
     text = str(value or "").strip().casefold()
-    return text in {"", "—", "-", "null", "none", "не указано", "нет данных"}
+    if text in {"", "—", "-", "null", "none", "не указано", "нет данных"}:
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "в контексте нет",
+            "в контексте не",
+            "не указано конкрет",
+            "не указана конкрет",
+            "нет информации",
+            "не удалось определить",
+            "прямо не называют",
+            "не представлена",
+            "не представлены",
+            "не указана точная",
+            "не указано точн",
+            "указывается в формате",
+            "согласно закупочной документации",
+        )
+    )
+
+
+def _clean_analysis_value(value: Any) -> str:
+    return "" if _is_empty_analysis_value(value) else str(value or "").strip()
+
+
+def _format_proc_datetime(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = text.replace("T", " ")
+    text = re.sub(r"\.000(?=[+Z]|$)", "", text)
+    text = text.replace("+03:00", " [GMT +3]").replace("+03", " [GMT +3]")
+    return text
 
 
 def _first_json_object(text: str) -> dict[str, Any]:
@@ -107,6 +140,14 @@ def _cell_by_header(headers: list[str], cells: list[str], *needles: str) -> str:
     return ""
 
 
+def _first_date_value(cells: list[str]) -> str:
+    for cell in cells:
+        match = re.search(r"\b\d{4}-\d{2}-\d{2}\b|\b\d{2}\.\d{2}\.\d{4}\b", cell)
+        if match:
+            return match.group(0)
+    return ""
+
+
 def _lot_items_from_product_rows(product_rows_info: Any) -> list[dict[str, str]]:
     if not isinstance(product_rows_info, dict):
         return []
@@ -156,15 +197,49 @@ def _lot_items_from_product_rows(product_rows_info: Any) -> list[dict[str, str]]
         if money_cells:
             price_with_vat = money_cells[0]
         price = price_with_vat or price_without_vat
+        delivery_date = (
+            _first_date_value(cells)
+            or _cell_by_header(headers, cells, "ожидаемая", "дата")
+            or _cell_by_header(headers, cells, "дата", "постав")
+        )
+        quantity = _cell_by_header(headers, cells, "количество")
         items.append(
             {
                 "number": str(number or idx),
                 "name": name[:1200],
                 "price": price,
+                "quantity": quantity,
+                "delivery_date": delivery_date,
                 "row_text": row_text,
             }
         )
     return items
+
+
+def _apply_lot_item_to_parsed(
+    parsed: dict[str, str] | None,
+    item: dict[str, str],
+    total_count: str,
+    *,
+    single_item: bool,
+) -> dict[str, str]:
+    lot_parsed = dict(parsed or {})
+    lot_name = str(item.get("name") or "").strip()
+    if lot_name:
+        lot_parsed["procurement_subject"] = lot_name
+        if not single_item:
+            lot_parsed["tender_title"] = lot_name
+    if item.get("price"):
+        lot_parsed["starting_price"] = str(item["price"]).strip()
+    if item.get("delivery_date"):
+        lot_parsed["delivery_terms"] = str(item["delivery_date"]).strip()
+    lot_parsed["lot_count"] = total_count
+    lot_parsed["partial_supply_allowed"] = (
+        "Нет, одна товарная позиция/единый лот"
+        if total_count == "1"
+        else f"Да, делимая: {total_count} товарных позиций/лотов"
+    )
+    return lot_parsed
 
 
 def _rows_for_lots(
@@ -177,24 +252,21 @@ def _rows_for_lots(
     product_rows_info: Any,
 ) -> list[list[str]]:
     items = _lot_items_from_product_rows(product_rows_info)
-    if len(items) <= 1:
+    if not items:
         return [build_result_row(registry, detail_url, doc_primary, parsed, err_msg)]
 
     out: list[list[str]] = []
     total_count = str(_product_rows_count(product_rows_info) or len(items))
-    base = dict(parsed or {})
+    single_item = len(items) == 1
     for item in items:
-        lot_parsed = dict(base)
-        lot_name = str(item.get("name") or "").strip()
         lot_no = str(item.get("number") or "").strip()
-        if lot_name:
-            lot_parsed["procurement_subject"] = lot_name
-            lot_parsed["tender_title"] = lot_name
-        if item.get("price"):
-            lot_parsed["starting_price"] = str(item["price"]).strip()
-        lot_parsed["lot_count"] = total_count
-        lot_parsed["partial_supply_allowed"] = f"Да, делимая: {total_count} товарных позиций/лотов"
-        row_registry = f"{registry} / позиция {lot_no or len(out) + 1}"
+        lot_parsed = _apply_lot_item_to_parsed(
+            parsed,
+            item,
+            total_count,
+            single_item=single_item,
+        )
+        row_registry = registry if single_item else f"{registry} / позиция {lot_no or len(out) + 1}"
         out.append(build_result_row(row_registry, detail_url, doc_primary, lot_parsed, err_msg))
     return out
 
@@ -203,16 +275,30 @@ def _apply_proc_defaults(
     parsed: dict[str, str] | None,
     proc: dict[str, Any],
     proc_title: str,
+    page_text: str = "",
 ) -> dict[str, str]:
     out = dict(parsed or {})
 
     def empty(value: Any) -> bool:
-        return _is_empty_analysis_value(value) or str(value or "").strip().casefold() in {
-            "не указана в контексте",
-            "не указано в контексте",
-        }
+        return _is_empty_analysis_value(value)
 
-    organizer = str(proc.get("organizer") or proc.get("customer_name") or "").strip()
+    lot0 = ((proc.get("lots") or [{}])[0] or {}) if isinstance(proc.get("lots"), list) else {}
+    customers_info = lot0.get("customers_info") if isinstance(lot0, dict) else None
+    customer_from_lot = ""
+    if isinstance(customers_info, dict) and customers_info:
+        first_info = next(iter(customers_info.values()), {}) or {}
+        customer_from_lot = str(first_info.get("name") or "").strip()
+    lot_customers = lot0.get("customers") if isinstance(lot0, dict) else None
+    if not customer_from_lot and isinstance(lot_customers, list) and lot_customers:
+        customer_from_lot = str(lot_customers[0] or "").strip()
+    organizer = str(
+        proc.get("organizer")
+        or proc.get("customer_name")
+        or proc.get("full_name")
+        or proc.get("short_name")
+        or customer_from_lot
+        or ""
+    ).strip()
     customer = str(out.get("customer_name") or "").casefold()
     if organizer and (
         empty(out.get("customer_name"))
@@ -221,7 +307,7 @@ def _apply_proc_defaults(
     ):
         out["customer_name"] = organizer
 
-    if proc_title and empty(out.get("tender_title")):
+    if proc_title and (empty(out.get("tender_title")) or len(proc_title) > len(str(out.get("tender_title") or "")) + 8):
         out["tender_title"] = proc_title
 
     deadline = str(
@@ -231,11 +317,50 @@ def _apply_proc_defaults(
         or ""
     ).strip()
     if deadline and empty(out.get("application_deadline")):
-        out["application_deadline"] = deadline
+        out["application_deadline"] = _format_proc_datetime(deadline)
 
-    total_price = str(proc.get("total_price") or proc.get("price") or "").strip()
+    results_date = str(
+        proc.get("date_end_second_parts_review")
+        or proc.get("step_second_parts")
+        or ""
+    ).strip()
+    if results_date and empty(out.get("results_date")):
+        out["results_date"] = _format_proc_datetime(results_date)
+
+    has_retrade_date = any(
+        str(proc.get(key) or lot0.get(key) or "").strip()
+        for key in (
+            "date_begin_final_offers",
+            "date_end_final_offers",
+            "date_begin_prices_matching",
+            "date_end_prices_matching",
+            "date_begin_comparisons_additional_price",
+            "peretorg_date",
+        )
+    )
+    if not has_retrade_date and not proc.get("peretorg_possible") and not lot0.get("is_peretorg"):
+        out["retender_date"] = ""
+
+    total_price = str(
+        proc.get("total_price")
+        or proc.get("price")
+        or lot0.get("start_price")
+        or ""
+    ).strip()
     if total_price and empty(out.get("starting_price")):
         out["starting_price"] = total_price
+
+    if empty(out.get("application_fee")):
+        fee_match = re.search(
+            r"(?:Взимание\s+Оператором\s+платы|Сумма,\s*блокируемая\s+при\s+подаче\s+заявки)[^\n\r]*[:\t]\s*([0-9][0-9\s\u00a0]*,\d{2})",
+            page_text or "",
+            re.I,
+        )
+        if fee_match:
+            out["application_fee"] = fee_match.group(1).replace("\u00a0", " ").strip()
+
+    for key, value in list(out.items()):
+        out[key] = _clean_analysis_value(value)
 
     return out
 
@@ -1218,7 +1343,7 @@ def make_analyze_procedure_task(
                             + f"Первый запрос: {first_err}\nПовторный запрос: {err_msg}"
                         )
 
-            parsed = _apply_proc_defaults(parsed, proc, proc_title)
+            parsed = _apply_proc_defaults(parsed, proc, proc_title, page_text)
             try:
                 w.progress.emit(f"LM Studio: определяю количество лотов по полной карточке {registry}…")
                 parsed, lot_raw = _apply_lot_count_from_card_lm(
