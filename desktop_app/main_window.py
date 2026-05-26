@@ -83,6 +83,7 @@ from .worker import (
 
 
 DELETED_TENDERS_FILE = user_writable_root() / "deleted_tenders.json"
+TABLE_LAYOUT_FILE = Path("C:/ETP_GPB_Search_table_layout.json")
 
 
 class LimitedWrapDelegate(QStyledItemDelegate):
@@ -190,6 +191,7 @@ class MainWindow(QMainWindow):
         self._api_debug_chunks: list[str] = []
         self._deleted_tender_records: dict[str, dict[str, Any]] = self._load_deleted_tenders()
         self._deleted_tender_keys: set[str] = set(self._deleted_tender_records)
+        self._restoring_table_layout: bool = False
 
         self._cache_save_timer = QTimer(self)
         self._cache_save_timer.setSingleShot(True)
@@ -342,9 +344,14 @@ class MainWindow(QMainWindow):
         hh.setMinimumHeight(44)
         hh.setStretchLastSection(False)
         hh.setCascadingSectionResizes(False)
+        hh.setSectionsMovable(True)
+        hh.setDragEnabled(True)
+        hh.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.table.setWordWrap(True)
         self.table.setItemDelegate(LimitedWrapDelegate(self.table))
         hh.sectionResized.connect(lambda *_: self._schedule_table_row_resize())
+        hh.sectionResized.connect(lambda *_: self._save_table_layout())
+        hh.sectionMoved.connect(lambda *_: self._save_table_layout())
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_context_menu)
         self.table.doubleClicked.connect(self._on_row_double_clicked)
@@ -483,10 +490,91 @@ class MainWindow(QMainWindow):
         hh = self.table.horizontalHeader()
         widths = [170, 240, 340, 250, 145, 145, 170, 200, 150]
         n = min(len(widths), self.proxy.columnCount())
+        self._restoring_table_layout = True
         for i in range(n):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.Interactive)
             hh.resizeSection(i, widths[i])
+        self._restoring_table_layout = False
+        self._restore_table_layout()
         self._schedule_table_row_resize()
+
+    def _table_column_key(self, logical_index: int) -> str:
+        if 0 <= logical_index < len(COLUMNS):
+            return COLUMNS[logical_index][0]
+        return ""
+
+    def _save_table_layout(self) -> None:
+        if getattr(self, "_restoring_table_layout", False):
+            return
+        try:
+            hh = self.table.horizontalHeader()
+            order: list[str] = []
+            for visual in range(hh.count()):
+                key = self._table_column_key(hh.logicalIndex(visual))
+                if key:
+                    order.append(key)
+            widths = {
+                self._table_column_key(logical): hh.sectionSize(logical)
+                for logical in range(hh.count())
+                if self._table_column_key(logical)
+            }
+            TABLE_LAYOUT_FILE.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "order": order,
+                        "widths": widths,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            traceback.print_exc()
+
+    def _restore_table_layout(self) -> None:
+        try:
+            if not TABLE_LAYOUT_FILE.is_file():
+                return
+            data = json.loads(TABLE_LAYOUT_FILE.read_text(encoding="utf-8"))
+            saved_order = data.get("order") if isinstance(data, dict) else None
+            saved_widths = data.get("widths") if isinstance(data, dict) else None
+            if not isinstance(saved_order, list):
+                return
+
+            hh = self.table.horizontalHeader()
+            key_to_logical = {
+                key: idx
+                for idx, (key, _title) in enumerate(COLUMNS)
+                if idx < hh.count()
+            }
+
+            self._restoring_table_layout = True
+            target_visual = 0
+            for raw_key in saved_order:
+                key = str(raw_key)
+                logical = key_to_logical.get(key)
+                if logical is None:
+                    continue
+                current_visual = hh.visualIndex(logical)
+                if current_visual >= 0 and current_visual != target_visual:
+                    hh.moveSection(current_visual, target_visual)
+                target_visual += 1
+
+            if isinstance(saved_widths, dict):
+                for key, width in saved_widths.items():
+                    logical = key_to_logical.get(str(key))
+                    if logical is None:
+                        continue
+                    try:
+                        hh.resizeSection(logical, max(60, int(width)))
+                    except (TypeError, ValueError):
+                        continue
+        except Exception:
+            traceback.print_exc()
+        finally:
+            self._restoring_table_layout = False
 
     def _build_empty_state(self) -> None:
         self.empty_state = QFrame(self.table)
@@ -2285,6 +2373,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802
         try:
             self._save_cache_now()
+        except Exception:
+            pass
+        try:
+            self._save_table_layout()
         except Exception:
             pass
         try:
