@@ -5,11 +5,37 @@ from pathlib import Path
 import sys
 
 APP_TITLE = "Секция Газпром — поиск тендеров"
+APP_PUBLISHER = "ETP GPB Search"
 
 if getattr(sys, "frozen", False):
     APP_ROOT = Path(sys.executable).resolve().parent
 else:
     APP_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _read_app_version() -> str:
+    env_version = os.environ.get("ETP_GPB_APP_VERSION", "").strip()
+    if env_version:
+        return env_version
+    meipass = getattr(sys, "_MEIPASS", None)
+    candidates = [
+        APP_ROOT / "app_version.txt",
+        APP_ROOT / "_internal" / "app_version.txt",
+    ]
+    if meipass:
+        candidates.append(Path(meipass) / "app_version.txt")
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                version = candidate.read_text(encoding="utf-8-sig").strip()
+                if version:
+                    return version
+        except Exception:
+            pass
+    return "1.0.0"
+
+
+APP_VERSION = _read_app_version()
 
 
 def user_writable_root() -> Path:
@@ -54,6 +80,11 @@ VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 # LM Studio (OpenAI-совместимый API) для разбора карточки процедуры
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://192.168.1.157:1234")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "yandexgpt-5-lite-8b-instruct")
+
+# Адрес JSON-манифеста последнего релиза. Можно задать через переменную окружения
+# или положить путь/URL в update_manifest_url.txt рядом с приложением либо в LOCALAPPDATA.
+UPDATE_MANIFEST_ENV = "ETP_GPB_UPDATE_MANIFEST"
+UPDATE_MANIFEST_FILE_NAME = "update_manifest_url.txt"
 
 COLUMNS: list[tuple[str, str]] = [
     ("registry_number", "Реестровый №"),

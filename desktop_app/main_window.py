@@ -81,6 +81,7 @@ from .keywords import (
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import ClientFilters, SearchParams
 from .sidebar import Sidebar
+from .updater import UpdateInfo, check_for_update, install_update
 from .utils import fmt_date, parse_dt, parse_price
 from .worker import (
     TaskRunner,
@@ -209,10 +210,12 @@ class MainWindow(QMainWindow):
         self._cache_save_timer.setSingleShot(True)
         self._cache_save_timer.timeout.connect(self._save_cache_now)
         self._analysis_sink: dict[str, Any] = {}
+        self._available_update: UpdateInfo | None = None
 
         self._build_ui()
         self._announce_cache_on_start()
         self._update_controls()
+        QTimer.singleShot(1200, self._check_for_updates_on_start)
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self) -> None:
@@ -268,6 +271,12 @@ class MainWindow(QMainWindow):
         self.user_label = QLabel("Пользователь: —")
         self.user_label.setStyleSheet("color: #9ca8d7;")
         top_layout.addWidget(self.user_label)
+
+        self.btn_install_update = QPushButton("Установить обновление")
+        self.btn_install_update.setObjectName("Primary")
+        self.btn_install_update.setVisible(False)
+        self.btn_install_update.clicked.connect(self._on_install_update)
+        top_layout.addWidget(self.btn_install_update)
 
         self.session_badge = QLabel("○  Браузер не запущен")
         self.session_badge.setObjectName("SessionBadge")
@@ -1462,11 +1471,12 @@ class MainWindow(QMainWindow):
     def _find_source_file(self, unpacked_dir: Path, file_name: str) -> Path | None:
         if not unpacked_dir.is_dir() or not file_name:
             return None
+        normalized_name = str(file_name).replace("\\", "/").split("/")[-1].casefold()
         candidate = unpacked_dir / file_name
         if candidate.is_file():
             return candidate
         for item in unpacked_dir.rglob("*"):
-            if item.is_file() and item.name == file_name:
+            if item.is_file() and item.name.casefold() == normalized_name:
                 return item
         return None
 
@@ -1485,11 +1495,23 @@ class MainWindow(QMainWindow):
         html_path = sources_dir / safe_name
         file_name = str(source.get("file_name") or "").strip()
         source_file = self._find_source_file(unpacked_dir, file_name)
-        source_file_link = ""
+        source_file_link = (
+            '<p class="hint">Исходный документ не найден в папке распакованных документов. '
+            "Точный найденный фрагмент показан ниже.</p>"
+        )
         if source_file is not None:
+            source_uri = html.escape(self._source_file_uri(source_file))
+            source_name = html.escape(source_file.name)
             source_file_link = (
-                f'<p><a href="{html.escape(self._source_file_uri(source_file))}">'
-                f"Открыть исходный документ: {html.escape(source_file.name)}</a></p>"
+                '<div class="actions">'
+                f'<a class="button" href="{source_uri}" download="{source_name}">Скачать исходный документ</a>'
+                f'<a class="button secondary" href="{source_uri}">Открыть исходный документ</a>'
+                "</div>"
+                '<p class="hint">'
+                "Точный фрагмент показан ниже и подсвечен. Для Word/PDF нельзя надёжно открыть исходный "
+                "файл сразу на найденном тексте из внешней ссылки, поэтому эта страница служит переходом "
+                "к нужному фрагменту."
+                "</p>"
             )
         page = source.get("page")
         section = str(source.get("section") or "").strip()
@@ -1504,14 +1526,21 @@ class MainWindow(QMainWindow):
         body = html.escape(text)
         html_path.write_text(
             "<!doctype html><html><head><meta charset=\"utf-8\">"
-            "<style>body{font-family:Arial,sans-serif;margin:32px;line-height:1.45}"
-            "mark{background:#fff59d;padding:2px 4px}pre{white-space:pre-wrap;"
-            "border:1px solid #ddd;background:#fafafa;padding:16px}</style>"
+            "<style>body{font-family:Arial,sans-serif;margin:32px;line-height:1.45;color:#111827}"
+            ".actions{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0}"
+            ".button{display:inline-block;padding:10px 14px;border-radius:8px;background:#2563eb;"
+            "color:white;text-decoration:none;font-weight:600}.button.secondary{background:#374151}"
+            ".hint{color:#4b5563;max-width:980px}mark{background:#fff59d;padding:2px 4px}"
+            "pre{white-space:pre-wrap;border:1px solid #ddd;background:#fafafa;padding:16px;"
+            "overflow:auto}</style>"
             f"<title>{html.escape(label)}</title></head><body>"
             f"<h1>{html.escape(label)}</h1>"
             f"<p>{html.escape(' / '.join(str(x) for x in meta_parts if x))}</p>"
             f"{source_file_link}"
-            f"<pre><mark>{body}</mark></pre>"
+            f"<pre id=\"fragment\"><mark>{body}</mark></pre>"
+            "<script>window.addEventListener('load',()=>{"
+            "const el=document.getElementById('fragment'); if(el) el.scrollIntoView({block:'center'});"
+            "});</script>"
             "</body></html>",
             encoding="utf-8",
         )
@@ -1566,14 +1595,18 @@ class MainWindow(QMainWindow):
         hyperlink.append(run)
         paragraph._p.append(hyperlink)
 
-    def _fill_docx_value_with_sources(self, cell, value: Any, links: list[tuple[str, str]]) -> None:
+    def _fill_docx_value_cell(self, cell, value: Any) -> None:
         cell.text = str(value or "—")
+
+    def _fill_docx_source_cell(self, cell, links: list[tuple[str, str]]) -> None:
+        cell.text = ""
         if not links:
+            cell.text = "—"
             return
-        paragraph = cell.add_paragraph()
+        paragraph = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
         for index, (label, href) in enumerate(links):
             if index:
-                paragraph.add_run("  ")
+                paragraph.add_run("\n")
             self._add_docx_hyperlink(paragraph, label, href)
 
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
@@ -1615,11 +1648,12 @@ class MainWindow(QMainWindow):
             doc.add_heading(f"Анализ закупки {registry}", level=1)
             if title:
                 doc.add_paragraph(title)
-            table = doc.add_table(rows=1, cols=2)
+            table = doc.add_table(rows=1, cols=3)
             table.style = "Table Grid"
             hdr = table.rows[0].cells
             hdr[0].text = "Поле"
             hdr[1].text = "Значение"
+            hdr[2].text = "Источник"
             for cell in hdr:
                 for paragraph in cell.paragraphs:
                     for run in paragraph.runs:
@@ -1639,17 +1673,19 @@ class MainWindow(QMainWindow):
                     links = [("Карточка ЭТП", str(value))]
                 elif field_key == "doc_url" and value:
                     links = [("Документы ЭТП", str(value))]
-                self._fill_docx_value_with_sources(cells[1], value, links)
+                self._fill_docx_value_cell(cells[1], value)
+                self._fill_docx_source_cell(cells[2], links)
 
             technical = technical_by_registry.get(registry) or technical_by_registry.get(base_registry) or {}
             if technical:
                 doc.add_paragraph("")
                 doc.add_heading("Технические характеристики оборудования", level=2)
-                tech_table = doc.add_table(rows=1, cols=2)
+                tech_table = doc.add_table(rows=1, cols=3)
                 tech_table.style = "Table Grid"
                 tech_hdr = tech_table.rows[0].cells
                 tech_hdr[0].text = "Поле"
                 tech_hdr[1].text = "Значение"
+                tech_hdr[2].text = "Источник"
                 for cell in tech_hdr:
                     for paragraph in cell.paragraphs:
                         for run in paragraph.runs:
@@ -1664,7 +1700,8 @@ class MainWindow(QMainWindow):
                         rel_dir_name=sources_rel_dir,
                         unpacked_dir=unpacked_path,
                     )
-                    self._fill_docx_value_with_sources(cells[1], technical.get(key), links)
+                    self._fill_docx_value_cell(cells[1], technical.get(key))
+                    self._fill_docx_source_cell(cells[2], links)
 
             doc.save(path)
             try:
@@ -1678,7 +1715,7 @@ class MainWindow(QMainWindow):
                 if title:
                     ws.append(["Наименование", title])
                 ws.append([])
-                ws.append(["Поле", "Значение", "Источник 1", "Источник 2", "Источник 3"])
+                ws.append(["Поле", "Значение", "Источник"])
                 for field_key, header, value in zip(analysis_field_keys, ANALYSIS_TABLE_HEADERS_RU, row):
                     links = self._source_links_for_field(
                         sources=list((field_sources or {}).get(field_key) or []),
@@ -1690,16 +1727,17 @@ class MainWindow(QMainWindow):
                         links = [("Карточка ЭТП", str(value))]
                     elif field_key == "doc_url" and value:
                         links = [("Документы ЭТП", str(value))]
-                    ws.append([str(header), str(value if value is not None else "—"), "", "", ""])
-                    for link_index, (label, href) in enumerate(links[:3], start=3):
-                        cell = ws.cell(row=ws.max_row, column=link_index)
-                        cell.value = label
-                        cell.hyperlink = href
+                    ws.append([str(header), str(value if value is not None else "—"), "—"])
+                    if links:
+                        cell = ws.cell(row=ws.max_row, column=3)
+                        cell.value = "\n".join(label for label, _href in links[:3])
+                        cell.hyperlink = links[0][1]
                         cell.style = "Hyperlink"
+                        cell.alignment = cell.alignment.copy(wrap_text=True)
                 if technical:
                     ws.append([])
                     ws.append(["Технические характеристики оборудования", ""])
-                    ws.append(["Поле", "Значение", "Источник 1", "Источник 2", "Источник 3"])
+                    ws.append(["Поле", "Значение", "Источник"])
                     for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
                         links = self._source_links_for_field(
                             sources=list((tech_sources or {}).get(key) or []),
@@ -1707,12 +1745,13 @@ class MainWindow(QMainWindow):
                             rel_dir_name=sources_rel_dir,
                             unpacked_dir=unpacked_path,
                         )
-                        ws.append([str(header), str(technical.get(key) or "—"), "", "", ""])
-                        for link_index, (label, href) in enumerate(links[:3], start=3):
-                            cell = ws.cell(row=ws.max_row, column=link_index)
-                            cell.value = label
-                            cell.hyperlink = href
+                        ws.append([str(header), str(technical.get(key) or "—"), "—"])
+                        if links:
+                            cell = ws.cell(row=ws.max_row, column=3)
+                            cell.value = "\n".join(label for label, _href in links[:3])
+                            cell.hyperlink = links[0][1]
                             cell.style = "Hyperlink"
+                            cell.alignment = cell.alignment.copy(wrap_text=True)
                 wb.save(xlsx_path)
             except Exception:
                 pass
@@ -2695,6 +2734,47 @@ class MainWindow(QMainWindow):
         self.btn_show_analysis.setEnabled(not running and bool(self._analysis_sink.get("summary_rows")))
         self.btn_export.setEnabled(platform_ready and has_rows)
         self.sidebar.set_controls_enabled(platform_ready and not running)
+
+    def _check_for_updates_on_start(self) -> None:
+        try:
+            update = check_for_update()
+        except Exception as exc:
+            self.status_msg.setText(f"Не удалось проверить обновления: {exc}")
+            return
+        if update is None:
+            return
+        self._available_update = update
+        self.btn_install_update.setText(f"Установить обновление {update.latest_version}")
+        self.btn_install_update.setToolTip(
+            f"Доступна новая версия {update.latest_version}. "
+            f"Текущая версия: {update.current_version}."
+        )
+        self.btn_install_update.setVisible(True)
+        self.status_msg.setText(
+            f"Доступно обновление: {update.current_version} → {update.latest_version}."
+        )
+
+    def _on_install_update(self) -> None:
+        update = self._available_update
+        if update is None:
+            return
+        note = f"\n\nОписание:\n{update.release_notes}" if update.release_notes else ""
+        answer = QMessageBox.question(
+            self,
+            "Установка обновления",
+            (
+                f"Будет установлен релиз {update.latest_version}.\n"
+                "После запуска установщика закройте приложение, если установщик попросит это сделать."
+                f"{note}"
+            ),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            installer = install_update(update)
+            self.status_msg.setText(f"Запущен установщик обновления: {installer}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Ошибка обновления", f"Не удалось установить обновление:\n{exc}")
 
     # --------------- кэш
     def _schedule_cache_save(self) -> None:

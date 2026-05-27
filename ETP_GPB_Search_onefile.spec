@@ -11,6 +11,8 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
 datas = [('start_chrome.ps1', '.'), ('data', 'data')]
+if Path('app_version.txt').exists():
+    datas.append(('app_version.txt', '.'))
 if Path('tools').exists():
     datas.append(('tools', 'tools'))
 if Path('temp').exists():
