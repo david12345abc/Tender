@@ -67,7 +67,7 @@ from .constants import (
     VIEW_URL,
     user_writable_root,
 )
-from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU
+from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU, TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU
 from .gpb_rag.chat import answer_question_from_saved_index
 from .keywords import (
     load_blacklist_keyword_items,
@@ -1458,11 +1458,13 @@ class MainWindow(QMainWindow):
         ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
         unpacked_by_registry = self._analysis_sink.get("unpacked_docs_by_registry") or {}
+        technical_by_registry = self._analysis_sink.get("technical_by_registry") or {}
         summary_rows: list[list[str]] = []
         lot_divisibility_by_registry: dict[str, str] = {}
 
         for row in rows:
             registry = str(row[0] if len(row) > 0 else "").strip() or "unknown"
+            base_registry = registry.split(" / позиция", 1)[0].strip()
             if len(row) > 10:
                 lot_divisibility_by_registry[registry] = str(row[10] or "").strip()
             lot_count = str(row[11] if len(row) > 11 else "").strip() or "—"
@@ -1494,6 +1496,24 @@ class MainWindow(QMainWindow):
                 cells[0].text = str(header)
                 cells[1].text = str(value or "—")
 
+            technical = technical_by_registry.get(registry) or technical_by_registry.get(base_registry) or {}
+            if technical:
+                doc.add_paragraph("")
+                doc.add_heading("Технические характеристики оборудования", level=2)
+                tech_table = doc.add_table(rows=1, cols=2)
+                tech_table.style = "Table Grid"
+                tech_hdr = tech_table.rows[0].cells
+                tech_hdr[0].text = "Поле"
+                tech_hdr[1].text = "Значение"
+                for cell in tech_hdr:
+                    for paragraph in cell.paragraphs:
+                        for run in paragraph.runs:
+                            run.bold = True
+                for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
+                    cells = tech_table.add_row().cells
+                    cells[0].text = str(header)
+                    cells[1].text = str(technical.get(key) or "—")
+
             doc.save(path)
             try:
                 from openpyxl import Workbook
@@ -1508,6 +1528,11 @@ class MainWindow(QMainWindow):
                 ws.append([])
                 for header, value in zip(ANALYSIS_TABLE_HEADERS_RU, row):
                     ws.append([str(header), str(value if value is not None else "—")])
+                if technical:
+                    ws.append([])
+                    ws.append(["Технические характеристики оборудования", ""])
+                    for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
+                        ws.append([str(header), str(technical.get(key) or "—")])
                 wb.save(xlsx_path)
             except Exception:
                 pass

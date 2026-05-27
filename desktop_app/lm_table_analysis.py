@@ -49,6 +49,42 @@ ANALYSIS_TABLE_HEADERS_RU: list[str] = [
     "Риски Поставщика/Исполнителя при нарушении условий договора",
 ]
 
+TECHNICAL_JSON_KEYS: list[str] = [
+    "equipment_type_name",
+    "measurement_method",
+    "measured_medium_name",
+    "measured_medium_type",
+    "process_connection_method",
+    "nominal_diameter_or_pipeline_diameter",
+    "body_or_pipeline_material",
+    "accuracy_class_or_flow_error",
+    "flow_rate_or_range",
+    "working_medium_pressure",
+    "working_medium_temperature",
+    "working_medium_density",
+    "working_medium_viscosity",
+    "ambient_air_temperature",
+    "additional_equipment",
+]
+
+TECHNICAL_TABLE_HEADERS_RU: list[str] = [
+    "Тип оборудования/название",
+    "Метод измерения",
+    "Название измеряемой среды",
+    "Тип измеряемой среды (газ, жидкость, пар, многофазная среда ...)",
+    "Способ присоединения к процессу",
+    "Диаметр условного прохода/ Диаметр трубопровода",
+    "Материал корпуса/ Материал трубопровода",
+    "Класс точности/погрешность измерения расхода",
+    "Расход / Диапазон расхода (с указанием единицы измерения)",
+    "Давление рабочей среды (с указанием единицы измерения)",
+    "Температура рабочей среды (с указанием единицы измерения)",
+    "Плотность рабочей среды (с указанием единицы измерения)",
+    "Вязкость рабочей среды (с указанием единицы измерения)",
+    "Температура окружающего воздуха",
+    "Дополнительное оборудование (прямолинейные участки, ответные фланцы, устройство формирования потока, кабельные вводы, телеметрия, ЗИП, и т.д.)",
+]
+
 
 def _strip_code_fence(text: str) -> str:
     t = text.strip()
@@ -84,6 +120,69 @@ def parse_llm_table_json(raw: str) -> dict[str, str]:
         v = obj.get(k)
         out[k] = "" if v is None else str(v).strip()
     return out
+
+
+def parse_technical_table_json(raw: str) -> dict[str, str]:
+    text = _strip_code_fence(raw)
+    obj = _first_json_decode(text)
+    if isinstance(obj, list) and obj and isinstance(obj[0], dict):
+        obj = obj[0]
+    if not isinstance(obj, dict):
+        raise ValueError("Ожидался JSON-объект для технической таблицы.")
+    out: dict[str, str] = {}
+    for k in TECHNICAL_JSON_KEYS:
+        v = obj.get(k)
+        out[k] = "" if v is None else str(v).strip()
+    return out
+
+
+def build_technical_system_prompt() -> str:
+    keys_line = ", ".join(TECHNICAL_JSON_KEYS)
+    return (
+        "Ты инженер КИПиА/технический аналитик закупок. Нужно извлечь технические "
+        "характеристики оборудования из карточки закупки и документов: технического задания, "
+        "опросного листа, спецификации, перечня МТР, приложений. Ответь только JSON-объектом "
+        "без markdown. Не придумывай значения: если конкретного значения нет, верни null. "
+        "Все значения должны быть строками на русском языке с единицами измерения, если они есть. "
+        f"Ключи строго на английском: {keys_line}."
+    )
+
+
+def build_technical_user_prompt(
+    registry: str,
+    detail_url: str,
+    page_text: str,
+    documents_text: str,
+    product_rows_info_text: str = "",
+) -> str:
+    fields = "\n".join(
+        f"- {key}: {label}"
+        for key, label in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU)
+    )
+    return (
+        f"Реестровый номер: {registry}\n"
+        f"URL карточки: {detail_url}\n\n"
+        "Нужно заполнить вторую техническую таблицу анализа.\n"
+        "Ищи значения прежде всего в техническом задании, опросном листе, спецификации, "
+        "таблицах с характеристиками и перечне товаров. Если в документах встречается форма "
+        "опросного листа с колонками/строками характеристик, извлекай значения из неё. "
+        "Не возвращай название поля вместо значения. Не возвращай общие требования, если нет "
+        "конкретного значения для поля.\n\n"
+        "Поля JSON:\n"
+        f"{fields}\n\n"
+        "СТРУКТУРИРОВАННЫЙ ПЕРЕЧЕНЬ ТОВАРОВ ИЗ КАРТОЧКИ:\n"
+        "-----\n"
+        f"{product_rows_info_text or '[нет структурированного перечня товаров]'}\n"
+        "-----\n\n"
+        "ТЕКСТ СТРАНИЦЫ КАРТОЧКИ:\n"
+        "-----\n"
+        f"{page_text or '[текст карточки не извлечён]'}\n"
+        "-----\n\n"
+        "ТЕКСТ ДОКУМЕНТОВ:\n"
+        "-----\n"
+        f"{documents_text or '[текст документов не извлечён]'}\n"
+        "-----\n"
+    )
 
 
 def single_field_system_prompt(field_label_ru: str) -> str:

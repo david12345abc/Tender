@@ -103,6 +103,7 @@ def main() -> int:
             {
                 "rows": rows,
                 "raw_by_registry": {k: v[:4000] for k, v in (sink.get("raw_by_registry") or {}).items()},
+                "technical_by_registry": sink.get("technical_by_registry") or {},
                 "document_issues": sink.get("document_issues") or [],
             },
             ensure_ascii=False,

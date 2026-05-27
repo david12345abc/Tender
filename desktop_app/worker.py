@@ -17,9 +17,12 @@ from .gpb_rag.pipeline import ragged_analysis_available, run_rag_table_analysis
 from .lm_table_analysis import (
     build_analysis_system_prompt,
     build_analysis_user_prompt,
+    build_technical_system_prompt,
+    build_technical_user_prompt,
     build_result_row,
     call_lm_studio_chat,
     parse_llm_table_json,
+    parse_technical_table_json,
 )
 from .models import ProcedureFilterProxy, ProcedureTableModel
 from .params import SearchParams
@@ -363,6 +366,38 @@ def _apply_proc_defaults(
         out[key] = _clean_analysis_value(value)
 
     return out
+
+
+def _extract_technical_table_via_lm(
+    *,
+    registry: str,
+    detail_url: str,
+    page_text: str,
+    documents_text: str,
+    product_rows_info: Any = None,
+    lm_base_url: str,
+    lm_model: str,
+) -> tuple[dict[str, str], str]:
+    product_info_text = ""
+    if isinstance(product_rows_info, dict) and product_rows_info:
+        product_info_text = json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:16000]
+    prompt = build_technical_user_prompt(
+        registry=registry,
+        detail_url=detail_url,
+        page_text=_trim_for_llm(page_text, 80_000),
+        documents_text=_trim_for_llm(documents_text, 120_000),
+        product_rows_info_text=product_info_text,
+    )
+    raw = call_lm_studio_chat(
+        lm_base_url,
+        lm_model,
+        build_technical_system_prompt(),
+        prompt,
+        timeout_sec=900,
+        max_tokens=4096,
+    )
+    parsed = parse_technical_table_json(raw)
+    return parsed, raw
 
 
 def _extract_lot_count_from_card_via_lm(
@@ -1071,6 +1106,7 @@ def make_analyze_procedure_task(
         sink["title_by_registry"] = {}
         sink["unpacked_docs_by_registry"] = {}
         sink["document_issues"] = []
+        sink["technical_by_registry"] = {}
 
         if not procedures:
             w.error.emit("Не выбраны процедуры для анализа.")
@@ -1372,6 +1408,37 @@ def make_analyze_procedure_task(
                         "message": (
                             "Не удалось отдельно определить количество лотов "
                             f"по полной карточке: {lot_exc}"
+                        ),
+                    }
+                )
+            try:
+                w.progress.emit(f"LM Studio: извлекаю технические характеристики {registry}…")
+                technical, technical_raw = _extract_technical_table_via_lm(
+                    registry=registry,
+                    detail_url=detail_url,
+                    page_text=page_text,
+                    documents_text=documents_text,
+                    product_rows_info=product_rows_info,
+                    lm_base_url=lm_base_url,
+                    lm_model=lm_model,
+                )
+                sink["technical_by_registry"][registry] = technical
+                previous_raw = str(sink["raw_by_registry"].get(registry) or "")
+                sink["raw_by_registry"][registry] = (
+                    previous_raw
+                    + ("\n\n" if previous_raw else "")
+                    + "### technical_table\n"
+                    + technical_raw
+                )
+            except Exception as tech_exc:
+                sink["document_issues"].append(
+                    {
+                        "severity": "important",
+                        "registry": registry,
+                        "file": "LM Studio",
+                        "message": (
+                            "Не удалось извлечь вторую таблицу технических характеристик: "
+                            f"{tech_exc}"
                         ),
                     }
                 )
