@@ -8,7 +8,7 @@ from ..lm_table_analysis import (
     single_field_system_prompt,
 )
 from .field_specs import FIELD_SEARCH_QUERY_RU
-from .schemas import ChunkPayload
+from .schemas import ChunkPayload, FieldSource
 from .validate_cross import empty_to_null, reconcile_money_llm_with_chunks
 
 
@@ -29,6 +29,29 @@ def _format_retrieval_context(hit_chunks: list[ChunkPayload]) -> str:
         sec = f", раздел: {ch.section}" if ch.section else ""
         blocks.append(f"--- Фрагмент {i} ({loc}{sec}) ---\n{ch.text}")
     return "\n\n".join(blocks)
+
+
+def _sources_from_hits(hits: list[tuple[ChunkPayload, float]]) -> list[FieldSource]:
+    out: list[FieldSource] = []
+    for rank, (chunk, score) in enumerate(hits, start=1):
+        label = chunk.file_name
+        if chunk.page is not None:
+            label += f", стр. {chunk.page}"
+        if chunk.section:
+            label += f", раздел: {chunk.section}"
+        out.append(
+            FieldSource(
+                source_type="card" if chunk.file_name.startswith("карточка_этп_") else "document",
+                label=label or f"Источник {rank}",
+                file_name=chunk.file_name,
+                text=chunk.text,
+                page=chunk.page,
+                section=chunk.section,
+                chunk_id=chunk.chunk_id,
+                score=float(score),
+            )
+        )
+    return out
 
 
 def _field_specific_instruction(field_key: str) -> str:
@@ -88,10 +111,11 @@ def extract_fields_via_retrieval(
     timeout_sec: int,
     progress=None,
     stop_flag=None,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], str, dict[str, list[FieldSource]]]:
     """Для каждого поля — отдельный retrieval и один запрос к LLM."""
     raw_parts: list[str] = []
     out: dict[str, str] = {}
+    sources_by_field: dict[str, list[FieldSource]] = {}
 
     for field_key in ANALYSIS_JSON_KEYS:
         if stop_flag and stop_flag():
@@ -101,8 +125,10 @@ def extract_fields_via_retrieval(
             progress(f"RAG: поле «{_field_header_ru(field_key)}»…")
 
         hits_idx = store.search(query, top_k=top_k)
-        hit_chunks = [store.chunks[i] for i, _ in hits_idx if 0 <= i < len(store.chunks)]
+        hits = [(store.chunks[i], score) for i, score in hits_idx if 0 <= i < len(store.chunks)]
+        hit_chunks = [chunk for chunk, _score in hits]
         context = _format_retrieval_context(hit_chunks)
+        sources_by_field[field_key] = _sources_from_hits(hits)
 
         label = _field_header_ru(field_key)
         user_prompt = (
@@ -137,4 +163,4 @@ def extract_fields_via_retrieval(
             out[field_key] = ""
 
     combined_raw = "\n\n".join(raw_parts)
-    return out, combined_raw
+    return out, combined_raw, sources_by_field

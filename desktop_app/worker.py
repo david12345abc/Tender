@@ -14,6 +14,7 @@ from etp_client import HARD_SERVER_LIMIT, EtpClient, _server_status_value
 from .constants import ANALYSIS_DIR, VIEW_URL
 from .document_text import _is_archive, prepare_documents_for_analysis
 from .gpb_rag.pipeline import ragged_analysis_available, run_rag_table_analysis
+from .gpb_rag.schemas import FieldSource
 from .lm_table_analysis import (
     build_analysis_system_prompt,
     build_analysis_user_prompt,
@@ -88,6 +89,69 @@ def _format_proc_datetime(value: Any) -> str:
     text = re.sub(r"\.000(?=[+Z]|$)", "", text)
     text = text.replace("+03:00", " [GMT +3]").replace("+03", " [GMT +3]")
     return text
+
+
+def _source_to_dict(source: FieldSource) -> dict[str, Any]:
+    return {
+        "source_type": source.source_type,
+        "label": source.label,
+        "file_name": source.file_name,
+        "text": source.text,
+        "page": source.page,
+        "section": source.section,
+        "chunk_id": source.chunk_id,
+        "url": source.url,
+        "score": source.score,
+    }
+
+
+def _card_source(label: str, url: str, text: str = "") -> dict[str, Any]:
+    return {
+        "source_type": "card",
+        "label": f"Карточка: {label}",
+        "file_name": "",
+        "text": text,
+        "page": None,
+        "section": label,
+        "chunk_id": "",
+        "url": url,
+        "score": None,
+    }
+
+
+def _document_like_source(label: str, text: str = "") -> dict[str, Any]:
+    return {
+        "source_type": "document",
+        "label": label,
+        "file_name": label,
+        "text": text,
+        "page": None,
+        "section": "",
+        "chunk_id": "",
+        "url": "",
+        "score": None,
+    }
+
+
+def _add_field_source(
+    sources_by_field: dict[str, list[dict[str, Any]]],
+    field_key: str,
+    source: dict[str, Any],
+    *,
+    prepend: bool = True,
+) -> None:
+    bucket = sources_by_field.setdefault(field_key, [])
+    if any(
+        existing.get("source_type") == source.get("source_type")
+        and existing.get("label") == source.get("label")
+        and existing.get("file_name") == source.get("file_name")
+        for existing in bucket
+    ):
+        return
+    if prepend:
+        bucket.insert(0, source)
+    else:
+        bucket.append(source)
 
 
 def _first_json_object(text: str) -> dict[str, Any]:
@@ -1107,6 +1171,8 @@ def make_analyze_procedure_task(
         sink["unpacked_docs_by_registry"] = {}
         sink["document_issues"] = []
         sink["technical_by_registry"] = {}
+        sink["sources_by_registry"] = {}
+        sink["technical_sources_by_registry"] = {}
 
         if not procedures:
             w.error.emit("Не выбраны процедуры для анализа.")
@@ -1263,13 +1329,14 @@ def make_analyze_procedure_task(
             raw_llm = ""
             err_msg: str | None = None
             rag_used = False
+            sources_by_field: dict[str, list[dict[str, Any]]] = {}
 
             if rag_available:
                 try:
                     w.progress.emit(f"RAG: индексация и извлечение полей для {registry}…")
                     ingest_notes: list[str] = []
                     debug_dir = ANALYSIS_DIR / "rag_debug" / _safe_folder_name(registry)
-                    parsed, raw_llm = run_rag_table_analysis(
+                    parsed, raw_llm, rag_sources = run_rag_table_analysis(
                         registry=registry,
                         page_text=page_text,
                         card_url=detail_url,
@@ -1281,6 +1348,14 @@ def make_analyze_procedure_task(
                         debug_dir=debug_dir,
                         ingest_notes_out=ingest_notes,
                     )
+                    sources_by_field = {
+                        field: [_source_to_dict(source) for source in sources]
+                        for field, sources in (rag_sources or {}).items()
+                    }
+                    for field_sources in sources_by_field.values():
+                        for source in field_sources:
+                            if source.get("source_type") == "card" and not source.get("url"):
+                                source["url"] = detail_url
                     rag_used = True
                     sink["raw_by_registry"][registry] = raw_llm
                     if _analysis_filled_count(parsed) < 3:
@@ -1380,6 +1455,43 @@ def make_analyze_procedure_task(
                         )
 
             parsed = _apply_proc_defaults(parsed, proc, proc_title, page_text)
+            if parsed:
+                if parsed.get("customer_name"):
+                    _add_field_source(
+                        sources_by_field,
+                        "customer_name",
+                        _card_source("Наименование заказчика/организатора", detail_url, parsed.get("customer_name", "")),
+                    )
+                if parsed.get("tender_title"):
+                    _add_field_source(
+                        sources_by_field,
+                        "tender_title",
+                        _card_source("Наименование закупки", detail_url, parsed.get("tender_title", "")),
+                    )
+                if parsed.get("application_deadline"):
+                    _add_field_source(
+                        sources_by_field,
+                        "application_deadline",
+                        _card_source("Дата окончания подачи заявок", detail_url, parsed.get("application_deadline", "")),
+                    )
+                if parsed.get("results_date"):
+                    _add_field_source(
+                        sources_by_field,
+                        "results_date",
+                        _card_source("Дата подведения итогов", detail_url, parsed.get("results_date", "")),
+                    )
+                if parsed.get("starting_price"):
+                    _add_field_source(
+                        sources_by_field,
+                        "starting_price",
+                        _card_source("Начальная максимальная цена / Перечень товаров", detail_url, parsed.get("starting_price", "")),
+                    )
+                if parsed.get("application_fee"):
+                    _add_field_source(
+                        sources_by_field,
+                        "application_fee",
+                        _card_source("Взимание оператором платы", detail_url, parsed.get("application_fee", "")),
+                    )
             try:
                 w.progress.emit(f"LM Studio: определяю количество лотов по полной карточке {registry}…")
                 parsed, lot_raw = _apply_lot_count_from_card_lm(
@@ -1399,6 +1511,16 @@ def make_analyze_procedure_task(
                     + "### lot_count_full_card\n"
                     + lot_raw
                 )
+                _add_field_source(
+                    sources_by_field,
+                    "lot_count",
+                    _card_source("Количество лотов / Перечень товаров", detail_url, lot_raw),
+                )
+                _add_field_source(
+                    sources_by_field,
+                    "partial_supply_allowed",
+                    _card_source("Делимость лота / Перечень товаров", detail_url, lot_raw),
+                )
             except Exception as lot_exc:
                 sink["document_issues"].append(
                     {
@@ -1411,6 +1533,15 @@ def make_analyze_procedure_task(
                         ),
                     }
                 )
+            product_items = _lot_items_from_product_rows(product_rows_info)
+            if product_items:
+                product_source = _card_source(
+                    "Перечень товаров",
+                    detail_url,
+                    json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:8000],
+                )
+                for field_key in ("procurement_subject", "starting_price", "delivery_terms", "lot_count", "partial_supply_allowed"):
+                    _add_field_source(sources_by_field, field_key, product_source)
             try:
                 w.progress.emit(f"LM Studio: извлекаю технические характеристики {registry}…")
                 technical, technical_raw = _extract_technical_table_via_lm(
@@ -1423,6 +1554,22 @@ def make_analyze_procedure_task(
                     lm_model=lm_model,
                 )
                 sink["technical_by_registry"][registry] = technical
+                tech_sources: dict[str, list[dict[str, Any]]] = {}
+                if product_rows_info:
+                    tech_source = _card_source(
+                        "Перечень товаров",
+                        detail_url,
+                        json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:8000],
+                    )
+                    for key, value in technical.items():
+                        if value:
+                            _add_field_source(tech_sources, key, tech_source)
+                if documents_text.strip():
+                    doc_source = _document_like_source("Документы закупки", documents_text[:8000])
+                    for key, value in technical.items():
+                        if value:
+                            _add_field_source(tech_sources, key, doc_source, prepend=False)
+                sink["technical_sources_by_registry"][registry] = tech_sources
                 previous_raw = str(sink["raw_by_registry"].get(registry) or "")
                 sink["raw_by_registry"][registry] = (
                     previous_raw
@@ -1442,6 +1589,7 @@ def make_analyze_procedure_task(
                         ),
                     }
                 )
+            sink["sources_by_registry"][registry] = sources_by_field
             rows.extend(
                 _rows_for_lots(
                     registry=registry,

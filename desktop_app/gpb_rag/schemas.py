@@ -17,3 +17,16 @@ class ChunkPayload:
     text: str
     page: int | None = None
     section: str | None = None
+
+
+@dataclass
+class FieldSource:
+    source_type: str
+    label: str
+    file_name: str = ""
+    text: str = ""
+    page: int | None = None
+    section: str | None = None
+    chunk_id: str = ""
+    url: str = ""
+    score: float | None = None

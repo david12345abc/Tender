@@ -10,7 +10,7 @@ from .embedding_store import FaissChunkIndex
 from .extraction import extract_fields_via_retrieval
 from .ingest import ingest_card_page_text, ingest_directory
 from .normalize import normalize_whitespace, strip_repeated_headers_footers
-from .schemas import ChunkPayload
+from .schemas import ChunkPayload, FieldSource
 
 DEFAULT_EMBED_MODEL = os.environ.get(
     "GPB_RAG_EMBEDDING_MODEL",
@@ -47,7 +47,7 @@ def run_rag_table_analysis(
     stop_flag=None,
     debug_dir: Path | None = None,
     ingest_notes_out: list[str] | None = None,
-) -> tuple[dict[str, str], str]:
+) -> tuple[dict[str, str], str, dict[str, list[FieldSource]]]:
     """Строит индекс по карточке и файлам в unpacked_dir, затем извлекает поля таблицы."""
     sources: list[tuple] = []
     card_meta = ingest_card_page_text(page_text, registry, card_url)
@@ -81,7 +81,7 @@ def run_rag_table_analysis(
     chunks = chunks[:MAX_CHUNKS_PER_PROCEDURE]
     if not chunks:
         empty = {k: "" for k in ANALYSIS_JSON_KEYS}
-        return empty, "[RAG] Нет текста для индексации."
+        return empty, "[RAG] Нет текста для индексации.", {}
 
     store = FaissChunkIndex(DEFAULT_EMBED_MODEL)
     if progress:
@@ -95,7 +95,7 @@ def run_rag_table_analysis(
             if ingest_notes_out is not None:
                 ingest_notes_out.append(f"Не удалось сохранить FAISS-индекс для чата: {exc}")
 
-    parsed, raw_bundle = extract_fields_via_retrieval(
+    parsed, raw_bundle, sources_by_field = extract_fields_via_retrieval(
         store,
         lm_base_url=lm_base_url,
         lm_model=lm_model,
@@ -104,4 +104,4 @@ def run_rag_table_analysis(
         progress=progress,
         stop_flag=stop_flag,
     )
-    return parsed, raw_bundle
+    return parsed, raw_bundle, sources_by_field

@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import traceback
+import html
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -67,7 +68,7 @@ from .constants import (
     VIEW_URL,
     user_writable_root,
 )
-from .lm_table_analysis import ANALYSIS_TABLE_HEADERS_RU, TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU
+from .lm_table_analysis import ANALYSIS_JSON_KEYS, ANALYSIS_TABLE_HEADERS_RU, TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU
 from .gpb_rag.chat import answer_question_from_saved_index
 from .keywords import (
     load_blacklist_keyword_items,
@@ -1452,6 +1453,129 @@ class MainWindow(QMainWindow):
         clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(name or "")).strip(" .")
         return clean[:120] or default
 
+    def _source_file_uri(self, path: Path) -> str:
+        try:
+            return path.resolve().as_uri()
+        except Exception:
+            return str(path.resolve())
+
+    def _find_source_file(self, unpacked_dir: Path, file_name: str) -> Path | None:
+        if not unpacked_dir.is_dir() or not file_name:
+            return None
+        candidate = unpacked_dir / file_name
+        if candidate.is_file():
+            return candidate
+        for item in unpacked_dir.rglob("*"):
+            if item.is_file() and item.name == file_name:
+                return item
+        return None
+
+    def _write_source_html(
+        self,
+        *,
+        source: dict[str, Any],
+        sources_dir: Path,
+        rel_dir_name: str,
+        index: int,
+        unpacked_dir: Path,
+    ) -> tuple[str, str]:
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        label = str(source.get("label") or f"Источник {index}").strip()
+        safe_name = self._safe_folder_name(f"{index}_{label}", f"source_{index}") + ".html"
+        html_path = sources_dir / safe_name
+        file_name = str(source.get("file_name") or "").strip()
+        source_file = self._find_source_file(unpacked_dir, file_name)
+        source_file_link = ""
+        if source_file is not None:
+            source_file_link = (
+                f'<p><a href="{html.escape(self._source_file_uri(source_file))}">'
+                f"Открыть исходный документ: {html.escape(source_file.name)}</a></p>"
+            )
+        page = source.get("page")
+        section = str(source.get("section") or "").strip()
+        text = str(source.get("text") or "").strip()
+        if not text:
+            text = "Фрагмент источника не сохранен, ссылка указывает на карточку или документ."
+        meta_parts = [label]
+        if page:
+            meta_parts.append(f"стр. {page}")
+        if section:
+            meta_parts.append(section)
+        body = html.escape(text)
+        html_path.write_text(
+            "<!doctype html><html><head><meta charset=\"utf-8\">"
+            "<style>body{font-family:Arial,sans-serif;margin:32px;line-height:1.45}"
+            "mark{background:#fff59d;padding:2px 4px}pre{white-space:pre-wrap;"
+            "border:1px solid #ddd;background:#fafafa;padding:16px}</style>"
+            f"<title>{html.escape(label)}</title></head><body>"
+            f"<h1>{html.escape(label)}</h1>"
+            f"<p>{html.escape(' / '.join(str(x) for x in meta_parts if x))}</p>"
+            f"{source_file_link}"
+            f"<pre><mark>{body}</mark></pre>"
+            "</body></html>",
+            encoding="utf-8",
+        )
+        return f"{rel_dir_name}/{safe_name}", label
+
+    def _source_links_for_field(
+        self,
+        *,
+        sources: list[dict[str, Any]],
+        sources_dir: Path,
+        rel_dir_name: str,
+        unpacked_dir: Path,
+    ) -> list[tuple[str, str]]:
+        links: list[tuple[str, str]] = []
+        for index, source in enumerate(sources[:3], start=1):
+            source_type = str(source.get("source_type") or "").strip().lower()
+            label = str(source.get("label") or f"Источник {index}").strip()
+            if source_type == "card" and source.get("url"):
+                links.append((f"Источник {index}: {label}", str(source.get("url"))))
+            else:
+                href, html_label = self._write_source_html(
+                    source=source,
+                    sources_dir=sources_dir,
+                    rel_dir_name=rel_dir_name,
+                    index=index,
+                    unpacked_dir=unpacked_dir,
+                )
+                links.append((f"Источник {index}: {html_label}", href))
+        return links
+
+    def _add_docx_hyperlink(self, paragraph, text: str, url: str) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+
+        part = paragraph.part
+        r_id = part.relate_to(url, RT.HYPERLINK, is_external=True)
+        hyperlink = OxmlElement("w:hyperlink")
+        hyperlink.set(qn("r:id"), r_id)
+        run = OxmlElement("w:r")
+        r_pr = OxmlElement("w:rPr")
+        color = OxmlElement("w:color")
+        color.set(qn("w:val"), "0563C1")
+        underline = OxmlElement("w:u")
+        underline.set(qn("w:val"), "single")
+        r_pr.append(color)
+        r_pr.append(underline)
+        run.append(r_pr)
+        t = OxmlElement("w:t")
+        t.text = text
+        run.append(t)
+        hyperlink.append(run)
+        paragraph._p.append(hyperlink)
+
+    def _fill_docx_value_with_sources(self, cell, value: Any, links: list[tuple[str, str]]) -> None:
+        cell.text = str(value or "—")
+        if not links:
+            return
+        paragraph = cell.add_paragraph()
+        for index, (label, href) in enumerate(links):
+            if index:
+                paragraph.add_run("  ")
+            self._add_docx_hyperlink(paragraph, label, href)
+
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
         from docx import Document
 
@@ -1459,6 +1583,8 @@ class MainWindow(QMainWindow):
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
         unpacked_by_registry = self._analysis_sink.get("unpacked_docs_by_registry") or {}
         technical_by_registry = self._analysis_sink.get("technical_by_registry") or {}
+        sources_by_registry = self._analysis_sink.get("sources_by_registry") or {}
+        technical_sources_by_registry = self._analysis_sink.get("technical_sources_by_registry") or {}
         summary_rows: list[list[str]] = []
         lot_divisibility_by_registry: dict[str, str] = {}
 
@@ -1477,6 +1603,13 @@ class MainWindow(QMainWindow):
             while path.exists():
                 path = ANALYSIS_DIR / self._safe_analysis_filename(f"{registry}_{title[:70]}_{n}", registry)
                 n += 1
+            sources_rel_dir = f"{path.stem}_sources"
+            sources_dir = path.parent / sources_rel_dir
+            unpacked_path = Path(str(unpacked_by_registry.get(registry) or unpacked_by_registry.get(base_registry) or ""))
+            if not unpacked_path.is_dir():
+                fallback_unpacked = ANALYSIS_DIR / "разархивированные_документы" / self._safe_folder_name(base_registry)
+                if fallback_unpacked.is_dir():
+                    unpacked_path = fallback_unpacked
 
             doc = Document()
             doc.add_heading(f"Анализ закупки {registry}", level=1)
@@ -1491,10 +1624,22 @@ class MainWindow(QMainWindow):
                 for paragraph in cell.paragraphs:
                     for run in paragraph.runs:
                         run.bold = True
-            for header, value in zip(ANALYSIS_TABLE_HEADERS_RU, row):
+            field_sources = sources_by_registry.get(registry) or sources_by_registry.get(base_registry) or {}
+            analysis_field_keys = ["registry", "url", "doc_url", *ANALYSIS_JSON_KEYS]
+            for field_key, header, value in zip(analysis_field_keys, ANALYSIS_TABLE_HEADERS_RU, row):
                 cells = table.add_row().cells
                 cells[0].text = str(header)
-                cells[1].text = str(value or "—")
+                links = self._source_links_for_field(
+                    sources=list((field_sources or {}).get(field_key) or []),
+                    sources_dir=sources_dir,
+                    rel_dir_name=sources_rel_dir,
+                    unpacked_dir=unpacked_path,
+                )
+                if field_key == "url" and value:
+                    links = [("Карточка ЭТП", str(value))]
+                elif field_key == "doc_url" and value:
+                    links = [("Документы ЭТП", str(value))]
+                self._fill_docx_value_with_sources(cells[1], value, links)
 
             technical = technical_by_registry.get(registry) or technical_by_registry.get(base_registry) or {}
             if technical:
@@ -1509,10 +1654,17 @@ class MainWindow(QMainWindow):
                     for paragraph in cell.paragraphs:
                         for run in paragraph.runs:
                             run.bold = True
+                tech_sources = technical_sources_by_registry.get(registry) or technical_sources_by_registry.get(base_registry) or {}
                 for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
                     cells = tech_table.add_row().cells
                     cells[0].text = str(header)
-                    cells[1].text = str(technical.get(key) or "—")
+                    links = self._source_links_for_field(
+                        sources=list((tech_sources or {}).get(key) or []),
+                        sources_dir=sources_dir,
+                        rel_dir_name=sources_rel_dir,
+                        unpacked_dir=unpacked_path,
+                    )
+                    self._fill_docx_value_with_sources(cells[1], technical.get(key), links)
 
             doc.save(path)
             try:
@@ -1526,18 +1678,45 @@ class MainWindow(QMainWindow):
                 if title:
                     ws.append(["Наименование", title])
                 ws.append([])
-                for header, value in zip(ANALYSIS_TABLE_HEADERS_RU, row):
-                    ws.append([str(header), str(value if value is not None else "—")])
+                ws.append(["Поле", "Значение", "Источник 1", "Источник 2", "Источник 3"])
+                for field_key, header, value in zip(analysis_field_keys, ANALYSIS_TABLE_HEADERS_RU, row):
+                    links = self._source_links_for_field(
+                        sources=list((field_sources or {}).get(field_key) or []),
+                        sources_dir=sources_dir,
+                        rel_dir_name=sources_rel_dir,
+                        unpacked_dir=unpacked_path,
+                    )
+                    if field_key == "url" and value:
+                        links = [("Карточка ЭТП", str(value))]
+                    elif field_key == "doc_url" and value:
+                        links = [("Документы ЭТП", str(value))]
+                    ws.append([str(header), str(value if value is not None else "—"), "", "", ""])
+                    for link_index, (label, href) in enumerate(links[:3], start=3):
+                        cell = ws.cell(row=ws.max_row, column=link_index)
+                        cell.value = label
+                        cell.hyperlink = href
+                        cell.style = "Hyperlink"
                 if technical:
                     ws.append([])
                     ws.append(["Технические характеристики оборудования", ""])
+                    ws.append(["Поле", "Значение", "Источник 1", "Источник 2", "Источник 3"])
                     for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
-                        ws.append([str(header), str(technical.get(key) or "—")])
+                        links = self._source_links_for_field(
+                            sources=list((tech_sources or {}).get(key) or []),
+                            sources_dir=sources_dir,
+                            rel_dir_name=sources_rel_dir,
+                            unpacked_dir=unpacked_path,
+                        )
+                        ws.append([str(header), str(technical.get(key) or "—"), "", "", ""])
+                        for link_index, (label, href) in enumerate(links[:3], start=3):
+                            cell = ws.cell(row=ws.max_row, column=link_index)
+                            cell.value = label
+                            cell.hyperlink = href
+                            cell.style = "Hyperlink"
                 wb.save(xlsx_path)
             except Exception:
                 pass
 
-            unpacked_path = Path(str(unpacked_by_registry.get(registry) or ""))
             if not unpacked_path.is_dir():
                 fallback_unpacked = ANALYSIS_DIR / "разархивированные_документы" / self._safe_folder_name(registry)
                 if fallback_unpacked.is_dir():
@@ -1696,6 +1875,11 @@ class MainWindow(QMainWindow):
                     if src.resolve() != dst.resolve():
                         shutil.copy2(src, dst)
                     copied.append(dst)
+                src_sources = src_docx.parent / f"{src_docx.stem}_sources"
+                if src_sources.is_dir():
+                    dst_sources = unique_destination(Path(destination_dir) / src_sources.name)
+                    shutil.copytree(src_sources, dst_sources)
+                    copied.append(dst_sources)
                 QMessageBox.information(
                     dlg,
                     "Скачивание завершено",
