@@ -506,11 +506,8 @@ def _apply_lot_item_to_parsed(
     if item.get("delivery_date"):
         lot_parsed["delivery_terms"] = str(item["delivery_date"]).strip()
     lot_parsed["lot_count"] = total_count
-    lot_parsed["partial_supply_allowed"] = (
-        "Нет, одна товарная позиция/единый лот"
-        if total_count == "1"
-        else f"Да, делимая: {total_count} товарных позиций/лотов"
-    )
+    if _is_empty_analysis_value(lot_parsed.get("partial_supply_allowed")):
+        lot_parsed["partial_supply_allowed"] = "Нет, единый лот" if total_count != "1" else "Нет, одна товарная позиция/единый лот"
     return lot_parsed
 
 
@@ -702,16 +699,125 @@ def _extract_technical_table_via_lm(
         lot_name=lot_name,
         lot_item_text=lot_item_text,
     )
-    raw = call_lm_studio_chat(
-        lm_base_url,
-        lm_model,
-        build_technical_system_prompt(),
-        prompt,
-        timeout_sec=900,
-        max_tokens=4096,
-    )
+    try:
+        raw = call_lm_studio_chat(
+            lm_base_url,
+            lm_model,
+            build_technical_system_prompt(),
+            prompt,
+            timeout_sec=900,
+            max_tokens=4096,
+        )
+    except Exception as exc:
+        raw = f"[ошибка извлечения технических параметров] {exc}"
+        parsed = {}
+        parsed = _apply_technical_defaults(
+            parsed,
+            lot_name=lot_name,
+            page_text="\n".join((page_text, product_info_text, lot_item_text)),
+            documents_text=documents_text,
+        )
+        return parsed, raw
     parsed = parse_technical_table_json(raw)
+    parsed = _apply_technical_defaults(
+        parsed,
+        lot_name=lot_name,
+        page_text="\n".join((page_text, product_info_text, lot_item_text)),
+        documents_text=documents_text,
+    )
     return parsed, raw
+
+
+def _looks_generic_equipment_name(value: Any) -> bool:
+    text = str(value or "").strip().casefold()
+    if _is_empty_analysis_value(text):
+        return True
+    return any(
+        marker in text
+        for marker in (
+            "оборудование для выполнения",
+            "текущий ремонт оборудования",
+            "без указания инвентарного",
+            "предмет закупки",
+            "работы по ремонту",
+        )
+    )
+
+
+def _extract_repair_equipment_names(text: str) -> str:
+    src = re.sub(r"\s+", " ", str(text or " "))
+    variants: list[str] = []
+
+    title_match = re.search(
+        r"ремонт\s+(.{10,220}?)(?:\s+для\s+нужд|\s+в\s+20\d{2}\s+году|\s*\(|$)",
+        src,
+        re.I,
+    )
+    if title_match:
+        candidate = title_match.group(1).strip(" .,:;")
+        if 5 <= len(candidate) <= 220:
+            variants.append(candidate)
+
+    if re.search(r"рентгеновск\w+\s+аппарат", src, re.I):
+        variants.append("рентгеновские аппараты")
+    if re.search(r"ультразвуков\w+\s+дефектоскоп", src, re.I):
+        variants.append("ультразвуковые дефектоскопы")
+
+    series: list[str] = []
+    for pattern in (
+        r"рентгеновских\s+аппаратов\s+серии\s+([A-ZА-ЯЁ0-9\- ]{2,30})",
+        r"ультразвуковых\s+дефектоскопов\s+([A-ZА-ЯЁ0-9\- ]{2,30})",
+    ):
+        for match in re.finditer(pattern, src, re.I):
+            item = re.sub(r"\s+", " ", match.group(0)).strip(" .,:;")
+            if item and item not in series:
+                series.append(item)
+    if series:
+        variants.append("; ".join(series[:6]))
+
+    out: list[str] = []
+    for variant in variants:
+        value = re.sub(r"\s+", " ", variant).strip(" .,:;")
+        if value and value.casefold() not in {x.casefold() for x in out}:
+            out.append(value)
+    return "; ".join(out[:4])
+
+
+def _apply_technical_defaults(
+    parsed: dict[str, str],
+    *,
+    lot_name: str,
+    page_text: str,
+    documents_text: str,
+) -> dict[str, str]:
+    out = dict(parsed or {})
+    combined = "\n".join((str(lot_name or ""), str(page_text or "")[:30_000], str(documents_text or "")[:80_000]))
+    equipment_name = _extract_repair_equipment_names(combined)
+    if equipment_name and _looks_generic_equipment_name(out.get("equipment_type_name")):
+        out["equipment_type_name"] = equipment_name
+
+    equipment_folded = str(out.get("equipment_type_name") or equipment_name).casefold()
+    if _is_empty_analysis_value(out.get("measurement_method")):
+        methods: list[str] = []
+        if "рентген" in equipment_folded:
+            methods.append("рентгенографический контроль")
+        if "ультразвуков" in equipment_folded or "дефектоскоп" in equipment_folded:
+            methods.append("ультразвуковой контроль")
+        if methods:
+            out["measurement_method"] = "; ".join(methods)
+
+    for key, value in list(out.items()):
+        if isinstance(value, list):
+            value = "; ".join(str(item).strip() for item in value if str(item).strip())
+        elif isinstance(value, str) and re.fullmatch(r"\s*\[[\s\S]*\]\s*", value):
+            list_items = re.findall(r"""['"]([^'"]{2,300})['"]""", value)
+            if list_items:
+                value = "; ".join(item.strip() for item in list_items if item.strip())
+        if key == "equipment_type_name" and _looks_generic_equipment_name(value):
+            out[key] = ""
+        else:
+            out[key] = _clean_analysis_value(value)
+    return out
 
 
 def _extract_lot_count_from_card_via_lm(
@@ -729,17 +835,6 @@ def _extract_lot_count_from_card_via_lm(
     product_info_text = ""
     if isinstance(product_rows_info, dict) and product_rows_info:
         product_info_text = json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:12000]
-    if parsed_product_count > 1:
-        return (
-            str(parsed_product_count),
-            f"Да, делимая: {parsed_product_count} товарных позиций/лотов",
-            (
-                "### product_rows_dom\n"
-                "Количество лотов/товарных позиций определено первым этапом из DOM-блока "
-                "div.x-fieldset-bwrap.\n"
-                f"{product_info_text}"
-            ),
-        )
 
     system_prompt = (
         "Ты аналитик закупок секции Газпром. Твоя задача — определить делимость заявки "
@@ -750,7 +845,8 @@ def _extract_lot_count_from_card_via_lm(
         f"Реестровый номер: {registry}\n"
         f"URL карточки: {detail_url}\n\n"
         "Определи:\n"
-        "1. lot_count — количество лотов или самостоятельных товарных позиций.\n"
+        "1. lot_count — количество товарных позиций/строк в перечне товаров. "
+        "Если на странице есть отдельный список лотов, можно указать количество лотов, но не смешивай это с делимостью.\n"
         "2. partial_supply_allowed — делимая заявка/лот или нет.\n\n"
         "Правила:\n"
         "- Главный источник — полный текст страницы карточки/извещения ниже. Его нужно анализировать всегда.\n"
@@ -759,11 +855,14 @@ def _extract_lot_count_from_card_via_lm(
         "но обязательно проверь документы на формулировки о делимости заявки.\n"
         "- Сначала ищи список лотов и строку вроде «Позиций всего: N»/«Список лотов».\n"
         "- Если слово «лот» отсутствует, смотри перечень товаров: если самостоятельных товаров больше одного, "
-        "укажи количество товаров как количество товарных позиций и признак делимости.\n"
-        "- Если lot_count больше 1, partial_supply_allowed обязан быть положительным: "
-        "«Да, делимая: N товарных позиций/лотов».\n"
-        "- Если lot_count равен 1, partial_supply_allowed должен быть отрицательным или нейтральным: "
-        "«Нет, одна позиция/единый лот», если нет другой прямой формулировки.\n"
+        "укажи количество товаров как количество товарных позиций.\n"
+        "- ВАЖНО: несколько товаров в перечне НЕ означают делимый лот. "
+        "Неделимый лот может содержать 2 и более товара, которые должен поставить один поставщик.\n"
+        "- partial_supply_allowed определяй только по прямым формулировкам: "
+        "«лот делимый», «лот является неделимым», «поставка части допускается/не допускается», "
+        "«заявка является делимой» и похожим условиям.\n"
+        "- Если lot_count больше 1, но в тексте указано «лот является неделимым», "
+        "верни lot_count как количество товаров и partial_supply_allowed = «Нет, лот неделимый».\n"
         "- Документы используй как дополнительное подтверждение, если карточки недостаточно.\n"
         "- Если число определить нельзя, верни null для lot_count и объясни в partial_supply_allowed, "
         "что делимость не определена по доступному тексту.\n\n"
@@ -791,34 +890,16 @@ def _extract_lot_count_from_card_via_lm(
         max_tokens=1200,
     )
     lot_count, partial = _parse_lot_count_response(raw)
-    if parsed_product_count == 1 and _is_empty_analysis_value(lot_count):
+    if parsed_product_count > 0:
+        lot_count = str(parsed_product_count)
+    elif parsed_product_count == 1 and _is_empty_analysis_value(lot_count):
         lot_count = "1"
-    if _lot_count_number(lot_count) > 1 and _looks_negative_divisibility(partial):
-        correction_prompt = (
-            "Ты вернул противоречивый ответ по закупке.\n"
-            f"Предыдущий JSON/ответ:\n{raw}\n\n"
-            f"В нём lot_count = {lot_count!r}, то есть товарных позиций/лотов больше одной, "
-            f"но partial_supply_allowed = {partial!r}, что означает неделимость.\n\n"
-            "Перепроверь полный текст карточки ниже и верни исправленный JSON. "
-            "Если lot_count больше 1, partial_supply_allowed должен быть положительным: "
-            "«Да, делимая: N товарных позиций/лотов». Ответ строго JSON без markdown.\n\n"
-            "ПОЛНЫЙ ТЕКСТ СТРАНИЦЫ КАРТОЧКИ / ИЗВЕЩЕНИЯ:\n"
-            "-----\n"
-            f"{page_text or '[текст карточки не извлечён]'}\n"
-            "-----\n\n"
-            "Формат ответа строго:\n"
-            "{\"lot_count\": string|null, \"partial_supply_allowed\": string|null}\n"
-        )
-        corrected_raw = call_lm_studio_chat(
-            lm_base_url,
-            lm_model,
-            system_prompt,
-            correction_prompt,
-            timeout_sec=900,
-            max_tokens=1200,
-        )
-        corrected_lot_count, corrected_partial = _parse_lot_count_response(corrected_raw)
-        return corrected_lot_count, corrected_partial, raw + "\n\n### lot_count_full_card_correction\n" + corrected_raw
+    combined = f"{page_text}\n{documents_text}".casefold()
+    if re.search(r"лот\s+(?:является\s+)?неделим|неделим(?:ый|ая|ое)", combined, re.I):
+        partial = "Нет, лот неделимый"
+    elif _is_empty_analysis_value(partial):
+        if re.search(r"лот\s+(?:является\s+)?делим|заявка\s+(?:является\s+)?делим", combined, re.I):
+            partial = "Да, лот делимый"
     return lot_count, partial, raw
 
 
@@ -1787,8 +1868,6 @@ def make_analyze_procedure_task(
             if product_items:
                 parsed = dict(parsed or {})
                 parsed["lot_count"] = str(len(product_items))
-                if len(product_items) > 1:
-                    parsed["partial_supply_allowed"] = f"Да, делимая: {len(product_items)} позиций в перечне товаров"
                 product_source = _card_source(
                     "Перечень товаров",
                     detail_url,
