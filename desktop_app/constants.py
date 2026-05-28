@@ -81,6 +81,9 @@ VIEW_URL = "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/{pid}"
 LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://192.168.1.157:1234")
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "yandexgpt-5-lite-8b-instruct")
 
+# API мастера подбора наших приборов.
+EQUIPMENT_API_BASE_URL = os.environ.get("EQUIPMENT_API_BASE_URL", "http://192.168.5.49:8010/api")
+
 # Адрес JSON-манифеста последнего релиза. Можно задать через переменную окружения
 # или положить путь/URL в update_manifest_url.txt рядом с приложением либо в LOCALAPPDATA.
 UPDATE_MANIFEST_ENV = "ETP_GPB_UPDATE_MANIFEST"

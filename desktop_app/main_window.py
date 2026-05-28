@@ -1721,6 +1721,36 @@ class MainWindow(QMainWindow):
                 paragraph.add_run("\n")
             self._add_docx_hyperlink(paragraph, self._clean_doc_text(label), self._clean_doc_text(href))
 
+    def _equipment_selection_table_rows(self, selection: dict[str, Any]) -> list[tuple[str, str]]:
+        if not isinstance(selection, dict) or not selection:
+            return [("Результат", "Прибор не подобран: подбор не выполнялся.")]
+        query = selection.get("query") if isinstance(selection.get("query"), dict) else {}
+        equipment = selection.get("equipment") if isinstance(selection.get("equipment"), list) else []
+        rows: list[tuple[str, str]] = [
+            ("Результат", str(selection.get("message") or "Прибор не подобран."))
+        ]
+        if query:
+            rows.append(("Параметры запроса", "\n".join(f"{key}: {value}" for key, value in query.items())))
+        if selection.get("url"):
+            rows.append(("URL запроса", str(selection.get("url") or "")))
+        if equipment:
+            lines: list[str] = []
+            for item in equipment:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("id") or "Прибор").strip()
+                equip_id = str(item.get("id") or "").strip()
+                diameter = str(item.get("recommended_diameter") or "").strip()
+                details = []
+                if equip_id:
+                    details.append(f"id: {equip_id}")
+                if diameter:
+                    details.append(f"рекомендуемый диаметр: {diameter}")
+                suffix = f" ({', '.join(details)})" if details else ""
+                lines.append(f"• {name}{suffix}")
+            rows.append(("Подобранные приборы", "\n".join(lines) if lines else "Прибор не подобран."))
+        return rows
+
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
         from docx import Document
 
@@ -1728,6 +1758,7 @@ class MainWindow(QMainWindow):
         title_by_registry = self._analysis_sink.get("title_by_registry") or {}
         unpacked_by_registry = self._analysis_sink.get("unpacked_docs_by_registry") or {}
         technical_by_registry = self._analysis_sink.get("technical_by_registry") or {}
+        equipment_selection_by_registry = self._analysis_sink.get("equipment_selection_by_registry") or {}
         sources_by_registry = self._analysis_sink.get("sources_by_registry") or {}
         technical_sources_by_registry = self._analysis_sink.get("technical_sources_by_registry") or {}
         summary_rows: list[list[str]] = []
@@ -1815,6 +1846,23 @@ class MainWindow(QMainWindow):
                 self._fill_docx_value_cell(cells[1], technical.get(key))
                 self._fill_docx_source_cell(cells[2], links)
 
+            selection = equipment_selection_by_registry.get(registry) or equipment_selection_by_registry.get(base_registry) or {}
+            doc.add_paragraph("")
+            doc.add_heading("Подбор нашего прибора", level=2)
+            selection_table = doc.add_table(rows=1, cols=2)
+            selection_table.style = "Table Grid"
+            selection_hdr = selection_table.rows[0].cells
+            selection_hdr[0].text = "Поле"
+            selection_hdr[1].text = "Значение"
+            for cell in selection_hdr:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+            for label, value in self._equipment_selection_table_rows(selection):
+                cells = selection_table.add_row().cells
+                cells[0].text = self._clean_doc_text(label)
+                self._fill_docx_value_cell(cells[1], value)
+
             doc.save(path)
             try:
                 from openpyxl import Workbook
@@ -1864,6 +1912,12 @@ class MainWindow(QMainWindow):
                         cell.hyperlink = links[0][1]
                         cell.style = "Hyperlink"
                         cell.alignment = cell.alignment.copy(wrap_text=True)
+                ws.append([])
+                ws.append(["Подбор нашего прибора", ""])
+                ws.append(["Поле", "Значение"])
+                for label, value in self._equipment_selection_table_rows(selection):
+                    ws.append([label, value or "—"])
+                    ws.cell(row=ws.max_row, column=2).alignment = ws.cell(row=ws.max_row, column=2).alignment.copy(wrap_text=True)
                 wb.save(xlsx_path)
             except Exception:
                 pass

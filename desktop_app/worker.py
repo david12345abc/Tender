@@ -7,12 +7,15 @@ import traceback
 from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from etp_client import HARD_SERVER_LIMIT, EtpClient, _server_status_value
 
-from .constants import ANALYSIS_DIR, VIEW_URL
+from .constants import ANALYSIS_DIR, EQUIPMENT_API_BASE_URL, VIEW_URL
 from .document_text import _is_archive, prepare_documents_for_analysis
 from .gpb_rag.pipeline import ragged_analysis_available, run_rag_table_analysis
 from .gpb_rag.schemas import FieldSource
@@ -883,6 +886,331 @@ def _apply_technical_defaults(
     return out
 
 
+_EQUIPMENT_QUERY_KEYS = {
+    "medium",
+    "flowMin",
+    "flowMax",
+    "flow_unit",
+    "pressureMin",
+    "pressureMax",
+    "tempMediumMin",
+    "tempMediumMax",
+    "tempAmbientMin",
+    "tempAmbientMax",
+    "accuracy",
+    "diameter",
+    "densityMin",
+    "densityMax",
+    "allowedEquipmentIds",
+    "application",
+    "gas_type",
+}
+
+
+def _json_object_from_text(raw: str) -> dict[str, Any]:
+    obj = _first_json_object(raw)
+    return obj if isinstance(obj, dict) else {}
+
+
+def _number_or_none(value: Any) -> str:
+    text = str(value or "").replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    return match.group(0) if match else ""
+
+
+def _range_numbers(value: Any) -> tuple[str, str]:
+    text = str(value or "").replace(",", ".")
+    numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+    if len(numbers) >= 2:
+        return numbers[0], numbers[1]
+    if len(numbers) == 1:
+        return numbers[0], numbers[0]
+    return "", ""
+
+
+def _fallback_equipment_query_from_technical(technical: dict[str, str]) -> dict[str, str]:
+    medium_text = " ".join(
+        str(technical.get(key) or "")
+        for key in ("measured_medium_type", "measured_medium_name")
+    ).casefold()
+    medium = "liquid" if any(marker in medium_text for marker in ("жидк", "вода", "нефт", "масл")) else "gas"
+    query: dict[str, str] = {
+        "medium": medium,
+        "flow_unit": "м³/ч",
+        "application": "industrial",
+    }
+    if medium == "gas":
+        query["gas_type"] = "natural" if "природ" in medium_text else "technological"
+
+    flow_min, flow_max = _range_numbers(technical.get("flow_rate_or_range"))
+    if flow_min:
+        query["flowMin"] = flow_min
+    if flow_max:
+        query["flowMax"] = flow_max
+
+    pressure_min, pressure_max = _range_numbers(technical.get("working_medium_pressure"))
+    if pressure_min:
+        query["pressureMin"] = pressure_min
+    if pressure_max:
+        query["pressureMax"] = pressure_max
+
+    temp_min, temp_max = _range_numbers(technical.get("working_medium_temperature"))
+    if temp_min:
+        query["tempMediumMin"] = temp_min
+    if temp_max:
+        query["tempMediumMax"] = temp_max
+
+    ambient_min, ambient_max = _range_numbers(technical.get("ambient_air_temperature"))
+    if ambient_min:
+        query["tempAmbientMin"] = ambient_min
+    if ambient_max:
+        query["tempAmbientMax"] = ambient_max
+
+    accuracy = _number_or_none(technical.get("accuracy_class_or_flow_error"))
+    if accuracy:
+        query["accuracy"] = accuracy
+
+    diameter = _number_or_none(technical.get("nominal_diameter_or_pipeline_diameter"))
+    if diameter:
+        query["diameter"] = diameter
+
+    density_min, density_max = _range_numbers(technical.get("working_medium_density"))
+    if density_min:
+        query["densityMin"] = density_min
+    if density_max:
+        query["densityMax"] = density_max
+    return query
+
+
+def _equipment_selection_rag_context(
+    *,
+    lot_name: str,
+    page_text: str,
+    documents_text: str,
+    product_rows_info: Any,
+    lot_item: Any,
+) -> str:
+    needles = (
+        "расход",
+        "диапазон расход",
+        "давлен",
+        "температур",
+        "окружающ",
+        "точност",
+        "погрешност",
+        "диаметр",
+        "dn",
+        "ду",
+        "плотност",
+        "вязкост",
+        "опросн",
+        "узел измерения",
+        "измеряем",
+        "среда",
+    )
+    lot_terms = [
+        term.casefold()
+        for term in re.findall(r"[A-Za-zА-Яа-яЁё0-9\-]{4,}", str(lot_name or ""))
+        if len(term) >= 4
+    ][:12]
+
+    candidates: list[tuple[int, str, str]] = []
+
+    def add_candidate(label: str, text: Any, base_score: int = 0) -> None:
+        raw = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(raw) < 20:
+            return
+        folded = raw.casefold()
+        score = base_score
+        score += sum(3 for needle in needles if needle in folded)
+        score += sum(2 for term in lot_terms if term in folded)
+        if "опросн" in folded:
+            score += 4
+        if "техническ" in folded:
+            score += 2
+        if score <= 0:
+            return
+        candidates.append((score, label, raw[:6000]))
+
+    add_candidate("Строка позиции", json.dumps(lot_item, ensure_ascii=False, indent=2) if isinstance(lot_item, dict) else "", 8)
+    add_candidate("Перечень товаров", json.dumps(product_rows_info, ensure_ascii=False, indent=2) if isinstance(product_rows_info, dict) else "", 6)
+    add_candidate("Карточка ЭТП", page_text[:40_000], 1)
+
+    sections = _document_sections_from_text(documents_text)
+    if sections:
+        for section in sections:
+            add_candidate(str(section.get("label") or "Документ"), section.get("text") or "", 0)
+    else:
+        chunks = re.split(r"\n{2,}", documents_text or "")
+        for idx, chunk in enumerate(chunks[:250], start=1):
+            add_candidate(f"Документ, фрагмент {idx}", chunk, 0)
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    seen: set[str] = set()
+    parts: list[str] = []
+    for _score, label, text in candidates:
+        signature = text[:300].casefold()
+        if signature in seen:
+            continue
+        seen.add(signature)
+        parts.append(f"--- {label} ---\n{text}")
+        if sum(len(part) for part in parts) > 70_000 or len(parts) >= 14:
+            break
+    return "\n\n".join(parts)
+
+
+def _equipment_query_via_lm(
+    *,
+    registry: str,
+    lot_name: str,
+    technical: dict[str, str],
+    rag_context: str,
+    lm_base_url: str,
+    lm_model: str,
+) -> tuple[dict[str, str], str]:
+    prompt = (
+        "На основе технической таблицы закупки и RAG-фрагментов документов подготовь query-параметры для GET "
+        "/api/search-equipment, который подбирает расходомеры. Ответь строго JSON-объектом "
+        "без markdown. Не придумывай значения: если параметра нет в таблице, верни null.\n\n"
+        "Разрешённые ключи JSON:\n"
+        "medium, flowMin, flowMax, flow_unit, pressureMin, pressureMax, tempMediumMin, "
+        "tempMediumMax, tempAmbientMin, tempAmbientMax, accuracy, diameter, densityMin, "
+        "densityMax, allowedEquipmentIds, application, gas_type.\n\n"
+        "Правила:\n"
+        "- medium: gas или liquid; если среда газовая, medium=gas.\n"
+        "- pressureMin/pressureMax всегда в МПа.\n"
+        "- температуры всегда в °C.\n"
+        "- diameter всегда в мм, без DN/Ду.\n"
+        "- flow_unit: м³/ч, ст.м³/ч или кг/ч; если неясно, верни м³/ч.\n"
+        "- application обычно industrial.\n"
+        "- gas_type для природного газа natural, для технологического technological.\n\n"
+        f"Реестровый номер: {registry}\n"
+        f"Позиция: {lot_name or '[не указана]'}\n"
+        "Техническая таблица JSON:\n"
+        f"{json.dumps(technical, ensure_ascii=False, indent=2)}\n\n"
+        "RAG-ФРАГМЕНТЫ ДЛЯ ПОДБОРА ПРИБОРА:\n"
+        "-----\n"
+        f"{rag_context or '[релевантные фрагменты не найдены]'}\n"
+        "-----"
+    )
+    raw = call_lm_studio_chat(
+        lm_base_url,
+        lm_model,
+        "Ты инженер по подбору расходомеров. Возвращай только JSON.",
+        prompt,
+        timeout_sec=180,
+        max_tokens=1200,
+    )
+    obj = _json_object_from_text(raw)
+    query: dict[str, str] = {}
+    for key, value in obj.items():
+        if key not in _EQUIPMENT_QUERY_KEYS or value is None:
+            continue
+        text = str(value).strip()
+        if text and not _is_empty_analysis_value(text):
+            query[key] = text
+    return query, raw
+
+
+def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
+    params = {key: value for key, value in query.items() if str(value or "").strip()}
+    selection_keys = {
+        "flowMin",
+        "flowMax",
+        "pressureMin",
+        "pressureMax",
+        "tempMediumMin",
+        "tempMediumMax",
+        "tempAmbientMin",
+        "tempAmbientMax",
+        "accuracy",
+        "diameter",
+        "densityMin",
+        "densityMax",
+        "allowedEquipmentIds",
+    }
+    if not params or not any(key in params for key in selection_keys):
+        return {
+            "status": "not_selected",
+            "message": "Прибор не подобран: недостаточно технических параметров для запроса.",
+            "query": params,
+            "equipment": [],
+        }
+    url = EQUIPMENT_API_BASE_URL.rstrip("/") + "/search-equipment?" + urlencode(params, doseq=False)
+    try:
+        req = Request(url, headers={"Accept": "application/json"})
+        with urlopen(req, timeout=25) as response:
+            payload = json.loads(response.read().decode("utf-8-sig"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        return {
+            "status": "error",
+            "message": f"Прибор не подобран: ошибка запроса к мастеру подбора ({exc}).",
+            "query": params,
+            "url": url,
+            "equipment": [],
+        }
+
+    equipment = payload.get("equipment") if isinstance(payload, dict) else None
+    if not isinstance(equipment, list) or not equipment:
+        return {
+            "status": "not_found",
+            "message": "Прибор не подобран: мастер подбора не вернул подходящих моделей.",
+            "query": params,
+            "url": url,
+            "raw": payload,
+            "equipment": [],
+        }
+    return {
+        "status": "success",
+        "message": f"Подобрано приборов: {len(equipment)}.",
+        "query": params,
+        "url": url,
+        "raw": payload,
+        "equipment": equipment,
+    }
+
+
+def _select_equipment_for_technical(
+    *,
+    registry: str,
+    lot_name: str,
+    technical: dict[str, str],
+    page_text: str,
+    documents_text: str,
+    product_rows_info: Any,
+    lot_item: Any,
+    lm_base_url: str,
+    lm_model: str,
+) -> dict[str, Any]:
+    lm_raw = ""
+    rag_context = _equipment_selection_rag_context(
+        lot_name=lot_name,
+        page_text=page_text,
+        documents_text=documents_text,
+        product_rows_info=product_rows_info,
+        lot_item=lot_item,
+    )
+    try:
+        query, lm_raw = _equipment_query_via_lm(
+            registry=registry,
+            lot_name=lot_name,
+            technical=technical,
+            rag_context=rag_context,
+            lm_base_url=lm_base_url,
+            lm_model=lm_model,
+        )
+    except Exception as exc:
+        query = _fallback_equipment_query_from_technical(technical)
+        lm_raw = f"[ошибка LM-подготовки параметров подбора] {exc}"
+    fallback_query = _fallback_equipment_query_from_technical(technical)
+    for key, value in fallback_query.items():
+        query.setdefault(key, value)
+    selection = _request_equipment_selection(query)
+    selection["lm_raw"] = lm_raw
+    selection["rag_context_used"] = bool(rag_context.strip())
+    return selection
+
+
 def _extract_lot_count_from_card_via_lm(
     *,
     registry: str,
@@ -1565,6 +1893,7 @@ def make_analyze_procedure_task(
         sink["unpacked_docs_by_registry"] = {}
         sink["document_issues"] = []
         sink["technical_by_registry"] = {}
+        sink["equipment_selection_by_registry"] = {}
         sink["sources_by_registry"] = {}
         sink["technical_sources_by_registry"] = {}
 
@@ -1968,6 +2297,19 @@ def make_analyze_procedure_task(
                         lm_model=lm_model,
                     )
                     sink["technical_by_registry"][row_registry] = technical
+                    w.progress.emit(f"Мастер подбора: подбираю наш прибор для {row_registry}…")
+                    selection = _select_equipment_for_technical(
+                        registry=row_registry,
+                        lot_name=lot_name,
+                        technical=technical,
+                        page_text=page_text,
+                        documents_text=documents_text,
+                        product_rows_info=product_rows_info,
+                        lot_item=lot_item,
+                        lm_base_url=lm_base_url,
+                        lm_model=lm_model,
+                    )
+                    sink["equipment_selection_by_registry"][row_registry] = selection
                     tech_sources: dict[str, list[dict[str, Any]]] = {}
                     if product_rows_info:
                         source_text = (
