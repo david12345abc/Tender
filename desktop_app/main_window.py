@@ -5,12 +5,14 @@ import re
 import shutil
 import traceback
 import html
+import base64
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import quote
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, QSize, QTimer, Qt, Slot
+from PySide6.QtCore import QByteArray, QEvent, QModelIndex, QObject, QRect, QSize, QTimer, Qt, Slot
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -93,9 +95,9 @@ from .worker import (
 
 DELETED_TENDERS_FILE = user_writable_root() / "deleted_tenders.json"
 TABLE_LAYOUT_CANDIDATES = (
-    Path("C:/ETP_GPB_Search_table_layout.json"),
     user_writable_root() / "table_layout.json",
     Path.home() / "ETP_GPB_Search_table_layout.json",
+    Path("C:/ETP_GPB_Search_table_layout.json"),
 )
 
 
@@ -537,10 +539,14 @@ class MainWindow(QMainWindow):
             for logical in range(hh.count())
             if self._table_column_key(logical)
         }
+        header_state = base64.b64encode(bytes(hh.saveState())).decode("ascii")
         return {
-            "version": 1,
+            "version": 2,
+            "platform": self._platform_key,
+            "columns": [key for key, _title in COLUMNS],
             "order": order,
             "widths": widths,
+            "header_state": header_state,
         }
 
     def _write_table_layout_payload(self, payload: dict[str, Any]) -> Path | None:
@@ -573,6 +579,8 @@ class MainWindow(QMainWindow):
     def _save_table_layout(self) -> None:
         if getattr(self, "_restoring_table_layout", False):
             return
+        if not hasattr(self, "table"):
+            return
         self._write_table_layout_payload(self._table_layout_payload())
 
     def _restore_table_layout(self) -> None:
@@ -582,10 +590,13 @@ class MainWindow(QMainWindow):
                 return
             saved_order = data.get("order") if isinstance(data, dict) else None
             saved_widths = data.get("widths") if isinstance(data, dict) else None
-            if not isinstance(saved_order, list):
-                return
+            saved_state = data.get("header_state") if isinstance(data, dict) else None
+            saved_columns = data.get("columns") if isinstance(data, dict) else None
+            current_columns = [key for key, _title in COLUMNS]
 
             hh = self.table.horizontalHeader()
+            if hh.count() <= 0:
+                return
             key_to_logical = {
                 key: idx
                 for idx, (key, _title) in enumerate(COLUMNS)
@@ -593,6 +604,20 @@ class MainWindow(QMainWindow):
             }
 
             self._restoring_table_layout = True
+            if (
+                isinstance(saved_state, str)
+                and isinstance(saved_columns, list)
+                and [str(x) for x in saved_columns] == current_columns
+            ):
+                try:
+                    state = QByteArray.fromBase64(saved_state.encode("ascii"))
+                    if not state.isEmpty() and hh.restoreState(state):
+                        return
+                except Exception:
+                    pass
+
+            if not isinstance(saved_order, list):
+                return
             target_visual = 0
             for raw_key in saved_order:
                 key = str(raw_key)
@@ -1468,6 +1493,10 @@ class MainWindow(QMainWindow):
         except Exception:
             return str(path.resolve())
 
+    def _clean_doc_text(self, value: Any) -> str:
+        text = str(value if value is not None else "")
+        return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+
     def _find_source_file(self, unpacked_dir: Path, file_name: str) -> Path | None:
         if not unpacked_dir.is_dir() or not file_name:
             return None
@@ -1480,6 +1509,76 @@ class MainWindow(QMainWindow):
                 return item
         return None
 
+    def _copy_source_file_link(
+        self,
+        *,
+        source: dict[str, Any],
+        sources_dir: Path,
+        unpacked_dir: Path,
+    ) -> tuple[str, str] | None:
+        file_name = str(source.get("file_name") or "").strip()
+        source_file = self._find_source_file(unpacked_dir, file_name)
+        if source_file is None:
+            return None
+        docs_dir = sources_dir / "documents"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        copied_source = docs_dir / source_file.name
+        try:
+            if not copied_source.exists():
+                shutil.copy2(source_file, copied_source)
+            return f"documents/{copied_source.name}", copied_source.name
+        except Exception:
+            return self._source_file_uri(source_file), source_file.name
+
+    def _write_source_fragment_docx(
+        self,
+        *,
+        source: dict[str, Any],
+        sources_dir: Path,
+        rel_dir_name: str,
+        index: int,
+        unpacked_dir: Path,
+    ) -> tuple[str, str]:
+        from docx import Document
+        from docx.enum.text import WD_COLOR_INDEX
+
+        fragments_dir = sources_dir / "fragments"
+        fragments_dir.mkdir(parents=True, exist_ok=True)
+        label = self._clean_doc_text(source.get("label") or f"Источник {index}").strip()
+        fragment_stem = self._safe_folder_name(f"{index}_{label}", f"source_{index}")
+        fragment_stem = re.sub(r"\.(?:docx?|pdf|xlsx?|rtf|txt)$", "", fragment_stem, flags=re.I)
+        fragment_name = f"{fragment_stem}_fragment.docx"
+        fragment_path = fragments_dir / fragment_name
+        direct = self._copy_source_file_link(
+            source=source,
+            sources_dir=sources_dir,
+            unpacked_dir=unpacked_dir,
+        )
+
+        doc = Document()
+        doc.add_heading(label, level=1)
+        if direct is not None:
+            href, copied_name = direct
+            source_href = f"../{href}" if href.startswith("documents/") else href
+            p = doc.add_paragraph("Исходный документ: ")
+            self._add_docx_hyperlink(p, copied_name, source_href)
+        page = source.get("page")
+        section = self._clean_doc_text(source.get("section") or "").strip()
+        meta = []
+        if page:
+            meta.append(f"стр. {page}")
+        if section:
+            meta.append(section)
+        if meta:
+            doc.add_paragraph(" / ".join(meta))
+        doc.add_paragraph("Найденный фрагмент:")
+        text = self._clean_doc_text(source.get("text") or "").strip() or "Фрагмент источника не сохранен."
+        p = doc.add_paragraph()
+        run = p.add_run(text)
+        run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+        doc.save(fragment_path)
+        return f"{rel_dir_name}/fragments/{fragment_name}", label
+
     def _write_source_html(
         self,
         *,
@@ -1490,7 +1589,7 @@ class MainWindow(QMainWindow):
         unpacked_dir: Path,
     ) -> tuple[str, str]:
         sources_dir.mkdir(parents=True, exist_ok=True)
-        label = str(source.get("label") or f"Источник {index}").strip()
+        label = self._clean_doc_text(source.get("label") or f"Источник {index}").strip()
         safe_name = self._safe_folder_name(f"{index}_{label}", f"source_{index}") + ".html"
         html_path = sources_dir / safe_name
         file_name = str(source.get("file_name") or "").strip()
@@ -1500,8 +1599,21 @@ class MainWindow(QMainWindow):
             "Точный найденный фрагмент показан ниже.</p>"
         )
         if source_file is not None:
-            source_uri = html.escape(self._source_file_uri(source_file))
-            source_name = html.escape(source_file.name)
+            docs_dir = sources_dir / "documents"
+            docs_dir.mkdir(parents=True, exist_ok=True)
+            copied_source = docs_dir / source_file.name
+            try:
+                if not copied_source.exists():
+                    shutil.copy2(source_file, copied_source)
+            except Exception:
+                copied_source = source_file
+            source_href = (
+                f"documents/{quote(copied_source.name)}"
+                if copied_source.parent == docs_dir
+                else self._source_file_uri(copied_source)
+            )
+            source_uri = html.escape(source_href)
+            source_name = html.escape(copied_source.name)
             source_file_link = (
                 '<div class="actions">'
                 f'<a class="button" href="{source_uri}" download="{source_name}">Скачать исходный документ</a>'
@@ -1514,8 +1626,8 @@ class MainWindow(QMainWindow):
                 "</p>"
             )
         page = source.get("page")
-        section = str(source.get("section") or "").strip()
-        text = str(source.get("text") or "").strip()
+        section = self._clean_doc_text(source.get("section") or "").strip()
+        text = self._clean_doc_text(source.get("text") or "").strip()
         if not text:
             text = "Фрагмент источника не сохранен, ссылка указывает на карточку или документ."
         meta_parts = [label]
@@ -1557,18 +1669,18 @@ class MainWindow(QMainWindow):
         links: list[tuple[str, str]] = []
         for index, source in enumerate(sources[:3], start=1):
             source_type = str(source.get("source_type") or "").strip().lower()
-            label = str(source.get("label") or f"Источник {index}").strip()
+            label = self._clean_doc_text(source.get("label") or f"Источник {index}").strip()
             if source_type == "card" and source.get("url"):
                 links.append((f"Источник {index}: {label}", str(source.get("url"))))
             else:
-                href, html_label = self._write_source_html(
+                href, fragment_label = self._write_source_fragment_docx(
                     source=source,
                     sources_dir=sources_dir,
                     rel_dir_name=rel_dir_name,
                     index=index,
                     unpacked_dir=unpacked_dir,
                 )
-                links.append((f"Источник {index}: {html_label}", href))
+                links.append((f"Источник {index}: {fragment_label}", href))
         return links
 
     def _add_docx_hyperlink(self, paragraph, text: str, url: str) -> None:
@@ -1590,13 +1702,13 @@ class MainWindow(QMainWindow):
         r_pr.append(underline)
         run.append(r_pr)
         t = OxmlElement("w:t")
-        t.text = text
+        t.text = self._clean_doc_text(text)
         run.append(t)
         hyperlink.append(run)
         paragraph._p.append(hyperlink)
 
     def _fill_docx_value_cell(self, cell, value: Any) -> None:
-        cell.text = str(value or "—")
+        cell.text = self._clean_doc_text(value or "—")
 
     def _fill_docx_source_cell(self, cell, links: list[tuple[str, str]]) -> None:
         cell.text = ""
@@ -1607,7 +1719,7 @@ class MainWindow(QMainWindow):
         for index, (label, href) in enumerate(links):
             if index:
                 paragraph.add_run("\n")
-            self._add_docx_hyperlink(paragraph, label, href)
+            self._add_docx_hyperlink(paragraph, self._clean_doc_text(label), self._clean_doc_text(href))
 
     def _save_analysis_tables(self, rows: list[list[str]]) -> list[list[str]]:
         from docx import Document
@@ -1648,6 +1760,7 @@ class MainWindow(QMainWindow):
             doc.add_heading(f"Анализ закупки {registry}", level=1)
             if title:
                 doc.add_paragraph(title)
+            doc.add_heading("Условия закупки", level=2)
             table = doc.add_table(rows=1, cols=3)
             table.style = "Table Grid"
             hdr = table.rows[0].cells
@@ -1677,31 +1790,30 @@ class MainWindow(QMainWindow):
                 self._fill_docx_source_cell(cells[2], links)
 
             technical = technical_by_registry.get(registry) or technical_by_registry.get(base_registry) or {}
-            if technical:
-                doc.add_paragraph("")
-                doc.add_heading("Технические характеристики оборудования", level=2)
-                tech_table = doc.add_table(rows=1, cols=3)
-                tech_table.style = "Table Grid"
-                tech_hdr = tech_table.rows[0].cells
-                tech_hdr[0].text = "Поле"
-                tech_hdr[1].text = "Значение"
-                tech_hdr[2].text = "Источник"
-                for cell in tech_hdr:
-                    for paragraph in cell.paragraphs:
-                        for run in paragraph.runs:
-                            run.bold = True
-                tech_sources = technical_sources_by_registry.get(registry) or technical_sources_by_registry.get(base_registry) or {}
-                for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
-                    cells = tech_table.add_row().cells
-                    cells[0].text = str(header)
-                    links = self._source_links_for_field(
-                        sources=list((tech_sources or {}).get(key) or []),
-                        sources_dir=sources_dir,
-                        rel_dir_name=sources_rel_dir,
-                        unpacked_dir=unpacked_path,
-                    )
-                    self._fill_docx_value_cell(cells[1], technical.get(key))
-                    self._fill_docx_source_cell(cells[2], links)
+            doc.add_paragraph("")
+            doc.add_heading("Технические параметры", level=2)
+            tech_table = doc.add_table(rows=1, cols=3)
+            tech_table.style = "Table Grid"
+            tech_hdr = tech_table.rows[0].cells
+            tech_hdr[0].text = "Поле"
+            tech_hdr[1].text = "Значение"
+            tech_hdr[2].text = "Источник"
+            for cell in tech_hdr:
+                for paragraph in cell.paragraphs:
+                    for run in paragraph.runs:
+                        run.bold = True
+            tech_sources = technical_sources_by_registry.get(registry) or technical_sources_by_registry.get(base_registry) or {}
+            for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
+                cells = tech_table.add_row().cells
+                cells[0].text = str(header)
+                links = self._source_links_for_field(
+                    sources=list((tech_sources or {}).get(key) or []),
+                    sources_dir=sources_dir,
+                    rel_dir_name=sources_rel_dir,
+                    unpacked_dir=unpacked_path,
+                )
+                self._fill_docx_value_cell(cells[1], technical.get(key))
+                self._fill_docx_source_cell(cells[2], links)
 
             doc.save(path)
             try:
@@ -1715,6 +1827,7 @@ class MainWindow(QMainWindow):
                 if title:
                     ws.append(["Наименование", title])
                 ws.append([])
+                ws.append(["Условия закупки", "", ""])
                 ws.append(["Поле", "Значение", "Источник"])
                 for field_key, header, value in zip(analysis_field_keys, ANALYSIS_TABLE_HEADERS_RU, row):
                     links = self._source_links_for_field(
@@ -1734,24 +1847,23 @@ class MainWindow(QMainWindow):
                         cell.hyperlink = links[0][1]
                         cell.style = "Hyperlink"
                         cell.alignment = cell.alignment.copy(wrap_text=True)
-                if technical:
-                    ws.append([])
-                    ws.append(["Технические характеристики оборудования", ""])
-                    ws.append(["Поле", "Значение", "Источник"])
-                    for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
-                        links = self._source_links_for_field(
-                            sources=list((tech_sources or {}).get(key) or []),
-                            sources_dir=sources_dir,
-                            rel_dir_name=sources_rel_dir,
-                            unpacked_dir=unpacked_path,
-                        )
-                        ws.append([str(header), str(technical.get(key) or "—"), "—"])
-                        if links:
-                            cell = ws.cell(row=ws.max_row, column=3)
-                            cell.value = "\n".join(label for label, _href in links[:3])
-                            cell.hyperlink = links[0][1]
-                            cell.style = "Hyperlink"
-                            cell.alignment = cell.alignment.copy(wrap_text=True)
+                ws.append([])
+                ws.append(["Технические параметры", "", ""])
+                ws.append(["Поле", "Значение", "Источник"])
+                for key, header in zip(TECHNICAL_JSON_KEYS, TECHNICAL_TABLE_HEADERS_RU):
+                    links = self._source_links_for_field(
+                        sources=list((tech_sources or {}).get(key) or []),
+                        sources_dir=sources_dir,
+                        rel_dir_name=sources_rel_dir,
+                        unpacked_dir=unpacked_path,
+                    )
+                    ws.append([str(header), str(technical.get(key) or "—"), "—"])
+                    if links:
+                        cell = ws.cell(row=ws.max_row, column=3)
+                        cell.value = "\n".join(label for label, _href in links[:3])
+                        cell.hyperlink = links[0][1]
+                        cell.style = "Hyperlink"
+                        cell.alignment = cell.alignment.copy(wrap_text=True)
                 wb.save(xlsx_path)
             except Exception:
                 pass

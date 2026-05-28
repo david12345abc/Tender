@@ -133,6 +133,71 @@ def _document_like_source(label: str, text: str = "") -> dict[str, Any]:
     }
 
 
+def _document_sections_from_text(documents_text: str) -> list[dict[str, str]]:
+    sections: list[dict[str, str]] = []
+    pattern = re.compile(r"^---\s*[^:\n\r]+:\s*(.*?)\s*---\s*$", re.M)
+    matches = list(pattern.finditer(documents_text or ""))
+    for idx, match in enumerate(matches):
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(documents_text)
+        file_name = str(match.group(1) or "").strip()
+        text = (documents_text[start:end] or "").strip()
+        if file_name and text:
+            sections.append({"file_name": file_name, "text": text})
+    return sections
+
+
+def _best_document_source_for_value(
+    documents_text: str,
+    *,
+    value: str,
+    lot_name: str = "",
+) -> dict[str, Any] | None:
+    sections = _document_sections_from_text(documents_text)
+    if not sections:
+        return None
+    value_text = str(value or "").strip()
+    lot_text = str(lot_name or "").strip()
+    value_terms = [t for t in re.split(r"\s+", value_text.casefold()) if len(t) >= 4][:8]
+    lot_terms = [t for t in re.split(r"\s+", lot_text.casefold()) if len(t) >= 4][:8]
+
+    def score(section: dict[str, str]) -> int:
+        text = section["text"].casefold()
+        points = 0
+        if value_text and value_text.casefold() in text:
+            points += 20
+        if lot_text and lot_text.casefold() in text:
+            points += 10
+        points += sum(2 for term in value_terms if term in text)
+        points += sum(1 for term in lot_terms if term in text)
+        return points
+
+    best = max(sections, key=score)
+    if score(best) <= 0:
+        return None
+    raw_text = best["text"]
+    needle = value_terms[0] if value_terms else (lot_terms[0] if lot_terms else "")
+    pos = raw_text.casefold().find(needle) if needle else -1
+    if pos >= 0:
+        start = max(0, pos - 1200)
+        end = min(len(raw_text), pos + 2400)
+        snippet = raw_text[start:end]
+    else:
+        snippet = raw_text[:3600]
+    file_name = best["file_name"]
+    return {
+        "source_type": "document",
+        "label": f"Документ: {file_name}",
+        "file_name": file_name,
+        "text": snippet,
+        "page": None,
+        "section": "",
+        "chunk_id": "",
+        "url": "",
+        "score": None,
+    }
+
+
 def _add_field_source(
     sources_by_field: dict[str, list[dict[str, Any]]],
     field_key: str,
@@ -198,6 +263,72 @@ def _product_rows_count(product_rows_info: Any) -> int:
     return _safe_int(product_rows_info.get("count"), default=0)
 
 
+def _product_rows_info_from_page_text(page_text: str) -> dict[str, Any]:
+    text = str(page_text or "")
+    if not text:
+        return {}
+    marker = "=== ВАЖНЫЙ ФРАГМЕНТ: таблица перечня товаров"
+    pos = text.find(marker)
+    if pos >= 0:
+        block = text[pos : pos + 12000]
+    else:
+        match = re.search(r"Перечень\s+товаров[\s\S]{0,12000}", text, re.I)
+        block = match.group(0) if match else ""
+    if not block:
+        return {}
+
+    count_match = (
+        re.search(r"Количество\s+строк/позиций:\s*(\d{1,4})", block, re.I)
+        or re.search(r"Позиций\s+всего\s*[:\-]?\s*(\d{1,4})", block, re.I)
+        or re.search(r"Всего\s+позиций\s*[:\-]?\s*(\d{1,4})", block, re.I)
+    )
+    count = _safe_int(count_match.group(1), default=0) if count_match else 0
+    headers: list[str] = []
+    header_match = re.search(r"Заголовки:\s*(.+)", block)
+    if header_match:
+        headers = [h.strip() for h in header_match.group(1).split("|") if h.strip()]
+
+    rows: list[dict[str, Any]] = []
+    rows_match = re.search(r"Строки\s+таблицы:\s*([\s\S]+?)(?:\n===|\Z)", block, re.I)
+    if rows_match:
+        for line in rows_match.group(1).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            line = re.sub(r"^\d+\.\s*", "", line)
+            cells = [p.strip() for p in line.split("|") if p.strip()]
+            if cells or line:
+                rows.append({"text": line, "cells": cells})
+
+    return {
+        "count": count or len(rows),
+        "source": "page_text_product_table",
+        "text": block[:6000],
+        "headers": headers,
+        "rows": rows,
+    }
+
+
+def _best_product_rows_info(product_rows_info: Any, page_text: str) -> dict[str, Any]:
+    current = product_rows_info if isinstance(product_rows_info, dict) else {}
+    fallback = _product_rows_info_from_page_text(page_text)
+    current_count = _product_rows_count(current)
+    fallback_count = _product_rows_count(fallback)
+    current_rows = current.get("rows") if isinstance(current.get("rows"), list) else []
+    fallback_rows = fallback.get("rows") if isinstance(fallback.get("rows"), list) else []
+    if fallback_count > current_count:
+        return fallback
+    if fallback_count == current_count and len(fallback_rows) > len(current_rows):
+        merged = dict(current)
+        merged["rows"] = fallback_rows
+        if not merged.get("text"):
+            merged["text"] = fallback.get("text", "")
+        if not merged.get("headers"):
+            merged["headers"] = fallback.get("headers", [])
+        return merged
+    return dict(current)
+
+
 def _cell_by_header(headers: list[str], cells: list[str], *needles: str) -> str:
     folded_needles = tuple(n.casefold() for n in needles)
     for i, header in enumerate(headers):
@@ -213,6 +344,77 @@ def _first_date_value(cells: list[str]) -> str:
         if match:
             return match.group(0)
     return ""
+
+
+def _lot_items_from_product_text(product_rows_info: Any) -> list[dict[str, str]]:
+    if not isinstance(product_rows_info, dict):
+        return []
+    count = _product_rows_count(product_rows_info)
+    if count <= 1:
+        return []
+    text = re.sub(r"\s+", " ", str(product_rows_info.get("text") or "")).strip()
+    if not text:
+        return []
+
+    unit_pattern = r"(?:Условн(?:ая|ые|ых)\s+единиц[аы]?|Штук[аи]?|шт\.?|комплект(?:ы|ов)?|ед\.?|услуг[аи]?|упаковк[аи]?)"
+    items: list[dict[str, str]] = []
+    for idx in range(1, count + 1):
+        next_idx = idx + 1
+        if idx < count:
+            pattern = rf"(?:^|\s){idx}\s+(.+?)(?=\s+{next_idx}\s+|$)"
+        else:
+            pattern = rf"(?:^|\s){idx}\s+(.+?)(?:\s+Страница\b|\s+Позиций\s+всего\b|$)"
+        match = re.search(pattern, text, re.I)
+        if not match:
+            continue
+        segment = match.group(1).strip(" |")
+        if not segment:
+            continue
+
+        quantity = ""
+        q_match = re.search(rf"\b(\d+(?:[.,]\d+)?)\s+{unit_pattern}\b", segment, re.I)
+        if q_match:
+            quantity = q_match.group(1)
+            name = segment[: q_match.start()].strip(" |")
+        else:
+            money_pos = re.search(r"\d[\d\s]*,\d{2}\b", segment)
+            name = segment[: money_pos.start()].strip(" |") if money_pos else segment
+
+        name = re.sub(r"\s+", " ", name).strip()
+        money_cells = re.findall(r"\d[\d\s]*,\d{2}\b", segment)
+        delivery_date = _first_date_value([segment])
+        if not delivery_date:
+            year_match = re.search(r"\b20\d{2}\b", segment)
+            delivery_date = year_match.group(0) if year_match else ""
+
+        if not name or len(name) < 3:
+            continue
+        items.append(
+            {
+                "number": str(idx),
+                "name": name[:1200],
+                "price": money_cells[0].strip() if money_cells else "",
+                "quantity": quantity,
+                "delivery_date": delivery_date,
+                "row_text": segment[:1200],
+            }
+        )
+    seen_numbers = {str(item.get("number") or "") for item in items}
+    for idx in range(1, count + 1):
+        if str(idx) in seen_numbers:
+            continue
+        items.append(
+            {
+                "number": str(idx),
+                "name": f"Позиция {idx} из перечня товаров",
+                "price": "",
+                "quantity": "",
+                "delivery_date": "",
+                "row_text": "",
+            }
+        )
+    items.sort(key=lambda item: _safe_int(item.get("number"), default=9999))
+    return items
 
 
 def _lot_items_from_product_rows(product_rows_info: Any) -> list[dict[str, str]]:
@@ -280,6 +482,9 @@ def _lot_items_from_product_rows(product_rows_info: Any) -> list[dict[str, str]]
                 "row_text": row_text,
             }
         )
+    fallback_items = _lot_items_from_product_text(product_rows_info)
+    if len(fallback_items) > len(items):
+        return fallback_items
     return items
 
 
@@ -335,6 +540,44 @@ def _rows_for_lots(
         )
         row_registry = registry if single_item else f"{registry} / позиция {lot_no or len(out) + 1}"
         out.append(build_result_row(row_registry, detail_url, doc_primary, lot_parsed, err_msg))
+    return out
+
+
+def _lot_row_specs(
+    *,
+    registry: str,
+    detail_url: str,
+    doc_primary: str,
+    parsed: dict[str, str] | None,
+    err_msg: str | None,
+    product_rows_info: Any,
+) -> list[dict[str, Any]]:
+    items = _lot_items_from_product_rows(product_rows_info)
+    if not items:
+        row = build_result_row(registry, detail_url, doc_primary, parsed, err_msg)
+        lot_name = str((parsed or {}).get("procurement_subject") or (parsed or {}).get("tender_title") or "").strip()
+        return [{"registry": registry, "row": row, "item": None, "lot_name": lot_name}]
+
+    out: list[dict[str, Any]] = []
+    total_count = str(_product_rows_count(product_rows_info) or len(items))
+    single_item = len(items) == 1
+    for item in items:
+        lot_no = str(item.get("number") or "").strip()
+        lot_parsed = _apply_lot_item_to_parsed(
+            parsed,
+            item,
+            total_count,
+            single_item=single_item,
+        )
+        row_registry = registry if single_item else f"{registry} / позиция {lot_no or len(out) + 1}"
+        out.append(
+            {
+                "registry": row_registry,
+                "row": build_result_row(row_registry, detail_url, doc_primary, lot_parsed, err_msg),
+                "item": item,
+                "lot_name": str(item.get("name") or lot_parsed.get("procurement_subject") or "").strip(),
+            }
+        )
     return out
 
 
@@ -439,18 +682,25 @@ def _extract_technical_table_via_lm(
     page_text: str,
     documents_text: str,
     product_rows_info: Any = None,
+    lot_name: str = "",
+    lot_item: Any = None,
     lm_base_url: str,
     lm_model: str,
 ) -> tuple[dict[str, str], str]:
     product_info_text = ""
     if isinstance(product_rows_info, dict) and product_rows_info:
         product_info_text = json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:16000]
+    lot_item_text = ""
+    if isinstance(lot_item, dict) and lot_item:
+        lot_item_text = json.dumps(lot_item, ensure_ascii=False, indent=2)[:8000]
     prompt = build_technical_user_prompt(
         registry=registry,
         detail_url=detail_url,
         page_text=_trim_for_llm(page_text, 80_000),
         documents_text=_trim_for_llm(documents_text, 120_000),
         product_rows_info_text=product_info_text,
+        lot_name=lot_name,
+        lot_item_text=lot_item_text,
     )
     raw = call_lm_studio_chat(
         lm_base_url,
@@ -1221,7 +1471,7 @@ def make_analyze_procedure_task(
             detail_url = str(snap.get("url") or "")
             doc_primary = str(snap.get("primary_doc_url") or "")
             doc_list = snap.get("doc_links") or []
-            product_rows_info = snap.get("product_rows_info") or {}
+            product_rows_info = _best_product_rows_info(snap.get("product_rows_info") or {}, page_text)
             doc_summary = "; ".join(
                 str((d or {}).get("href") or "")
                 for d in (doc_list if isinstance(doc_list, list) else [])
@@ -1535,6 +1785,10 @@ def make_analyze_procedure_task(
                 )
             product_items = _lot_items_from_product_rows(product_rows_info)
             if product_items:
+                parsed = dict(parsed or {})
+                parsed["lot_count"] = str(len(product_items))
+                if len(product_items) > 1:
+                    parsed["partial_supply_allowed"] = f"Да, делимая: {len(product_items)} позиций в перечне товаров"
                 product_source = _card_source(
                     "Перечень товаров",
                     detail_url,
@@ -1542,64 +1796,79 @@ def make_analyze_procedure_task(
                 )
                 for field_key in ("procurement_subject", "starting_price", "delivery_terms", "lot_count", "partial_supply_allowed"):
                     _add_field_source(sources_by_field, field_key, product_source)
-            try:
-                w.progress.emit(f"LM Studio: извлекаю технические характеристики {registry}…")
-                technical, technical_raw = _extract_technical_table_via_lm(
-                    registry=registry,
-                    detail_url=detail_url,
-                    page_text=page_text,
-                    documents_text=documents_text,
-                    product_rows_info=product_rows_info,
-                    lm_base_url=lm_base_url,
-                    lm_model=lm_model,
-                )
-                sink["technical_by_registry"][registry] = technical
-                tech_sources: dict[str, list[dict[str, Any]]] = {}
-                if product_rows_info:
-                    tech_source = _card_source(
-                        "Перечень товаров",
-                        detail_url,
-                        json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:8000],
-                    )
-                    for key, value in technical.items():
-                        if value:
-                            _add_field_source(tech_sources, key, tech_source)
-                if documents_text.strip():
-                    doc_source = _document_like_source("Документы закупки", documents_text[:8000])
-                    for key, value in technical.items():
-                        if value:
-                            _add_field_source(tech_sources, key, doc_source, prepend=False)
-                sink["technical_sources_by_registry"][registry] = tech_sources
-                previous_raw = str(sink["raw_by_registry"].get(registry) or "")
-                sink["raw_by_registry"][registry] = (
-                    previous_raw
-                    + ("\n\n" if previous_raw else "")
-                    + "### technical_table\n"
-                    + technical_raw
-                )
-            except Exception as tech_exc:
-                sink["document_issues"].append(
-                    {
-                        "severity": "important",
-                        "registry": registry,
-                        "file": "LM Studio",
-                        "message": (
-                            "Не удалось извлечь вторую таблицу технических характеристик: "
-                            f"{tech_exc}"
-                        ),
-                    }
-                )
             sink["sources_by_registry"][registry] = sources_by_field
-            rows.extend(
-                _rows_for_lots(
-                    registry=registry,
-                    detail_url=detail_url,
-                    doc_primary=doc_primary,
-                    parsed=parsed,
-                    err_msg=err_msg,
-                    product_rows_info=product_rows_info,
-                )
+            lot_specs = _lot_row_specs(
+                registry=registry,
+                detail_url=detail_url,
+                doc_primary=doc_primary,
+                parsed=parsed,
+                err_msg=err_msg,
+                product_rows_info=product_rows_info,
             )
+            for lot_spec in lot_specs:
+                row_registry = str(lot_spec.get("registry") or registry)
+                lot_name = str(lot_spec.get("lot_name") or "").strip()
+                lot_item = lot_spec.get("item")
+                try:
+                    w.progress.emit(
+                        "LM Studio: извлекаю технические параметры "
+                        f"{row_registry}" + (f" ({lot_name[:80]})" if lot_name else "") + "…"
+                    )
+                    technical, technical_raw = _extract_technical_table_via_lm(
+                        registry=row_registry,
+                        detail_url=detail_url,
+                        page_text=page_text,
+                        documents_text=documents_text,
+                        product_rows_info=product_rows_info,
+                        lot_name=lot_name,
+                        lot_item=lot_item,
+                        lm_base_url=lm_base_url,
+                        lm_model=lm_model,
+                    )
+                    sink["technical_by_registry"][row_registry] = technical
+                    tech_sources: dict[str, list[dict[str, Any]]] = {}
+                    if product_rows_info:
+                        source_text = (
+                            json.dumps(lot_item, ensure_ascii=False, indent=2)[:8000]
+                            if isinstance(lot_item, dict)
+                            else json.dumps(product_rows_info, ensure_ascii=False, indent=2)[:8000]
+                        )
+                        tech_source = _card_source("Перечень товаров", detail_url, source_text)
+                        for key, value in technical.items():
+                            if value:
+                                _add_field_source(tech_sources, key, tech_source)
+                    if documents_text.strip():
+                        for key, value in technical.items():
+                            if not value:
+                                continue
+                            doc_source = _best_document_source_for_value(
+                                documents_text,
+                                value=str(value),
+                                lot_name=lot_name,
+                            )
+                            if doc_source is not None:
+                                _add_field_source(tech_sources, key, doc_source, prepend=False)
+                    sink["technical_sources_by_registry"][row_registry] = tech_sources
+                    previous_raw = str(sink["raw_by_registry"].get(registry) or "")
+                    sink["raw_by_registry"][registry] = (
+                        previous_raw
+                        + ("\n\n" if previous_raw else "")
+                        + f"### technical_parameters_{row_registry}\n"
+                        + technical_raw
+                    )
+                except Exception as tech_exc:
+                    sink["document_issues"].append(
+                        {
+                            "severity": "important",
+                            "registry": row_registry,
+                            "file": "LM Studio",
+                            "message": (
+                                "Не удалось извлечь вторую таблицу технических параметров: "
+                                f"{tech_exc}"
+                            ),
+                        }
+                    )
+                rows.append(list(lot_spec.get("row") or []))
 
         sink["rows"] = rows
         w.session.emit(
