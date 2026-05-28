@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import traceback
@@ -81,6 +82,65 @@ def _clean_analysis_value(value: Any) -> str:
     return "" if _is_empty_analysis_value(value) else str(value or "").strip()
 
 
+def _format_bullet_list_value(value: Any) -> str:
+    if isinstance(value, (list, tuple, set)):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        items = []
+        if re.fullmatch(r"\[[\s\S]*\]", text):
+            try:
+                parsed = ast.literal_eval(text)
+            except (SyntaxError, ValueError):
+                parsed = None
+            if isinstance(parsed, (list, tuple, set)):
+                items = [str(item).strip() for item in parsed if str(item).strip()]
+        if not items:
+            return text
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return "\n".join(f"• {item}" for item in items)
+
+
+def _format_russian_date_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    def _tz_to_gmt(raw: str) -> str:
+        tz = (raw or "").strip()
+        if not tz:
+            return " [GMT +3]"
+        if tz.upper() == "Z":
+            return " [GMT +0]"
+        gmt_match = re.search(r"GMT\s*([+-])\s*0?(\d{1,2})", tz, re.I)
+        if gmt_match:
+            return f" [GMT {gmt_match.group(1)}{int(gmt_match.group(2))}]"
+        offset_match = re.search(r"([+-])(\d{2})(?::?(\d{2}))?", tz)
+        if offset_match:
+            return f" [GMT {offset_match.group(1)}{int(offset_match.group(2))}]"
+        return " [GMT +3]"
+
+    pattern = re.compile(
+        r"\b(20\d{2})-(\d{2})-(\d{2})"
+        r"(?:[T\s]+(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?"
+        r"(?:\s*(\[(?:GMT|UTC)\s*[+-]\s*\d{1,2}\]|[+-]\d{2}:?\d{0,2}|Z))?"
+        r")?",
+        re.I,
+    )
+
+    def repl(match: re.Match[str]) -> str:
+        year, month, day = match.group(1), match.group(2), match.group(3)
+        hour, minute, second = match.group(4), match.group(5), match.group(6)
+        if not hour:
+            return f"{day}.{month}.{year}"
+        return f"{day}.{month}.{year} {hour}:{minute}:{second or '00'}{_tz_to_gmt(match.group(7) or '')}"
+
+    return pattern.sub(repl, text)
+
+
 def _format_proc_datetime(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -88,7 +148,7 @@ def _format_proc_datetime(value: Any) -> str:
     text = text.replace("T", " ")
     text = re.sub(r"\.000(?=[+Z]|$)", "", text)
     text = text.replace("+03:00", " [GMT +3]").replace("+03", " [GMT +3]")
-    return text
+    return _format_russian_date_text(text)
 
 
 def _source_to_dict(source: FieldSource) -> dict[str, Any]:
@@ -504,7 +564,7 @@ def _apply_lot_item_to_parsed(
     if item.get("price"):
         lot_parsed["starting_price"] = str(item["price"]).strip()
     if item.get("delivery_date"):
-        lot_parsed["delivery_terms"] = str(item["delivery_date"]).strip()
+        lot_parsed["delivery_terms"] = _format_proc_datetime(item.get("delivery_date"))
     lot_parsed["lot_count"] = total_count
     if _is_empty_analysis_value(lot_parsed.get("partial_supply_allowed")):
         lot_parsed["partial_supply_allowed"] = "Нет, единый лот" if total_count != "1" else "Нет, одна товарная позиция/единый лот"
@@ -667,7 +727,10 @@ def _apply_proc_defaults(
             out["application_fee"] = fee_match.group(1).replace("\u00a0", " ").strip()
 
     for key, value in list(out.items()):
-        out[key] = _clean_analysis_value(value)
+        out[key] = _format_bullet_list_value(_clean_analysis_value(value))
+    for key in ("application_deadline", "retender_date", "results_date", "delivery_terms"):
+        if out.get(key):
+            out[key] = _format_russian_date_text(out[key])
 
     return out
 
