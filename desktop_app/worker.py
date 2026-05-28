@@ -893,10 +893,12 @@ _EQUIPMENT_QUERY_KEYS = {
     "flow_unit",
     "pressureMin",
     "pressureMax",
+    "pressure_unit",
     "tempMediumMin",
     "tempMediumMax",
     "tempAmbientMin",
     "tempAmbientMax",
+    "temperature_unit",
     "accuracy",
     "diameter",
     "densityMin",
@@ -933,10 +935,18 @@ def _fallback_equipment_query_from_technical(technical: dict[str, str]) -> dict[
         str(technical.get(key) or "")
         for key in ("measured_medium_type", "measured_medium_name")
     ).casefold()
-    medium = "liquid" if any(marker in medium_text for marker in ("жидк", "вода", "нефт", "масл")) else "gas"
+    equipment_text = str(technical.get("equipment_type_name") or "").casefold()
+    if any(marker in equipment_text for marker in ("денситометр", "плотномер")):
+        medium = "densitometer"
+    elif any(marker in medium_text for marker in ("жидк", "вода", "нефт", "масл")):
+        medium = "liquid"
+    else:
+        medium = "gas"
     query: dict[str, str] = {
         "medium": medium,
         "flow_unit": "м³/ч",
+        "pressure_unit": "МПа",
+        "temperature_unit": "°C",
         "application": "industrial",
     }
     if medium == "gas":
@@ -1069,19 +1079,23 @@ def _equipment_query_via_lm(
     lm_model: str,
 ) -> tuple[dict[str, str], str]:
     prompt = (
-        "На основе технической таблицы закупки и RAG-фрагментов документов подготовь query-параметры для GET "
-        "/api/search-equipment, который подбирает расходомеры. Ответь строго JSON-объектом "
+        "На основе технической таблицы закупки и RAG-фрагментов документов подготовь query-параметры "
+        "для мастера подбора расходомеров/денситометров. Ответь строго JSON-объектом "
         "без markdown. Не придумывай значения: если параметра нет в таблице, верни null.\n\n"
         "Разрешённые ключи JSON:\n"
-        "medium, flowMin, flowMax, flow_unit, pressureMin, pressureMax, tempMediumMin, "
-        "tempMediumMax, tempAmbientMin, tempAmbientMax, accuracy, diameter, densityMin, "
-        "densityMax, allowedEquipmentIds, application, gas_type.\n\n"
+        "medium, flowMin, flowMax, flow_unit, pressureMin, pressureMax, pressure_unit, "
+        "tempMediumMin, tempMediumMax, tempAmbientMin, tempAmbientMax, temperature_unit, "
+        "accuracy, diameter, densityMin, densityMax, allowedEquipmentIds, application, gas_type.\n\n"
         "Правила:\n"
-        "- medium: gas или liquid; если среда газовая, medium=gas.\n"
-        "- pressureMin/pressureMax всегда в МПа.\n"
-        "- температуры всегда в °C.\n"
+        "- medium: gas, liquid или densitometer. Для плотномеров/денситометров medium=densitometer.\n"
+        "- Для gas/liquid будет вызван /api/search-equipment, для densitometer — /api/search-densitometer.\n"
+        "- pressureMin/pressureMax передавай числом; если в документах давление в бар, "
+        "можно передать pressure_unit=бар, иначе pressure_unit=МПа.\n"
+        "- температуры передавай в °C; temperature_unit=°C.\n"
         "- diameter всегда в мм, без DN/Ду.\n"
-        "- flow_unit: м³/ч, ст.м³/ч или кг/ч; если неясно, верни м³/ч.\n"
+        "- flow_unit: для газа м³/ч или ст.м³/ч; для жидкости м³/ч или кг/ч. Если неясно, верни м³/ч.\n"
+        "- Для liquid при массовом расходе кг/ч обязательно ищи densityMin/densityMax.\n"
+        "- Для densitometer расход не нужен; важны densityMin/densityMax, pressure, temperature, accuracy, diameter.\n"
         "- application обычно industrial.\n"
         "- gas_type для природного газа natural, для технологического technological.\n\n"
         f"Реестровый номер: {registry}\n"
@@ -1114,6 +1128,7 @@ def _equipment_query_via_lm(
 
 def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
     params = {key: value for key, value in query.items() if str(value or "").strip()}
+    medium = str(params.get("medium") or "gas").strip().casefold()
     selection_keys = {
         "flowMin",
         "flowMax",
@@ -1136,7 +1151,24 @@ def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
             "query": params,
             "equipment": [],
         }
-    url = EQUIPMENT_API_BASE_URL.rstrip("/") + "/search-equipment?" + urlencode(params, doseq=False)
+    if medium == "densitometer":
+        endpoint = "/search-densitometer"
+        params.pop("flowMin", None)
+        params.pop("flowMax", None)
+        params.pop("flow_unit", None)
+        params.pop("application", None)
+        params.pop("gas_type", None)
+        params.pop("medium", None)
+    else:
+        endpoint = "/search-equipment"
+        if medium not in {"gas", "liquid"}:
+            params["medium"] = "gas"
+        if params.get("medium") == "gas":
+            params.pop("densityMin", None)
+            params.pop("densityMax", None)
+        if params.get("medium") == "liquid":
+            params.pop("gas_type", None)
+    url = EQUIPMENT_API_BASE_URL.rstrip("/") + endpoint + "?" + urlencode(params, doseq=False)
     try:
         req = Request(url, headers={"Accept": "application/json"})
         with urlopen(req, timeout=25) as response:
