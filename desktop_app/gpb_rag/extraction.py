@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from ..lm_table_analysis import (
     ANALYSIS_JSON_KEYS,
     ANALYSIS_TABLE_HEADERS_RU,
@@ -140,27 +142,38 @@ def extract_fields_via_retrieval(
             f"{context}\n"
         )
 
-        try:
-            raw = call_lm_studio_chat(
-                lm_base_url,
-                lm_model,
-                single_field_system_prompt(label),
-                user_prompt,
-                timeout_sec=timeout_sec,
-                max_tokens=900,
-            )
-            raw_parts.append(f"### {field_key}\n{raw}")
+        raw = ""
+        val: str | None = None
+        last_exc: Exception | None = None
+        field_attempts = 2
+        for attempt in range(1, field_attempts + 1):
+            try:
+                raw = call_lm_studio_chat(
+                    lm_base_url,
+                    lm_model,
+                    single_field_system_prompt(label),
+                    user_prompt,
+                    timeout_sec=timeout_sec,
+                    max_tokens=1200,
+                )
+                val = parse_single_field_json(raw, field_key)
+                val = empty_to_null(val)
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < field_attempts:
+                    time.sleep(2)
 
-            val = parse_single_field_json(raw, field_key)
-            val = empty_to_null(val)
-
-            if field_key == "starting_price" and val:
-                val = reconcile_money_llm_with_chunks(val, [c.text for c in hit_chunks])
-
-            out[field_key] = "" if val is None else val
-        except Exception as exc:
-            raw_parts.append(f"### {field_key}\n[ошибка извлечения] {exc}")
+        if last_exc is not None:
+            raw_parts.append(f"### {field_key}\n[ошибка извлечения после {field_attempts} попыток] {last_exc}")
             out[field_key] = ""
+            continue
+
+        raw_parts.append(f"### {field_key}\n{raw}")
+        if field_key == "starting_price" and val:
+            val = reconcile_money_llm_with_chunks(val, [c.text for c in hit_chunks])
+        out[field_key] = "" if val is None else val
 
     combined_raw = "\n\n".join(raw_parts)
     return out, combined_raw, sources_by_field

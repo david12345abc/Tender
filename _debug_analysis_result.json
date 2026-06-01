@@ -1,451 +1,74 @@
 {
   "rows": [
     [
-      "32616045936",
-      "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/251523",
-      "https://etpgaz.gazprombank.ru/docs/bs_documentation.rar",
-      "ПАО «Газпром»",
-      "Поставка узлов измерения расхода газа для нужд АО Газпром добыча Томск",
-      "МТР (материально-технические ресурсы)",
+      "32616037057",
+      "https://etpgaz.gazprombank.ru/#com/procedure/view/procedure/251352",
+      "https://etpgaz.gazprombank.ru/file/get/t/LotDocuments/id/920313/name/6a1039571ff7c2.31362524",
+      "ООО \"Газпром комплектация\"",
+      "Поставка расходомера-счетчика ультразвукового для объекта \"Техническое перевооружение газопровода перемычки ОРЕНБУРГ-СПХГ (УЗГ - 700 ГРС-1 г. Оренбург) КСПГ Оренбург\" для нужд ООО \"Газпром инвест\" (0056868)",
+      "Расходомер-счетчик ультразвуковой Опросный лист № 5146.001.П.0/0.1411-ТЕР2.ОЛ7",
+      "01.06.2026 09:30:00 [GMT +3]",
       "",
-      "",
-      "",
-      "Информация для ответа отсутствует в предоставленных фрагментах документов.",
-      "Да, возможна частичная поставка, так как в документах указано, что сторонами Сопровождаемого договора может быть согласована поставка товара частями (партиями), либо установлена периодичность поставки, либо периодичность поставки определяется подписанием отдельных спецификаций, заявок.",
-      "1 (единая позиция)",
-      "не менее 90 календарных дней",
-      "Информация об условиях оплаты в предоставленных фрагментах отсутствует.",
-      "",
-      "Мониторинг расчётов, осуществляемых в рамках исполнения сопровождаемого контракта, на отдельных счетах, открытых в банке участниками исполнения контракта. Контроль целевого расходования денежных средств (проведение банковской экспертизы обосновывающих документов на предмет соответствия платежа принимаемым работам (товарам, услугам) условиям заключённых договоров). Установленный договором банковского счёта режим может предполагать ограничения направлений использования денежных средств клиентом (владельцем счёта).",
-      "Стоимость подачи заявки на участие не указана.",
+      "10.06.2026 14:00:00 [GMT +3]",
+      "2 710 374,85",
+      "Нет, лот неделимый",
+      "1",
+      "20.03.2027",
+      "Покупатель обязан оплатить поставленную партию Продукции в течение 45 (сорока пяти) рабочих дней с даты получения Покупателем от Поставщика надлежаще оформленного комплекта документов, предусмотренных п. 4.3 настоящего Договора на поставленную партию Продукции, а также при условии поступления денежных средств от Принципала.",
+      "• Товар должен быть сертифицирован.\n• сертификат соответствия СДС ИНТЕРГАЗСЕРТ на конкретный или типовой вид товара (при наличии)\n• документ, подтверждающий возможность применения Товара на опасных производственных объектах\n• сертификат соответствия на конкретный или типовой вид товара\n• сертификат соответствия РФ – для товара импортного производства\n• экологический сертификат предприятия-изготовителя\n• сертификат качества или другой документ (формуляр, паспорт и т.п.), удостоверяющий соответствие фактически поставляемого Товара требованиям Договора\n• наличие сертификата о соответствии системы менеджмента качества требованиям стандарта ГОСТ Р ИСО 9001 (ISO 9001) или СТО ГАЗПРОМ 9001",
+      "В целях обеспечения исполнения обязательств по Договору Участник обязан предоставить обеспечение в виде банковской гарантии или обеспечительного платежа. Размер, форма и порядок предоставления обеспечения указаны в Приложении 1 «Проект договора». Банковская гарантия должна быть безотзывной и безусловной, соответствовать требованиям законодательства и условиям Договора. Срок действия банковской гарантии должен превышать срок действия Договора на определённый период (обычно на 50 дней). Обеспечительный платёж вносится на расчётный счёт покупателя в установленный Договором срок и возвращается после надлежащего исполнения обязательств Поставщиком.",
+      "9 000,00",
       ""
     ]
   ],
+  "raw_by_registry": {
+    "32616037057": "### customer_name\n В представленных фрагментах документов не указано конкретное наименование заказчика.\n\n### tender_title\n {\n  \"tender_title\": \"Поставка расходомера-счётчика ультразвукового для объекта 'Техническое перевооружение газопровода перемычки ОРЕНБУРГ-СПХГ (УЗГ - 700 ГРС-1 г. Оренбург) КСПГ Оренбург' для нужд ООО 'Газпром инвест'\"\n}\n\n### procurement_subject\n {\n  \"procurement_subject\": \"Расходомер-счётчик ультразвуковой\"\n}\n\n### application_deadline\n Нет данных\n\n### retender_date\n В контексте нет информации о дате переторга.\n\n### results_date\n В представленных фрагментах документов не указана точная дата и время подведения итогов по закупке.\n\n### starting_price\n Нет данных\n\n### partial_supply_allowed\n Нет, не делимый лот. В документах и карточке нет прямого указания на возможность частичной поставки или деления лота. Также перечень товаров представлен как единый комплект оборудования без отдельных самостоятельных товарных позиций.\n\n### lot_count\n 1 (единая позиция)\n\n### delivery_terms\n 31.08.2022\n30.09.2022\n\n### payment_terms\n {\n  \"payment_terms\": \"Покупатель обязан оплатить поставленную партию Продукции в течение 45 (сорока пяти) рабочих дней с даты получения Покупателем от Поставщика надлежаще оформленного комплекта документов, предусмотренных п. 4.3 настоящего Договора на поставленную партию Продукции, а также при условии поступления денежных средств от Принципала.\"\n}\n\n### certification_requirements\n ```\n{\n  \"certification_requirements\": [\n    \"Товар должен быть сертифицирован.\",\n    \"сертификат соответствия СДС ИНТЕРГАЗСЕРТ на конкретный или типовой вид товара (при наличии)\",\n    \"документ, подтверждающий возможность применения Товара на опасных производственных объектах\",\n    \"сертификат соответствия на конкретный или типовой вид товара\",\n    \"сертификат соответствия РФ – для товара импортного производства\",\n    \"экологический сертификат предприятия-изготовителя\",\n    \"сертификат качества или другой документ (формуляр, паспорт и т.п.), удостоверяющий соответствие фактически поставляемого Товара требованиям Договора\",\n    \"наличие сертификата о соответствии системы менеджмента качества требованиям стандарта ГОСТ Р ИСО 9001 (ISO 9001) или СТО ГАЗПРОМ 9001\"\n  ]\n}\n```\n\n### contract_security\n {\n  \"contract_security\": \"В целях обеспечения исполнения обязательств по Договору Участник обязан предоставить обеспечение в виде банковской гарантии или обеспечительного платежа. Размер, форма и порядок предоставления обеспечения указаны в Приложении 1 «Проект договора». Банковская гарантия должна быть безотзывной и безусловной, соответствовать требованиям законодательства и условиям Договора. Срок действия банковской гарантии должен превышать срок действия Договора на определённый период (обычно на 50 дней). Обеспечительный платёж вносится на расчётный счёт покупателя в установленный Договором срок и возвращается после надлежащего исполнения обязательств Поставщиком.\"\n}\n\n### application_fee\n В представленных фрагментах документов и карточки нет информации о стоимости подачи заявки на участие.\n\n### supplier_risks\n ```\n{\n  \"supplier_risks\": [\n    \"Неустойка в размере 0,1% от стоимости несвоевременно поставленной (недопоставленной) продукции за каждый день просрочки.\",\n    \"Штраф в размере 5% от стоимости продукции ненадлежащего качества (некомплектной продукции).\",\n    \"Неустойка в размерах: начиная с 1 по 60 день включительно размер неустойки составляет 0.1% за каждый день просрочки, начиная с 61 дня и по 120 день включительно размер неустойки составляет 0.5% за каждый день просрочки, начиная со 121 дня по 180 день включительно размер неустойки составляет 1% за каждый день просрочки, при нарушении срока предоставления документов более чем на 180 дней, размер неустойки составляет 100%.\",\n    \"Штраф в размере 1% от стоимости продукции, в отношении которой не были направлены или направлены с просрочкой сведения о состоянии размещения продукции в производство и готовности продукции к отгрузке и/или извещение об отгруженной продукции.\""
+  },
   "technical_by_registry": {
-    "32616045936": {
-      "equipment_type_name": "",
-      "measurement_method": "",
-      "measured_medium_name": "",
-      "measured_medium_type": "",
-      "process_connection_method": "",
-      "nominal_diameter_or_pipeline_diameter": "",
+    "32616037057": {
+      "equipment_type_name": "Расходомер-счётчик ультразвуковой",
+      "measurement_method": "ультразвуковой",
+      "measured_medium_name": "природный газ",
+      "measured_medium_type": "газ",
+      "process_connection_method": "фланцевое присоединение PN100",
+      "nominal_diameter_or_pipeline_diameter": "DN 100",
       "body_or_pipeline_material": "",
       "accuracy_class_or_flow_error": "",
-      "flow_rate_or_range": "",
-      "working_medium_pressure": "",
-      "working_medium_temperature": "",
-      "working_medium_density": "",
+      "flow_rate_or_range": "350-14000 м³/ч",
+      "working_medium_pressure": "2,5-5,4 МПа",
+      "working_medium_temperature": "-10...0 °C",
+      "working_medium_density": "0,6975",
       "working_medium_viscosity": "",
-      "ambient_air_temperature": "",
-      "additional_equipment": ""
+      "ambient_air_temperature": "-32...27 °C",
+      "additional_equipment": "интерфейс RS-485 Modbus RTU"
     }
   },
   "equipment_selection_by_registry": {
-    "32616045936": {
-      "status": "success",
-      "message": "Подобрано приборов: 6.",
+    "32616037057": {
+      "status": "error",
+      "message": "Прибор не подобран: ошибка запроса к мастеру подбора (Remote end closed connection without response).",
       "query": {
-        "flow_unit": "м³/ч",
-        "application": "industrial",
         "medium": "gas",
-        "gas_type": "technological"
+        "flowMin": "350",
+        "flowMax": "14000",
+        "flow_unit": "м³/ч",
+        "pressureMin": "2.5",
+        "pressureMax": "5.4",
+        "pressure_unit": "МПа",
+        "tempMediumMin": "-10",
+        "tempMediumMax": "0",
+        "tempAmbientMin": "-32",
+        "tempAmbientMax": "27",
+        "temperature_unit": "°C",
+        "diameter": "100",
+        "application": "industrial",
+        "gas_type": "natural"
       },
-      "url": "http://192.168.5.49:8010/api/search-equipment?flow_unit=%D0%BC%C2%B3%2F%D1%87&application=industrial&medium=gas&gas_type=technological",
-      "raw": {
-        "status": "success",
-        "total": 6,
-        "equipment": [
-          {
-            "id": "ufg2",
-            "name": "Turbo Flow UFG-F-V",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow UFG-F-V",
-            "image": "equipment/turbo_flow_ufg.jpg",
-            "specs": {
-              "flowRange": "1,4–150000 м³/ч",
-              "pressureRange": "0,0025–32 МПа",
-              "tempRange": "-50…+70°C",
-              "ambientTempRange": "-60°C до +70°C",
-              "accuracy": "0,5–2%",
-              "diameter": "50–1400 мм"
-            },
-            "params": {
-              "pressure": "p-high",
-              "temperature": "t-medium",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/turbo_flow_ufg.jpg"
-          },
-          {
-            "id": "tfgs1",
-            "name": "Turbo Flow TFG-S",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow TFG-S",
-            "image": "equipment/Turbo Flow TFG-S.png",
-            "specs": {
-              "flowRange": "1,25-588000 м³/ч",
-              "pressureRange": "0,1-32 МПа",
-              "tempRange": "-60°C до +300°C",
-              "ambientTempRange": "-60°C до +70°C",
-              "accuracy": "1-2,5%",
-              "diameter": "50–1400 мм"
-            },
-            "flowCalculation": {
-              "formula": "Q = K * (DN/100)^2 * (P/0.101325)",
-              "minFlowCoef": 5,
-              "maxFlowCoef": 3000,
-              "standardDNs": [
-                50,
-                65,
-                80,
-                100,
-                150,
-                200,
-                250,
-                300,
-                350,
-                400,
-                500,
-                600,
-                700,
-                800,
-                900,
-                1000,
-                1200,
-                1400
-              ]
-            },
-            "params": {
-              "pressure": "p-high",
-              "temperature": "t-high",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/Turbo Flow TFG-S.png"
-          },
-          {
-            "id": "tfgh1",
-            "name": "Turbo Flow TFG-H",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow TFG-H",
-            "image": "equipment/Turbo Flow TFG-H.png",
-            "specs": {
-              "flowRange": "0,05-1200 м³/ч",
-              "pressureRange": "0,1-32 МПа",
-              "tempRange": "-60°C до +70°C",
-              "ambientTempRange": "-60°C до +70°C",
-              "accuracy": "1-2,5%",
-              "diameter": "25–100 мм"
-            },
-            "flowCalculation": {
-              "formula": "Q = K * (DN/100)^2 * (P/0.101325)",
-              "minFlowCoef": 0.8,
-              "maxFlowCoef": 1200,
-              "standardDNs": [
-                25,
-                32,
-                40,
-                50,
-                65,
-                80,
-                100
-              ]
-            },
-            "params": {
-              "pressure": "p-high",
-              "temperature": "t-high",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/Turbo Flow TFG-H.png"
-          },
-          {
-            "id": "ufgfc1",
-            "name": "Turbo Flow UFG-F-C",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow UFG-F-C",
-            "image": "equipment/Turbo Flow UFG-F-C.png",
-            "specs": {
-              "flowRange": "0,1-1100 м³/ч",
-              "pressureRange": "0,0025-1,6 МПа",
-              "tempRange": "-50°C до +70°C",
-              "ambientTempRange": "-60°C до +70°C",
-              "accuracy": "1-2%",
-              "diameter": "50–100 мм"
-            },
-            "params": {
-              "pressure": "p-medium",
-              "temperature": "t-medium",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/Turbo Flow UFG-F-C.png"
-          },
-          {
-            "id": "gfg2",
-            "name": "Turbo Flow GFG",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow GFG",
-            "image": "equipment/Turbo Flow GFG.png",
-            "specs": {
-              "flowRange": "0,016-280000 м³/ч",
-              "pressureRange": "0-32 МПа",
-              "tempRange": "-50°C до +70°C",
-              "ambientTempRange": "-50°C до +70°C",
-              "accuracy": "1-1,5%",
-              "diameter": "10–1400 мм"
-            },
-            "params": {
-              "pressure": "p-high",
-              "temperature": "t-medium",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/Turbo Flow GFG.png"
-          },
-          {
-            "id": "ufgh1",
-            "name": "Turbo Flow UFG-H",
-            "manufacturer": "ГазМетрология",
-            "model": "Turbo Flow UFG-H",
-            "image": "equipment/Turbo Flow UFG-H.png",
-            "specs": {
-              "flowRange": "0,016-1600 м³/ч",
-              "pressureRange": "0,0025-0,5 МПа",
-              "tempRange": "-50°C до +70°C",
-              "ambientTempRange": "-40°C до +70°C",
-              "accuracy": "1-3%",
-              "diameter": "15–100 мм"
-            },
-            "params": {
-              "pressure": "p-low",
-              "temperature": "t-medium",
-              "flow": "q-high",
-              "accuracy": "acc-medium"
-            },
-            "recommended_diameter": "",
-            "image_url": "/static/equipment/Turbo Flow UFG-H.png"
-          }
-        ]
-      },
-      "equipment": [
-        {
-          "id": "ufg2",
-          "name": "Turbo Flow UFG-F-V",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow UFG-F-V",
-          "image": "equipment/turbo_flow_ufg.jpg",
-          "specs": {
-            "flowRange": "1,4–150000 м³/ч",
-            "pressureRange": "0,0025–32 МПа",
-            "tempRange": "-50…+70°C",
-            "ambientTempRange": "-60°C до +70°C",
-            "accuracy": "0,5–2%",
-            "diameter": "50–1400 мм"
-          },
-          "params": {
-            "pressure": "p-high",
-            "temperature": "t-medium",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/turbo_flow_ufg.jpg"
-        },
-        {
-          "id": "tfgs1",
-          "name": "Turbo Flow TFG-S",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow TFG-S",
-          "image": "equipment/Turbo Flow TFG-S.png",
-          "specs": {
-            "flowRange": "1,25-588000 м³/ч",
-            "pressureRange": "0,1-32 МПа",
-            "tempRange": "-60°C до +300°C",
-            "ambientTempRange": "-60°C до +70°C",
-            "accuracy": "1-2,5%",
-            "diameter": "50–1400 мм"
-          },
-          "flowCalculation": {
-            "formula": "Q = K * (DN/100)^2 * (P/0.101325)",
-            "minFlowCoef": 5,
-            "maxFlowCoef": 3000,
-            "standardDNs": [
-              50,
-              65,
-              80,
-              100,
-              150,
-              200,
-              250,
-              300,
-              350,
-              400,
-              500,
-              600,
-              700,
-              800,
-              900,
-              1000,
-              1200,
-              1400
-            ]
-          },
-          "params": {
-            "pressure": "p-high",
-            "temperature": "t-high",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/Turbo Flow TFG-S.png"
-        },
-        {
-          "id": "tfgh1",
-          "name": "Turbo Flow TFG-H",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow TFG-H",
-          "image": "equipment/Turbo Flow TFG-H.png",
-          "specs": {
-            "flowRange": "0,05-1200 м³/ч",
-            "pressureRange": "0,1-32 МПа",
-            "tempRange": "-60°C до +70°C",
-            "ambientTempRange": "-60°C до +70°C",
-            "accuracy": "1-2,5%",
-            "diameter": "25–100 мм"
-          },
-          "flowCalculation": {
-            "formula": "Q = K * (DN/100)^2 * (P/0.101325)",
-            "minFlowCoef": 0.8,
-            "maxFlowCoef": 1200,
-            "standardDNs": [
-              25,
-              32,
-              40,
-              50,
-              65,
-              80,
-              100
-            ]
-          },
-          "params": {
-            "pressure": "p-high",
-            "temperature": "t-high",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/Turbo Flow TFG-H.png"
-        },
-        {
-          "id": "ufgfc1",
-          "name": "Turbo Flow UFG-F-C",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow UFG-F-C",
-          "image": "equipment/Turbo Flow UFG-F-C.png",
-          "specs": {
-            "flowRange": "0,1-1100 м³/ч",
-            "pressureRange": "0,0025-1,6 МПа",
-            "tempRange": "-50°C до +70°C",
-            "ambientTempRange": "-60°C до +70°C",
-            "accuracy": "1-2%",
-            "diameter": "50–100 мм"
-          },
-          "params": {
-            "pressure": "p-medium",
-            "temperature": "t-medium",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/Turbo Flow UFG-F-C.png"
-        },
-        {
-          "id": "gfg2",
-          "name": "Turbo Flow GFG",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow GFG",
-          "image": "equipment/Turbo Flow GFG.png",
-          "specs": {
-            "flowRange": "0,016-280000 м³/ч",
-            "pressureRange": "0-32 МПа",
-            "tempRange": "-50°C до +70°C",
-            "ambientTempRange": "-50°C до +70°C",
-            "accuracy": "1-1,5%",
-            "diameter": "10–1400 мм"
-          },
-          "params": {
-            "pressure": "p-high",
-            "temperature": "t-medium",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/Turbo Flow GFG.png"
-        },
-        {
-          "id": "ufgh1",
-          "name": "Turbo Flow UFG-H",
-          "manufacturer": "ГазМетрология",
-          "model": "Turbo Flow UFG-H",
-          "image": "equipment/Turbo Flow UFG-H.png",
-          "specs": {
-            "flowRange": "0,016-1600 м³/ч",
-            "pressureRange": "0,0025-0,5 МПа",
-            "tempRange": "-50°C до +70°C",
-            "ambientTempRange": "-40°C до +70°C",
-            "accuracy": "1-3%",
-            "diameter": "15–100 мм"
-          },
-          "params": {
-            "pressure": "p-low",
-            "temperature": "t-medium",
-            "flow": "q-high",
-            "accuracy": "acc-medium"
-          },
-          "recommended_diameter": "",
-          "image_url": "/static/equipment/Turbo Flow UFG-H.png"
-        }
-      ],
-      "lm_raw": " ```\n{\n    \"medium\": \"null\",\n    \"flowMin\": null,\n    \"flowMax\": null,\n    \"flow_unit\": \"м³/ч\",\n    \"pressureMin\": null,\n    \"pressureMax\": null,\n    \"tempMediumMin\": null,\n    \"tempMediumMax\": null,\n    \"tempAmbientMin\": null,\n    \"tempAmbientMax\": null,\n    \"accuracy\": null,\n    \"diameter\": null,\n    \"densityMin\": null,\n    \"densityMax\": null,\n    \"allowedEquipmentIds\": null,\n    \"application\": \"industrial\",\n    \"gas_type\": null\n}\n```"
+      "url": "http://192.168.5.49:8010/api/search-equipment?medium=gas&flowMin=350&flowMax=14000&flow_unit=%D0%BC%C2%B3%2F%D1%87&pressureMin=2.5&pressureMax=5.4&pressure_unit=%D0%9C%D0%9F%D0%B0&tempMediumMin=-10&tempMediumMax=0&tempAmbientMin=-32&tempAmbientMax=27&temperature_unit=%C2%B0C&diameter=100&application=industrial&gas_type=natural",
+      "equipment": [],
+      "lm_raw": " ```\n{\n  \"medium\": \"gas\",\n  \"flowMin\": 350,\n  \"flowMax\": 14000,\n  \"flow_unit\": \"м³/ч\",\n  \"pressureMin\": 2.5,\n  \"pressureMax\": 5.4,\n  \"pressure_unit\": \"МПа\",\n  \"tempMediumMin\": -10,\n  \"tempMediumMax\": 0,\n  \"tempAmbientMin\": -32,\n  \"tempAmbientMax\": 27,\n  \"temperature_unit\": \"°C\",\n  \"accuracy\": null,\n  \"diameter\": 100,\n  \"densityMin\": 0.6975,\n  \"densityMax\": 0.6975,\n  \"allowedEquipmentIds\": null,\n  \"application\": \"industrial\",\n  \"gas_type\": \"natural\"\n}\n```",
+      "rag_context_used": true
     }
   },
-  "document_issues": [
-    {
-      "severity": "important",
-      "registry": "32616045936",
-      "file": "Инструкция по настройке рабочего места",
-      "message": "Текст не извлечён или формат файла не поддерживается."
-    },
-    {
-      "severity": "important",
-      "registry": "32616045936",
-      "file": "Политика обработки персональных данных",
-      "message": "Текст не извлечён или формат файла не поддерживается."
-    },
-    {
-      "severity": "important",
-      "registry": "32616045936",
-      "file": "Регламент проведения закупочных процедур",
-      "message": "Текст не извлечён или формат файла не поддерживается."
-    },
-    {
-      "severity": "important",
-      "registry": "32616045936",
-      "file": "Руководство пользователя по аккредитации",
-      "message": "Текст не извлечён или формат файла не поддерживается."
-    },
-    {
-      "severity": "important",
-      "registry": "32616045936",
-      "file": "Руководство поставщика",
-      "message": "Текст не извлечён или формат файла не поддерживается."
-    }
-  ]
+  "document_issues": []
 }

@@ -36,15 +36,49 @@ def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
         result = ocr.ocr(img, cls=True)
     except Exception:
         return ""
-    lines: list[str] = []
+    cells: list[tuple[float, float, str]] = []
     if not result or result[0] is None:
         return ""
-    for line in result[0]:
-        if line and len(line) >= 2:
-            txt = str(line[1][0] or "").strip()
+    for page in result or []:
+        for line in page or []:
+            if not line or len(line) < 2:
+                continue
+            try:
+                box = line[0] or []
+                xs = [float(point[0]) for point in box if len(point) >= 2]
+                ys = [float(point[1]) for point in box if len(point) >= 2]
+                txt = str(line[1][0] or "").strip()
+            except Exception:
+                txt = ""
+                xs = []
+                ys = []
             if txt:
-                lines.append(txt)
-    return "\n".join(lines)
+                x_min = min(xs) if xs else 0.0
+                y_mid = (min(ys) + max(ys)) / 2 if ys else 0.0
+                cells.append((y_mid, x_min, txt))
+    if not cells:
+        return ""
+    cells.sort(key=lambda item: (item[0], item[1]))
+    rows: list[list[tuple[float, str]]] = []
+    tolerance = max(10.0, height * 0.006)
+    row_y: list[float] = []
+    for y_mid, x_min, txt in cells:
+        if not rows or abs(y_mid - row_y[-1]) > tolerance:
+            rows.append([(x_min, txt)])
+            row_y.append(y_mid)
+        else:
+            rows[-1].append((x_min, txt))
+            row_y[-1] = (row_y[-1] + y_mid) / 2
+    return "\n".join(" | ".join(txt for _x, txt in sorted(row)) for row in rows)
+
+
+def _looks_like_poor_pdf_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text or "")
+    if len(compact) < 50:
+        return True
+    letters = sum(1 for ch in compact if ch.isalpha())
+    digits = sum(1 for ch in compact if ch.isdigit())
+    return letters < 40 and digits > letters * 2
 
 
 def extract_pdf_pages(path: Path, *, ocr_if_scan: bool = True) -> tuple[list[str], FileMetadata]:
@@ -58,11 +92,12 @@ def extract_pdf_pages(path: Path, *, ocr_if_scan: bool = True) -> tuple[list[str
             page = doc.load_page(i)
             text = page.get_text("text") or ""
             text = normalize_whitespace(text)
-            if ocr_if_scan and len(text) < 50:
+            poor_text = _looks_like_poor_pdf_text(text)
+            if ocr_if_scan and poor_text:
                 try:
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                     ocr_text = _ocr_page_image(pix.samples, pix.width, pix.height)
-                    if len(ocr_text.strip()) > len(text.strip()):
+                    if ocr_text.strip() and (poor_text or len(ocr_text.strip()) > len(text.strip())):
                         text = normalize_whitespace(ocr_text)
                 except Exception:
                     pass

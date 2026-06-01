@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import time
 import traceback
 from dataclasses import asdict, is_dataclass, replace
 from pathlib import Path
@@ -58,11 +59,21 @@ def _analysis_filled_count(parsed: dict[str, str] | None) -> int:
 
 
 def _is_empty_analysis_value(value: Any) -> bool:
-    text = str(value or "").strip().casefold()
-    if text in {"", "—", "-", "null", "none", "не указано", "нет данных"}:
+    if isinstance(value, (list, tuple, set)):
+        return not any(str(item).strip() for item in value)
+    text = str(value or "").strip()
+    folded = text.casefold()
+    if folded in {"", "—", "-", "null", "none", "[]", "{}", "не указано", "нет данных"}:
         return True
+    # Перечисление пунктов (list-repr) и длинные содержательные значения — это реальные
+    # данные. Модель оформляет «отказ» короткой фразой в начале ответа, поэтому маркеры
+    # отказа ищем только в начале короткого однострочного значения. Иначе валидный список
+    # (например, риски с пунктом «… если документы не представлены …») обнуляется целиком.
+    if re.fullmatch(r"\[[\s\S]*\]", text) or len(text) > 300:
+        return False
+    head = folded[:150]
     return any(
-        marker in text
+        marker in head
         for marker in (
             "в контексте нет",
             "в контексте не",
@@ -849,6 +860,88 @@ def _extract_repair_equipment_names(text: str) -> str:
     return "; ".join(out[:4])
 
 
+def _apply_flowmeter_questionnaire_fallback(
+    parsed: dict[str, str],
+    *,
+    lot_name: str,
+    documents_text: str,
+) -> dict[str, str]:
+    out = dict(parsed or {})
+    combined = f"{lot_name}\n{documents_text}"
+    folded = combined.casefold()
+    if "расходомер" not in folded or "опросн" not in folded:
+        return out
+
+    compact = re.sub(r"[ \t\r\f\v]+", " ", combined)
+
+    def empty(key: str) -> bool:
+        return _is_empty_analysis_value(out.get(key))
+
+    def set_if_empty(key: str, value: str) -> None:
+        if value and empty(key):
+            out[key] = value
+
+    set_if_empty("equipment_type_name", "Расходомер-счетчик ультразвуковой")
+    set_if_empty("measurement_method", "ультразвуковой")
+    if "газ" in folded or "газопровод" in folded:
+        set_if_empty("measured_medium_name", "природный газ")
+        set_if_empty("measured_medium_type", "газ")
+
+    flow_candidates: list[tuple[float, str, str]] = []
+    for match in re.finditer(r"(?<![\d.,])(\d{2,7})\s*[-–—\n]\s*(\d{3,8})(?![\d.,])", compact):
+        before = compact[max(0, match.start() - 40) : match.start()].casefold()
+        if "гост" in before:
+            continue
+        low_num = float(match.group(1).replace(",", "."))
+        high_num = float(match.group(2).replace(",", "."))
+        if high_num >= 1000 and high_num > low_num:
+            flow_candidates.append((high_num, match.group(1), match.group(2)))
+    if flow_candidates:
+        _high_num, flow_min, flow_max = max(flow_candidates, key=lambda item: item[0])
+        set_if_empty("flow_rate_or_range", f"{flow_min}-{flow_max} м³/ч")
+
+    pressure_match = re.search(r"(?<![\d.,])(\d+,\d+)\s*[-–—\n]\s*(\d+,\d+)(?![\d.,])", compact)
+    if pressure_match:
+        low = pressure_match.group(1)
+        high = pressure_match.group(2)
+        set_if_empty("working_medium_pressure", f"{low}-{high} МПа")
+
+    temp_match = re.search(r"(?<!\d)(-\d{1,3})\s*[-–—\n]\s*(\d{1,3})(?!\d)", compact)
+    if temp_match:
+        set_if_empty("working_medium_temperature", f"{temp_match.group(1)}...{temp_match.group(2)} °C")
+
+    ambient_src = compact[temp_match.end() :] if temp_match else compact
+    ambient_match = re.search(r"(?<!\d)(-\d{2,3})\s*[-–—\n]\s*(\d{2,3})(?!\d)", ambient_src)
+    if ambient_match:
+        set_if_empty("ambient_air_temperature", f"{ambient_match.group(1)}...{ambient_match.group(2)} °C")
+
+    diameter_match = re.search(r"\bD\s*[nN]\s*(\d{2,4})\b|\bДу\s*(\d{2,4})\b", combined, re.I)
+    if diameter_match:
+        diameter = diameter_match.group(1) or diameter_match.group(2)
+        set_if_empty("nominal_diameter_or_pipeline_diameter", f"DN {diameter}")
+
+    density_candidates: list[tuple[float, str]] = []
+    for match in re.finditer(r"(?<![\d.,])(0[,.]\d{3,5})(?![\d.,])", compact):
+        value = float(match.group(1).replace(",", "."))
+        if 0.5 <= value <= 1.2:
+            density_candidates.append((value, match.group(1)))
+    if density_candidates:
+        _density_value, density_text = density_candidates[0]
+        set_if_empty("working_medium_density", density_text.replace(".", ","))
+
+    if re.search(r"\bPN\s*100\b|ГОСТ\s*33259", combined, re.I):
+        set_if_empty("process_connection_method", "фланцевое присоединение PN100")
+
+    if re.search(r"RS[-\s]?485|Modbus", combined, re.I):
+        set_if_empty("additional_equipment", "интерфейс RS-485 Modbus RTU")
+
+    accuracy_match = re.search(r"(?<!\d)(1[,.]5)\s*(?:%|$)", compact)
+    if accuracy_match:
+        set_if_empty("accuracy_class_or_flow_error", f"±{accuracy_match.group(1).replace('.', ',')} %")
+
+    return out
+
+
 def _apply_technical_defaults(
     parsed: dict[str, str],
     *,
@@ -857,6 +950,7 @@ def _apply_technical_defaults(
     documents_text: str,
 ) -> dict[str, str]:
     out = dict(parsed or {})
+    out = _apply_flowmeter_questionnaire_fallback(out, lot_name=lot_name, documents_text=documents_text)
     combined = "\n".join((str(lot_name or ""), str(page_text or "")[:30_000], str(documents_text or "")[:80_000]))
     equipment_name = _extract_repair_equipment_names(combined)
     if equipment_name and _looks_generic_equipment_name(out.get("equipment_type_name")):
@@ -1030,17 +1124,49 @@ def _equipment_selection_rag_context(
         raw = re.sub(r"\s+", " ", str(text or "")).strip()
         if len(raw) < 20:
             return
-        folded = raw.casefold()
+        label_folded = str(label or "").casefold()
+        folded = f"{label_folded} {raw.casefold()}"
         score = base_score
         score += sum(3 for needle in needles if needle in folded)
         score += sum(2 for term in lot_terms if term in folded)
-        if "опросн" in folded:
-            score += 4
-        if "техническ" in folded:
-            score += 2
+        if any(marker in folded for marker in ("опросн", " ол", "_ол", ".ол", "ол7", "ол1")):
+            score += 18
+        if any(marker in folded for marker in ("тз", "техническ", "техзадан", "таблица а")):
+            score += 14
+        if any(marker in label_folded for marker in (".pdf", ".xlsx", ".xls", "тз", "таблица", "опрос", " ол")):
+            score += 10
+        if any(marker in folded for marker in ("банковск", "обс", "электронн", "гарант", "персональн")):
+            score -= 8
         if score <= 0:
             return
-        candidates.append((score, label, raw[:6000]))
+        focused = raw
+        if len(raw) > 6000:
+            folded_raw = raw.casefold()
+            anchors = list(needles) + lot_terms + [
+                "опросный лист",
+                "техническое задание",
+                "таблица а",
+                "ду ",
+                "dn",
+                "мпа",
+                "м³/ч",
+                "м3/ч",
+            ]
+            positions = [
+                pos
+                for anchor in anchors
+                if anchor and (pos := folded_raw.find(anchor.casefold())) >= 0
+            ]
+            if positions:
+                snippets: list[str] = []
+                for pos in sorted(set(positions))[:6]:
+                    start = max(0, pos - 900)
+                    end = min(len(raw), pos + 2200)
+                    snippets.append(raw[start:end])
+                focused = "\n...\n".join(snippets)
+            else:
+                focused = raw[:6000]
+        candidates.append((score, label, focused[:9000]))
 
     add_candidate("Строка позиции", json.dumps(lot_item, ensure_ascii=False, indent=2) if isinstance(lot_item, dict) else "", 8)
     add_candidate("Перечень товаров", json.dumps(product_rows_info, ensure_ascii=False, indent=2) if isinstance(product_rows_info, dict) else "", 6)
@@ -1049,7 +1175,7 @@ def _equipment_selection_rag_context(
     sections = _document_sections_from_text(documents_text)
     if sections:
         for section in sections:
-            add_candidate(str(section.get("label") or "Документ"), section.get("text") or "", 0)
+            add_candidate(str(section.get("file_name") or "Документ"), section.get("text") or "", 0)
     else:
         chunks = re.split(r"\n{2,}", documents_text or "")
         for idx, chunk in enumerate(chunks[:250], start=1):
@@ -1126,6 +1252,31 @@ def _equipment_query_via_lm(
     return query, raw
 
 
+def _technical_documents_context(
+    *,
+    lot_name: str,
+    page_text: str,
+    documents_text: str,
+    product_rows_info: Any,
+    lot_item: Any,
+) -> str:
+    context = _equipment_selection_rag_context(
+        lot_name=lot_name,
+        page_text=page_text,
+        documents_text=documents_text,
+        product_rows_info=product_rows_info,
+        lot_item=lot_item,
+    )
+    if not context:
+        return documents_text
+    return (
+        "ПРИОРИТЕТНЫЕ ТЕХНИЧЕСКИЕ ФРАГМЕНТЫ ДЛЯ ИЗВЛЕЧЕНИЯ ПАРАМЕТРОВ:\n"
+        f"{context}\n\n"
+        "ОСТАЛЬНОЙ ТЕКСТ ДОКУМЕНТОВ:\n"
+        f"{_trim_for_llm(documents_text, 30_000)}"
+    )
+
+
 def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
     params = {key: value for key, value in query.items() if str(value or "").strip()}
     medium = str(params.get("medium") or "gas").strip().casefold()
@@ -1169,14 +1320,30 @@ def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
         if params.get("medium") == "liquid":
             params.pop("gas_type", None)
     url = EQUIPMENT_API_BASE_URL.rstrip("/") + endpoint + "?" + urlencode(params, doseq=False)
-    try:
-        req = Request(url, headers={"Accept": "application/json"})
-        with urlopen(req, timeout=25) as response:
-            payload = json.loads(response.read().decode("utf-8-sig"))
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    payload: Any = None
+    last_exc: BaseException | None = None
+    attempts = 4
+    for attempt in range(1, attempts + 1):
+        try:
+            req = Request(url, headers={"Accept": "application/json"})
+            with urlopen(req, timeout=40) as response:
+                payload = json.loads(response.read().decode("utf-8-sig"))
+            last_exc = None
+            break
+        except HTTPError as exc:
+            last_exc = exc
+            if 400 <= getattr(exc, "code", 500) < 500:
+                break
+            if attempt < attempts:
+                time.sleep(min(2 * attempt, 6))
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+            last_exc = exc
+            if attempt < attempts:
+                time.sleep(min(2 * attempt, 6))
+    if last_exc is not None:
         return {
             "status": "error",
-            "message": f"Прибор не подобран: ошибка запроса к мастеру подбора ({exc}).",
+            "message": f"Прибор не подобран: ошибка запроса к мастеру подбора ({last_exc}).",
             "query": params,
             "url": url,
             "equipment": [],
@@ -2321,7 +2488,13 @@ def make_analyze_procedure_task(
                         registry=row_registry,
                         detail_url=detail_url,
                         page_text=page_text,
-                        documents_text=documents_text,
+                        documents_text=_technical_documents_context(
+                            lot_name=lot_name,
+                            page_text=page_text,
+                            documents_text=documents_text,
+                            product_rows_info=product_rows_info,
+                            lot_item=lot_item,
+                        ),
                         product_rows_info=product_rows_info,
                         lot_name=lot_name,
                         lot_item=lot_item,
