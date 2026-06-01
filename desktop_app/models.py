@@ -386,7 +386,15 @@ class ProcedureTableModel(QAbstractTableModel):
         if key == "step_label":
             return self._status_label(proc)
         if key == "organizer":
-            return proc.get("short_name") or proc.get("full_name") or ""
+            return (
+                proc.get("short_name")
+                or proc.get("full_name")
+                or proc.get("customerName")
+                or proc.get("customer_name")
+                or proc.get("organizerName")
+                or proc.get("organizer_name")
+                or ""
+            )
         if key == "tags_label":
             tags = proc.get("tags") or []
             return ", ".join(str(t) for t in tags) if tags else ""
@@ -411,23 +419,59 @@ class ProcedureTableModel(QAbstractTableModel):
                 )
             )
         if key == "date_end_registration":
-            return fmt_date(parse_dt(proc.get("date_end_registration")))
+            return fmt_date(
+                self._first_date(
+                    proc,
+                    (
+                        "date_end_registration",
+                        "date_finish_registration",
+                        "date_end_applic",
+                        "date_finish_applic",
+                        "endDate",
+                        "date_end",
+                        "requestEndDate",
+                        "finishDate",
+                        "deadline",
+                    ),
+                )
+            )
         if key == "total_price":
-            p = parse_price(proc.get("total_price"))
+            p = parse_price(
+                proc.get("total_price")
+                or proc.get("price")
+                or proc.get("amount")
+                or proc.get("sum")
+                or proc.get("startPrice")
+                or proc.get("maxPrice")
+            )
             return fmt_money(p, proc.get("currency_name") or "RUB")
         if key == "applics_count":
             return proc.get("applics_count") if proc.get("applics_count") is not None else ""
         if key == "title":
-            return proc.get("title") or ""
+            return proc.get("title") or proc.get("name") or proc.get("orderName") or proc.get("order_name") or ""
         if key == "registry_number":
-            return proc.get("registry_number") or proc.get("procedure_number") or ""
+            return (
+                proc.get("registry_number")
+                or proc.get("procedure_number")
+                or proc.get("orderNumber")
+                or proc.get("order_number")
+                or proc.get("number")
+                or ""
+            )
         if key == "keyword_matches":
             return ", ".join(self._keyword_matches(proc))
         return proc.get(key, "")
 
     def _sort_value(self, proc: dict[str, Any], key: str) -> Any:
         if key == "total_price":
-            return parse_price(proc.get("total_price")) or 0.0
+            return parse_price(
+                proc.get("total_price")
+                or proc.get("price")
+                or proc.get("amount")
+                or proc.get("sum")
+                or proc.get("startPrice")
+                or proc.get("maxPrice")
+            ) or 0.0
         if key == "applics_count":
             return _applics_sort_int(proc.get("applics_count"))
         if key == "date_start_registration":
@@ -443,7 +487,20 @@ class ProcedureTableModel(QAbstractTableModel):
                 ),
             ) or datetime.min
         if key == "date_end_registration":
-            return parse_dt(proc.get("date_end_registration")) or datetime.min
+            return self._first_date(
+                proc,
+                (
+                    "date_end_registration",
+                    "date_finish_registration",
+                    "date_end_applic",
+                    "date_finish_applic",
+                    "endDate",
+                    "date_end",
+                    "requestEndDate",
+                    "finishDate",
+                    "deadline",
+                ),
+            ) or datetime.min
         if key == "trend_pur_label":
             return str(self._display(proc, key)).casefold()
         if key == "step_label":

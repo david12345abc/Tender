@@ -1062,6 +1062,8 @@ class Sidebar(QWidget):
     def _expanded_min_height(self) -> int:
         if self._platform_key == "roseltorg":
             return 360
+        if self._platform_key == "gpb_trading_portal":
+            return 430
         if self._platform_key == "gpb_business":
             return 460
         return 560
@@ -1230,6 +1232,46 @@ class Sidebar(QWidget):
             ):
                 self._place_row(key, row, col, key in visible_keys)
             self.extra_filters.setMinimumHeight(1250)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
+        elif self._platform_key == "gpb_trading_portal":
+            visible_keys = {
+                "registry",
+                "trend",
+                "organizer",
+                "customer",
+                "published",
+                "title",
+                "status",
+                "price",
+                "end",
+            }
+            self._set_row_label("registry", "Номер ЦЗ:")
+            self._set_row_label("title", "Наименование ЦЗ:")
+            self._set_row_label("trend", "Раздел:")
+            self._set_row_label("organizer", "Организатор:")
+            self._set_row_label("customer", "Заказчик:")
+            self._set_row_label("status", "Статус ЦЗ:")
+            self._set_row_label("price", "Цена:")
+            self._set_row_label("published", "Дата публикации:")
+            self._set_row_label("end", "Окончание приема предложений:")
+            for row in range(40):
+                self._filter_grid.setRowMinimumHeight(row, 0)
+            for key in self._filter_rows:
+                self._set_row_visible(key, False)
+            for key, row, col in (
+                ("registry", 0, 0),
+                ("trend", 0, 1),
+                ("organizer", 1, 0),
+                ("customer", 1, 1),
+                ("published", 2, 0),
+                ("title", 2, 1),
+                ("status", 3, 0),
+                ("price", 3, 1),
+                ("end", 4, 0),
+            ):
+                self._place_row(key, row, col, key in visible_keys)
+            self.extra_filters.setMinimumHeight(980)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         else:

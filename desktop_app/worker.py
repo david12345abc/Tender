@@ -1712,6 +1712,7 @@ def make_search_task(
         probe_filters = client_filters
         server_filter_variants = [client_filters]
         is_roseltorg = "roseltorg" in str(getattr(client, "target_host", ""))
+        is_trading_portal = str(getattr(client, "platform_key", "")) == "gpb_trading_portal"
         if client_filters is not None:
             if is_roseltorg:
                 # Росэлторг уже фильтрует форму на сервере. Локально оставляем
@@ -1750,7 +1751,12 @@ def make_search_task(
                     position_name_contains="",
                     national_regime_contains="",
                 )
-            if not is_roseltorg:
+            elif is_trading_portal:
+                # У Торгового портала свой набор текстовых статусов ЦЗ
+                # («Черновик», «Уторговывание», «Исполнено» и т.д.). Не
+                # перекодируем их через справочник Procedure.list секции Газпром.
+                probe_filters = client_filters
+            else:
                 # Для секции Газпром дополнительные фильтры отправляются в Procedure.list
                 # теми же полями, что использует сайт. Локально оставляем только
                 # фильтр ключевых слов, которого нет в форме ЭТП.
@@ -1895,13 +1901,21 @@ def make_search_task(
                         or "json.parse" in err_low
                     ):
                         host = str(getattr(client, "target_host", ""))
-                        login_hint = (
-                            "В Chrome откройте секцию Бизнес.223, выполните вход до конца, "
-                            "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
-                            if "etp.gpb.ru" in host
-                            else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
-                            "затем снова нажмите «Поиск»."
-                        )
+                        if is_trading_portal:
+                            login_hint = (
+                                "В Chrome откройте Торговый портал, выполните вход до конца, "
+                                "дождитесь загрузки списка ЦЗ и снова нажмите «Поиск»."
+                            )
+                        elif "etp.gpb.ru" in host:
+                            login_hint = (
+                                "В Chrome откройте секцию Бизнес.223, выполните вход до конца, "
+                                "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
+                            )
+                        else:
+                            login_hint = (
+                                "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                                "затем снова нажмите «Поиск»."
+                            )
                         w.session.emit(
                             False,
                             f"Сессия не активна или требуется авторизация.\n\n{login_hint}",
@@ -1926,16 +1940,26 @@ def make_search_task(
                 if res.get("no_access") or res.get("no_session"):
                     msg = res.get("message") or "Нет доступа / сессия не активна."
                     host = str(getattr(client, "target_host", ""))
-                    login_hint = (
-                        "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
-                        "затем снова нажмите «Поиск»."
-                        if "roseltorg" in host
-                        else "В Chrome откройте секцию Бизнес.223, выполните вход до конца, "
-                        "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
-                        if "etp.gpb.ru" in host
-                        else "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
-                        "затем снова нажмите «Поиск»."
-                    )
+                    if "roseltorg" in host:
+                        login_hint = (
+                            "В Chrome откройте Росэлторг, выполните вход через ЭЦП до конца, "
+                            "затем снова нажмите «Поиск»."
+                        )
+                    elif is_trading_portal:
+                        login_hint = (
+                            "В Chrome откройте Торговый портал, выполните вход до конца, "
+                            "дождитесь загрузки списка ЦЗ и снова нажмите «Поиск»."
+                        )
+                    elif "etp.gpb.ru" in host:
+                        login_hint = (
+                            "В Chrome откройте секцию Бизнес.223, выполните вход до конца, "
+                            "дождитесь загрузки списка процедур и снова нажмите «Поиск»."
+                        )
+                    else:
+                        login_hint = (
+                            "В Chrome: «Войти» → «ЕСИА + ЭП» → пройдите до конца, "
+                            "затем снова нажмите «Поиск»."
+                        )
                     w.session.emit(
                         False,
                         f"{msg}\n\n{login_hint}",
