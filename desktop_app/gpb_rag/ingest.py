@@ -25,51 +25,9 @@ def _get_paddle_ocr():
 
 
 def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
-    import numpy as np
-    from PIL import Image
+    from ..document_text import _ocr_page_image as read_page_with_shared_ocr
 
-    img = np.array(Image.frombytes("RGB", (width, height), rgb_bytes))
-    ocr = _get_paddle_ocr()
-    if ocr is None:
-        return ""
-    try:
-        result = ocr.ocr(img, cls=True)
-    except Exception:
-        return ""
-    cells: list[tuple[float, float, str]] = []
-    if not result or result[0] is None:
-        return ""
-    for page in result or []:
-        for line in page or []:
-            if not line or len(line) < 2:
-                continue
-            try:
-                box = line[0] or []
-                xs = [float(point[0]) for point in box if len(point) >= 2]
-                ys = [float(point[1]) for point in box if len(point) >= 2]
-                txt = str(line[1][0] or "").strip()
-            except Exception:
-                txt = ""
-                xs = []
-                ys = []
-            if txt:
-                x_min = min(xs) if xs else 0.0
-                y_mid = (min(ys) + max(ys)) / 2 if ys else 0.0
-                cells.append((y_mid, x_min, txt))
-    if not cells:
-        return ""
-    cells.sort(key=lambda item: (item[0], item[1]))
-    rows: list[list[tuple[float, str]]] = []
-    tolerance = max(10.0, height * 0.006)
-    row_y: list[float] = []
-    for y_mid, x_min, txt in cells:
-        if not rows or abs(y_mid - row_y[-1]) > tolerance:
-            rows.append([(x_min, txt)])
-            row_y.append(y_mid)
-        else:
-            rows[-1].append((x_min, txt))
-            row_y[-1] = (row_y[-1] + y_mid) / 2
-    return "\n".join(" | ".join(txt for _x, txt in sorted(row)) for row in rows)
+    return read_page_with_shared_ocr(rgb_bytes, width, height)
 
 
 def _looks_like_poor_pdf_text(text: str) -> bool:

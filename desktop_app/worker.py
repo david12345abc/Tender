@@ -860,6 +860,54 @@ def _extract_repair_equipment_names(text: str) -> str:
     return "; ".join(out[:4])
 
 
+_TECHNICAL_NUMERIC_FIELDS = {
+    "nominal_diameter_or_pipeline_diameter",
+    "accuracy_class_or_flow_error",
+    "flow_rate_or_range",
+    "working_medium_pressure",
+    "working_medium_temperature",
+    "working_medium_density",
+    "working_medium_viscosity",
+    "ambient_air_temperature",
+}
+
+
+def _looks_like_year_or_date_technical_value(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if re.search(r"\b\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}\b", text):
+        return True
+    if re.search(r"\b(?:19|20)\d{2}[./]\d{1,2}[./]\d{1,2}\b", text):
+        return True
+    for match in re.finditer(r"(?<!\d)((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})(?!\d)", text):
+        start_year = int(match.group(1))
+        end_year = int(match.group(2))
+        if 1900 <= start_year <= 2100 and 1900 <= end_year <= 2100:
+            return True
+    return False
+
+
+def _sanitize_technical_value(key: str, value: Any) -> str:
+    text = _clean_analysis_value(value)
+    if not text:
+        return ""
+    if key in _TECHNICAL_NUMERIC_FIELDS and _looks_like_year_or_date_technical_value(text):
+        return ""
+    if key == "flow_rate_or_range":
+        # Расход должен быть техническим диапазоном, а не диапазоном годов/дат.
+        numbers = re.findall(r"-?\d+(?:[,.]\d+)?", text)
+        if len(numbers) >= 2:
+            try:
+                first = float(numbers[0].replace(",", "."))
+                second = float(numbers[1].replace(",", "."))
+            except ValueError:
+                first = second = 0.0
+            if 1900 <= first <= 2100 and 1900 <= second <= 2100:
+                return ""
+    return text
+
+
 def _apply_flowmeter_questionnaire_fallback(
     parsed: dict[str, str],
     *,
@@ -889,11 +937,17 @@ def _apply_flowmeter_questionnaire_fallback(
 
     flow_candidates: list[tuple[float, str, str]] = []
     for match in re.finditer(r"(?<![\d.,])(\d{2,7})\s*[-–—\n]\s*(\d{3,8})(?![\d.,])", compact):
-        before = compact[max(0, match.start() - 40) : match.start()].casefold()
+        before = compact[max(0, match.start() - 180) : match.start()].casefold()
+        after = compact[match.end() : match.end() + 80].casefold()
+        context = f"{before} {after}"
         if "гост" in before:
             continue
         low_num = float(match.group(1).replace(",", "."))
         high_num = float(match.group(2).replace(",", "."))
+        if 1900 <= low_num <= 2100 and 1900 <= high_num <= 2100:
+            continue
+        if not any(marker in context for marker in ("расход", "м³/ч", "м3/ч", "нм³/ч", "нм3/ч", "ст.м", "qmin", "qmax", "qном")):
+            continue
         if high_num >= 1000 and high_num > low_num:
             flow_candidates.append((high_num, match.group(1), match.group(2)))
     if flow_candidates:
@@ -976,7 +1030,7 @@ def _apply_technical_defaults(
         if key == "equipment_type_name" and _looks_generic_equipment_name(value):
             out[key] = ""
         else:
-            out[key] = _clean_analysis_value(value)
+            out[key] = _sanitize_technical_value(key, value)
     return out
 
 
@@ -1012,6 +1066,17 @@ def _number_or_none(value: Any) -> str:
     text = str(value or "").replace(",", ".")
     match = re.search(r"-?\d+(?:\.\d+)?", text)
     return match.group(0) if match else ""
+
+
+def _normalize_query_number(value: Any) -> str:
+    text = str(value or "").replace(",", ".")
+    match = re.search(r"-?\d+(?:\.\d+)?", text)
+    if not match:
+        return ""
+    number = match.group(0)
+    if "." in number:
+        number = number.rstrip("0").rstrip(".")
+    return number
 
 
 def _range_numbers(value: Any) -> tuple[str, str]:
@@ -1084,6 +1149,64 @@ def _fallback_equipment_query_from_technical(technical: dict[str, str]) -> dict[
     if density_max:
         query["densityMax"] = density_max
     return query
+
+
+def _is_yearish_number(value: Any) -> bool:
+    try:
+        number = float(str(value or "").replace(",", "."))
+    except ValueError:
+        return False
+    return number.is_integer() and 1900 <= number <= 2100
+
+
+def _sanitize_equipment_query(query: dict[str, str]) -> dict[str, str]:
+    out = dict(query or {})
+    numeric_keys = {
+        "flowMin",
+        "flowMax",
+        "pressureMin",
+        "pressureMax",
+        "tempMediumMin",
+        "tempMediumMax",
+        "tempAmbientMin",
+        "tempAmbientMax",
+        "accuracy",
+        "diameter",
+        "densityMin",
+        "densityMax",
+    }
+    for key in numeric_keys:
+        if key in out:
+            normalized = _normalize_query_number(out.get(key))
+            if normalized:
+                out[key] = normalized
+            else:
+                out.pop(key, None)
+    paired_keys = (
+        ("flowMin", "flowMax"),
+        ("pressureMin", "pressureMax"),
+        ("tempMediumMin", "tempMediumMax"),
+        ("tempAmbientMin", "tempAmbientMax"),
+        ("densityMin", "densityMax"),
+    )
+    for low_key, high_key in paired_keys:
+        low = out.get(low_key)
+        high = out.get(high_key)
+        if _is_yearish_number(low) and _is_yearish_number(high):
+            out.pop(low_key, None)
+            out.pop(high_key, None)
+    for single_key in ("accuracy", "diameter"):
+        if _is_yearish_number(out.get(single_key)):
+            out.pop(single_key, None)
+    return out
+
+
+def _equipment_api_url(endpoint: str, params: dict[str, str]) -> str:
+    base = EQUIPMENT_API_BASE_URL.rstrip("/")
+    endpoint = "/" + endpoint.lstrip("/")
+    if not base.endswith("/api"):
+        endpoint = "/api" + endpoint
+    return base + endpoint + "?" + urlencode(params, doseq=False)
 
 
 def _equipment_selection_rag_context(
@@ -1278,6 +1401,7 @@ def _technical_documents_context(
 
 
 def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
+    query = _sanitize_equipment_query(query)
     params = {key: value for key, value in query.items() if str(value or "").strip()}
     medium = str(params.get("medium") or "gas").strip().casefold()
     selection_keys = {
@@ -1319,7 +1443,7 @@ def _request_equipment_selection(query: dict[str, str]) -> dict[str, Any]:
             params.pop("densityMax", None)
         if params.get("medium") == "liquid":
             params.pop("gas_type", None)
-    url = EQUIPMENT_API_BASE_URL.rstrip("/") + endpoint + "?" + urlencode(params, doseq=False)
+    url = _equipment_api_url(endpoint, params)
     payload: Any = None
     last_exc: BaseException | None = None
     attempts = 4
@@ -1404,6 +1528,7 @@ def _select_equipment_for_technical(
     fallback_query = _fallback_equipment_query_from_technical(technical)
     for key, value in fallback_query.items():
         query.setdefault(key, value)
+    query = _sanitize_equipment_query(query)
     selection = _request_equipment_selection(query)
     selection["lm_raw"] = lm_raw
     selection["rag_context_used"] = bool(rag_context.strip())

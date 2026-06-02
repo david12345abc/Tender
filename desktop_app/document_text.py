@@ -17,6 +17,7 @@ MAX_DOCUMENT_FILES = 80
 MAX_TEXT_PER_FILE = 12_000
 MAX_DOCUMENT_TEXT = 60_000
 _PADDLE_OCR = None
+_EASY_OCR = None
 
 ARCHIVE_SUFFIXES = {
     ".zip",
@@ -413,17 +414,49 @@ def _get_paddle_ocr():
     return _PADDLE_OCR if _PADDLE_OCR is not False else None
 
 
-def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
+def _get_easy_ocr():
+    global _EASY_OCR
+    if _EASY_OCR is False:
+        return None
+    if _EASY_OCR is not None:
+        return _EASY_OCR
+    try:
+        import easyocr
+
+        _EASY_OCR = easyocr.Reader(["ru", "en"], gpu=False, verbose=False)
+    except Exception:
+        _EASY_OCR = False
+    return _EASY_OCR if _EASY_OCR is not False else None
+
+
+def _ocr_cells_to_rows(cells: list[tuple[float, float, str]], height: int) -> str:
+    if not cells:
+        return ""
+    cells.sort(key=lambda item: (item[0], item[1]))
+    rows: list[list[tuple[float, str]]] = []
+    tolerance = max(10.0, height * 0.006)
+    row_y: list[float] = []
+    for y_mid, x_min, text in cells:
+        if not rows or abs(y_mid - row_y[-1]) > tolerance:
+            rows.append([(x_min, text)])
+            row_y.append(y_mid)
+        else:
+            rows[-1].append((x_min, text))
+            row_y[-1] = (row_y[-1] + y_mid) / 2
+    return "\n".join(" | ".join(text for _x, text in sorted(row)) for row in rows)
+
+
+def _ocr_with_paddle(img, height: int) -> str:
+    global _PADDLE_OCR
     ocr = _get_paddle_ocr()
     if ocr is None:
         return ""
     try:
-        import numpy as np
-        from PIL import Image
-
-        img = np.array(Image.frombytes("RGB", (width, height), rgb_bytes))
         result = ocr.ocr(img, cls=True)
     except Exception:
+        # Если inference PaddleOCR ломается на текущей сборке CPU/oneDNN,
+        # не повторяем дорогую ошибку на каждой странице и отдаём fallback.
+        _PADDLE_OCR = False
         return ""
     cells: list[tuple[float, float, str]] = []
     for page in result or []:
@@ -439,20 +472,45 @@ def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
                 x_min = min(xs) if xs else 0.0
                 y_mid = (min(ys) + max(ys)) / 2 if ys else 0.0
                 cells.append((y_mid, x_min, str(text).strip()))
-    if not cells:
+    return _ocr_cells_to_rows(cells, height)
+
+
+def _ocr_with_easyocr(img, height: int) -> str:
+    reader = _get_easy_ocr()
+    if reader is None:
         return ""
-    cells.sort(key=lambda item: (item[0], item[1]))
-    rows: list[list[tuple[float, str]]] = []
-    tolerance = max(10.0, height * 0.006)
-    row_y: list[float] = []
-    for y_mid, x_min, text in cells:
-        if not rows or abs(y_mid - row_y[-1]) > tolerance:
-            rows.append([(x_min, text)])
-            row_y.append(y_mid)
-        else:
-            rows[-1].append((x_min, text))
-            row_y[-1] = (row_y[-1] + y_mid) / 2
-    return "\n".join(" | ".join(text for _x, text in sorted(row)) for row in rows)
+    try:
+        result = reader.readtext(img, detail=1, paragraph=False)
+    except Exception:
+        return ""
+    cells: list[tuple[float, float, str]] = []
+    for item in result or []:
+        try:
+            box = item[0] or []
+            text = str(item[1] or "").strip()
+            xs = [float(point[0]) for point in box if len(point) >= 2]
+            ys = [float(point[1]) for point in box if len(point) >= 2]
+        except Exception:
+            continue
+        if text:
+            x_min = min(xs) if xs else 0.0
+            y_mid = (min(ys) + max(ys)) / 2 if ys else 0.0
+            cells.append((y_mid, x_min, text))
+    return _ocr_cells_to_rows(cells, height)
+
+
+def _ocr_page_image(rgb_bytes: bytes, width: int, height: int) -> str:
+    try:
+        import numpy as np
+        from PIL import Image
+
+        img = np.array(Image.frombytes("RGB", (width, height), rgb_bytes))
+    except Exception:
+        return ""
+    text = _ocr_with_paddle(img, height)
+    if text.strip():
+        return text
+    return _ocr_with_easyocr(img, height)
 
 
 def _looks_like_poor_pdf_text(text: str) -> bool:

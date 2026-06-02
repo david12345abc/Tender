@@ -82,7 +82,7 @@ LM_STUDIO_BASE_URL = os.environ.get("LM_STUDIO_BASE_URL", "http://192.168.1.157:
 LM_STUDIO_MODEL = os.environ.get("LM_STUDIO_MODEL", "yandexgpt-5-lite-8b-instruct")
 
 # API мастера подбора наших приборов.
-EQUIPMENT_API_BASE_URL = os.environ.get("EQUIPMENT_API_BASE_URL", "http://192.168.5.49:8010/api")
+EQUIPMENT_API_BASE_URL = os.environ.get("EQUIPMENT_API_BASE_URL", "http://192.168.3.1:8010/")
 
 # Адрес JSON-манифеста последнего релиза. Можно задать через переменную окружения
 # или положить путь/URL в update_manifest_url.txt рядом с приложением либо в LOCALAPPDATA.
