@@ -1062,7 +1062,7 @@ class Sidebar(QWidget):
     def _expanded_min_height(self) -> int:
         if self._platform_key == "roseltorg":
             return 360
-        if self._platform_key == "gpb_trading_portal":
+        if self._platform_key in {"gpb_trading_portal", "gpb_business_procurement"}:
             return 430
         if self._platform_key == "gpb_business":
             return 460
@@ -1272,6 +1272,52 @@ class Sidebar(QWidget):
             ):
                 self._place_row(key, row, col, key in visible_keys)
             self.extra_filters.setMinimumHeight(980)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
+        elif self._platform_key == "gpb_business_procurement":
+            visible_keys = {
+                "registry",
+                "trend",
+                "organizer",
+                "customer",
+                "published",
+                "title",
+                "status",
+                "price",
+                "end",
+                "okpd2",
+                "position_name",
+            }
+            self._set_row_label("registry", "Номер закупки:")
+            self._set_row_label("title", "Наименование закупки:")
+            self._set_row_label("trend", "Способ закупки:")
+            self._set_row_label("organizer", "Организатор/заказчик:")
+            self._set_row_label("customer", "Заказчик:")
+            self._set_row_label("status", "Статус:")
+            self._set_row_label("price", "Цена:")
+            self._set_row_label("published", "Дата публикации:")
+            self._set_row_label("end", "Окончание приема заявок:")
+            self._set_row_label("okpd2", "ОКПД2:")
+            self._set_row_label("position_name", "Наименование позиции:")
+            for row in range(40):
+                self._filter_grid.setRowMinimumHeight(row, 0)
+            for key in self._filter_rows:
+                self._set_row_visible(key, False)
+            for key, row, col in (
+                ("registry", 0, 0),
+                ("trend", 0, 1),
+                ("organizer", 1, 0),
+                ("customer", 1, 1),
+                ("published", 2, 0),
+                ("title", 2, 1),
+                ("status", 3, 0),
+                ("price", 3, 1),
+                ("end", 4, 0),
+                ("okpd2", 4, 1),
+                ("position_name", 5, 0),
+            ):
+                self._place_row(key, row, col, key in visible_keys)
+            self.extra_filters.setMinimumHeight(1080)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         else:

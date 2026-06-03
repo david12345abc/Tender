@@ -50,6 +50,11 @@ from PySide6.QtWidgets import (
 
 from etp_client import EtpClient, PROCEDURE_TYPE_OPTIONS, STATUS_OPTIONS, step_id_label, trend_pur_label
 from gpb_business_client import GPB_BUSINESS_PROCEDURE_TYPE_OPTIONS, GpbBusinessClient
+from gpb_business_procurement_client import (
+    GPB_BUSINESS_PROCUREMENT_STATUS_OPTIONS,
+    GPB_BUSINESS_PROCUREMENT_TYPE_OPTIONS,
+    GpbBusinessProcurementClient,
+)
 from gpb_trading_portal_client import (
     GPB_TRADING_PORTAL_STATUS_OPTIONS,
     GPB_TRADING_PORTAL_TYPE_OPTIONS,
@@ -251,6 +256,7 @@ class MainWindow(QMainWindow):
         self.act_platform_etp_gpb = self.gpb_platform_menu.addAction("Секция Газпром")
         self.act_platform_gpb_business = self.gpb_platform_menu.addAction("Секция Бизнес.223")
         self.act_platform_gpb_trading_portal = self.gpb_platform_menu.addAction("Торговый портал")
+        self.act_platform_gpb_business_procurement = self.gpb_platform_menu.addAction("Закупки Бизнес")
         self.btn_platform_gpb.setMenu(self.gpb_platform_menu)
         self.btn_platform_roseltorg = QPushButton("Росэлторг")
         self.btn_platform_roseltorg.setObjectName("PlatformButton")
@@ -263,6 +269,9 @@ class MainWindow(QMainWindow):
         self.act_platform_etp_gpb.triggered.connect(lambda: self._select_platform("gpb"))
         self.act_platform_gpb_business.triggered.connect(lambda: self._select_platform("gpb_business"))
         self.act_platform_gpb_trading_portal.triggered.connect(lambda: self._select_platform("gpb_trading_portal"))
+        self.act_platform_gpb_business_procurement.triggered.connect(
+            lambda: self._select_platform("gpb_business_procurement")
+        )
         self.btn_platform_roseltorg.clicked.connect(lambda: self._select_platform("roseltorg"))
         top_layout.addWidget(platform_switcher, 0, Qt.AlignVCenter)
 
@@ -785,31 +794,42 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ задачи
     def _is_platform_ready(self) -> bool:
-        return self._platform_key in {"gpb", "gpb_business", "gpb_trading_portal", "roseltorg"}
+        return self._platform_key in {
+            "gpb",
+            "gpb_business",
+            "gpb_trading_portal",
+            "gpb_business_procurement",
+            "roseltorg",
+        }
 
     def _platform_title(self) -> str:
         if self._platform_key == "roseltorg":
             return "Росэлторг"
         if self._platform_key == "gpb_trading_portal":
             return "Торговый портал"
+        if self._platform_key == "gpb_business_procurement":
+            return "Закупки Бизнес"
         if self._platform_key == "gpb_business":
             return "Секция Бизнес.223"
         return "Секция Газпром"
 
     def _set_platform_buttons(self) -> None:
-        self.btn_platform_gpb.setChecked(self._platform_key in {"gpb", "gpb_business", "gpb_trading_portal"})
+        gpb_menu_platforms = {"gpb", "gpb_business", "gpb_trading_portal", "gpb_business_procurement"}
+        self.btn_platform_gpb.setChecked(self._platform_key in gpb_menu_platforms)
         self.btn_platform_roseltorg.setChecked(self._platform_key == "roseltorg")
         self.btn_platform_gpb.setText(
             self._platform_title()
-            if self._platform_key in {"gpb", "gpb_business", "gpb_trading_portal"}
+            if self._platform_key in gpb_menu_platforms
             else "Секции"
         )
         self.act_platform_etp_gpb.setCheckable(True)
         self.act_platform_gpb_business.setCheckable(True)
         self.act_platform_gpb_trading_portal.setCheckable(True)
+        self.act_platform_gpb_business_procurement.setCheckable(True)
         self.act_platform_etp_gpb.setChecked(self._platform_key == "gpb")
         self.act_platform_gpb_business.setChecked(self._platform_key == "gpb_business")
         self.act_platform_gpb_trading_portal.setChecked(self._platform_key == "gpb_trading_portal")
+        self.act_platform_gpb_business_procurement.setChecked(self._platform_key == "gpb_business_procurement")
 
     def _apply_platform_ui(self) -> None:
         self._set_platform_buttons()
@@ -852,6 +872,19 @@ class MainWindow(QMainWindow):
                 self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
             self._set_badge("idle", "○  Браузер не запущен")
             self.status_msg.setText("Готов. Нажмите «Поиск».")
+        elif self._platform_key == "gpb_business_procurement":
+            self.sidebar.set_platform_filter_options(
+                GPB_BUSINESS_PROCUREMENT_TYPE_OPTIONS,
+                GPB_BUSINESS_PROCUREMENT_STATUS_OPTIONS,
+                None,
+                platform_key="gpb_business_procurement",
+            )
+            self.title_label.setText("Закупки Бизнес — Все закупки")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
         else:
             self.sidebar.set_platform_filter_options(
                 PROCEDURE_TYPE_OPTIONS,
@@ -867,7 +900,7 @@ class MainWindow(QMainWindow):
             self.status_msg.setText("Готов. Нажмите «Поиск».")
 
     def _select_platform(self, key: str) -> None:
-        if key not in {"gpb", "gpb_business", "gpb_trading_portal", "roseltorg"}:
+        if key not in {"gpb", "gpb_business", "gpb_trading_portal", "gpb_business_procurement", "roseltorg"}:
             return
         if self.runner.is_running():
             self._set_platform_buttons()
@@ -896,6 +929,8 @@ class MainWindow(QMainWindow):
             self.client = RoseltorgClient()
         elif key == "gpb_trading_portal":
             self.client = GpbTradingPortalClient()
+        elif key == "gpb_business_procurement":
+            self.client = GpbBusinessProcurementClient()
         elif key == "gpb_business":
             self.client = GpbBusinessClient()
         else:
@@ -2924,7 +2959,12 @@ class MainWindow(QMainWindow):
         self.btn_platform_roseltorg.setEnabled(not running)
         self.btn_prev_page.setEnabled(platform_ready and current_page > 0)
         self.btn_next_page.setEnabled(platform_ready and current_page + 1 < page_count)
-        gpb_like = self._platform_key in {"gpb", "gpb_business", "gpb_trading_portal"}
+        gpb_like = self._platform_key in {
+            "gpb",
+            "gpb_business",
+            "gpb_trading_portal",
+            "gpb_business_procurement",
+        }
         self.btn_download_docs.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)
         self.btn_analyze.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)
         self.btn_show_analysis.setEnabled(not running and bool(self._analysis_sink.get("summary_rows")))
