@@ -165,6 +165,57 @@ def _format_proc_datetime(value: Any) -> str:
     return _format_russian_date_text(text)
 
 
+def _normalize_card_datetime(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").replace("\u00a0", " ")).strip(" .,:;")
+    if not text:
+        return ""
+    iso_match = re.search(
+        r"\b20\d{2}-\d{2}-\d{2}(?:[T\s]+\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:\s*(?:Z|[+-]\d{2}:?\d{0,2}|\[(?:GMT|UTC)\s*[+-]\s*\d{1,2}\]))?)?",
+        text,
+        re.I,
+    )
+    if iso_match:
+        return _format_proc_datetime(iso_match.group(0))
+    ru_match = re.search(
+        r"\b(\d{1,2})[.](\d{1,2})[.](20\d{2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?"
+        r"(?:\s*(?:\[?\s*(?:GMT|UTC)\s*([+-])\s*(\d{1,2})\s*\]?|([+-])(\d{2}):?(\d{2})?))?",
+        text,
+        re.I,
+    )
+    if not ru_match:
+        return ""
+    day = int(ru_match.group(1))
+    month = int(ru_match.group(2))
+    year = ru_match.group(3)
+    hour = ru_match.group(4)
+    minute = ru_match.group(5)
+    second = ru_match.group(6) or "00"
+    if not hour:
+        return f"{day:02d}.{month:02d}.{year}"
+    sign = ru_match.group(7) or ru_match.group(9) or "+"
+    tz_hour = ru_match.group(8) or ru_match.group(10) or "3"
+    return f"{day:02d}.{month:02d}.{year} {int(hour):02d}:{minute}:{second} [GMT {sign}{int(tz_hour)}]"
+
+
+def _extract_retender_date_from_card(page_text: str) -> str:
+    text = str(page_text or "").replace("\u00a0", " ")
+    if not text.strip():
+        return ""
+    labels = (
+        "Дата и время окончания срока подачи новых коммерческих предложений",
+        "Окончание срока подачи новых коммерческих предложений",
+    )
+    for label in labels:
+        match = re.search(re.escape(label), text, re.I)
+        if not match:
+            continue
+        fragment = text[match.end() : match.end() + 350]
+        value = _normalize_card_datetime(fragment)
+        if value:
+            return value
+    return ""
+
+
 def _source_to_dict(source: FieldSource) -> dict[str, Any]:
     return {
         "source_type": source.source_type,
@@ -708,6 +759,7 @@ def _apply_proc_defaults(
     if results_date and empty(out.get("results_date")):
         out["results_date"] = _format_proc_datetime(results_date)
 
+    card_retender_date = _extract_retender_date_from_card(page_text)
     has_retrade_date = any(
         str(proc.get(key) or lot0.get(key) or "").strip()
         for key in (
@@ -719,7 +771,9 @@ def _apply_proc_defaults(
             "peretorg_date",
         )
     )
-    if not has_retrade_date and not proc.get("peretorg_possible") and not lot0.get("is_peretorg"):
+    if card_retender_date:
+        out["retender_date"] = card_retender_date
+    elif not has_retrade_date and not proc.get("peretorg_possible") and not lot0.get("is_peretorg"):
         out["retender_date"] = ""
 
     total_price = str(
@@ -2544,6 +2598,16 @@ def make_analyze_procedure_task(
                         sources_by_field,
                         "application_deadline",
                         _card_source("Дата окончания подачи заявок", detail_url, parsed.get("application_deadline", "")),
+                    )
+                if parsed.get("retender_date"):
+                    _add_field_source(
+                        sources_by_field,
+                        "retender_date",
+                        _card_source(
+                            "Дата и время окончания срока подачи новых коммерческих предложений",
+                            detail_url,
+                            parsed.get("retender_date", ""),
+                        ),
                     )
                 if parsed.get("results_date"):
                     _add_field_source(
