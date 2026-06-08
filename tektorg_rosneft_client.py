@@ -275,10 +275,16 @@ class TektorgRosneftClient(EtpClient):
         proc_id = proc.get("id") or proc.get("procedure_id")
         if not proc_id:
             raise RuntimeError("У процедуры нет id для открытия подробной страницы.")
-        url = self._detail_url(proc_id)
+        url = _safe_text(proc.get("card_url") or proc.get("url")) or self._detail_url(proc_id)
         if progress:
             progress(f"Открываю карточку ТЭК-Торг {proc.get('registry_number') or proc_id}: {url}")
-        self.driver.get(url)
+        try:
+            self.driver.get(url)
+        except Exception:
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                pass
         time.sleep(3)
         page = self.driver.execute_script(
             """
@@ -330,6 +336,42 @@ class TektorgRosneftClient(EtpClient):
                 return _safe_filename(m.group(1), f"document_{index}")
         return _safe_filename(text or f"document_{index}", f"document_{index}")
 
+    def _download_document_via_chrome(self, href: str, output_dir: Path, before: set[str]) -> Path:
+        assert self.driver is not None, "Сначала вызовите connect()"
+        try:
+            self.driver.execute_cdp_cmd(
+                "Page.setDownloadBehavior",
+                {"behavior": "allow", "downloadPath": str(output_dir.resolve())},
+            )
+        except Exception:
+            pass
+        self.driver.execute_script(
+            """
+            const href = arguments[0];
+            const a = document.createElement('a');
+            a.href = href;
+            a.target = '_self';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => a.remove(), 1000);
+            """,
+            href,
+        )
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            candidates = [
+                item for item in output_dir.iterdir()
+                if item.is_file()
+                and item.name not in before
+                and not item.name.endswith(".crdownload")
+                and not item.name.endswith(".tmp")
+            ]
+            if candidates:
+                return max(candidates, key=lambda item: item.stat().st_mtime)
+            time.sleep(0.5)
+        raise RuntimeError("Chrome не завершил скачивание документа за отведённое время.")
+
     def download_document_link(self, link: dict[str, Any], output_dir: Path, index: int = 1) -> Path:
         assert self.driver is not None, "Сначала вызовите connect()"
         href = _safe_text(link.get("href"))
@@ -344,6 +386,7 @@ class TektorgRosneftClient(EtpClient):
             target = output_dir / f"{stem}_{n}{suffix}"
             n += 1
         absolute = urljoin(self.driver.current_url, href)
+        before_download = {item.name for item in output_dir.iterdir() if item.is_file()}
         res = self.driver.execute_async_script(_DOWNLOAD_URL_JS, absolute)
         if isinstance(res, dict) and res.get("ok"):
             data_url = str(res.get("dataUrl") or "")
@@ -360,9 +403,19 @@ class TektorgRosneftClient(EtpClient):
                 "Accept": "application/octet-stream, application/json, */*",
             },
         )
-        with urlopen(request, timeout=120) as response:
-            target.write_bytes(response.read())
-        return target
+        try:
+            with urlopen(request, timeout=120) as response:
+                target.write_bytes(response.read())
+            return target
+        except Exception:
+            downloaded = self._download_document_via_chrome(absolute, output_dir, before_download)
+            if downloaded != target and not target.exists():
+                try:
+                    downloaded.replace(target)
+                    return target
+                except Exception:
+                    return downloaded
+            return downloaded
 
     def download_procedure_documents(
         self,

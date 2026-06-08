@@ -1067,6 +1067,7 @@ class Sidebar(QWidget):
             "gpb_business_procurement",
             "tektorg_rosneft",
             "tektorg_inter_rao",
+            "tektorg_223",
         }:
             return 430
         if self._platform_key == "gpb_business":
@@ -1325,7 +1326,7 @@ class Sidebar(QWidget):
             self.extra_filters.setMinimumHeight(1080)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
-        elif self._platform_key in {"tektorg_rosneft", "tektorg_inter_rao"}:
+        elif self._platform_key in {"tektorg_rosneft", "tektorg_inter_rao", "tektorg_223"}:
             visible_keys = {
                 "registry",
                 "trend",
