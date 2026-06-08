@@ -313,7 +313,7 @@ class TektorgRosneftClient(EtpClient):
             text = _safe_text(item.get("text"))
             if not href:
                 continue
-            if "api.tektorg.ru/open-api/documents/procedure/" in href or _DOWNLOAD_EXT_RE.search(href):
+            if "api.tektorg.ru/open-api/documents/procedure/" in href:
                 result.append({"href": href, "text": text or href.rsplit("/", 1)[-1]})
         return result
 

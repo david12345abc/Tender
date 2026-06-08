@@ -1062,7 +1062,12 @@ class Sidebar(QWidget):
     def _expanded_min_height(self) -> int:
         if self._platform_key == "roseltorg":
             return 360
-        if self._platform_key in {"gpb_trading_portal", "gpb_business_procurement", "tektorg_rosneft"}:
+        if self._platform_key in {
+            "gpb_trading_portal",
+            "gpb_business_procurement",
+            "tektorg_rosneft",
+            "tektorg_inter_rao",
+        }:
             return 430
         if self._platform_key == "gpb_business":
             return 460
@@ -1320,7 +1325,7 @@ class Sidebar(QWidget):
             self.extra_filters.setMinimumHeight(1080)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
-        elif self._platform_key == "tektorg_rosneft":
+        elif self._platform_key in {"tektorg_rosneft", "tektorg_inter_rao"}:
             visible_keys = {
                 "registry",
                 "trend",
