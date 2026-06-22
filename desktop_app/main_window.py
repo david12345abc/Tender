@@ -60,6 +60,11 @@ from gpb_business_procurement_client import (
     GPB_BUSINESS_PROCUREMENT_TYPE_OPTIONS,
     GpbBusinessProcurementClient,
 )
+from gpb_inter_rao_client import (
+    GPB_INTER_RAO_PROCEDURE_TYPE_OPTIONS,
+    GPB_INTER_RAO_STATUS_OPTIONS,
+    GpbInterRaoClient,
+)
 from gpn_client import (
     GPN_PROCEDURE_TYPE_OPTIONS,
     GPN_STATUS_OPTIONS,
@@ -90,6 +95,11 @@ from tektorg_rosneft_client import (
     TEKTORG_ROSNEFT_STATUS_OPTIONS,
     TEKTORG_ROSNEFT_TYPE_OPTIONS,
     TektorgRosneftClient,
+)
+from transneft_client import (
+    TRANSNEFT_PROCEDURE_TYPE_OPTIONS,
+    TRANSNEFT_STATUS_OPTIONS,
+    TransneftClient,
 )
 
 from .assets import asset_path
@@ -284,6 +294,8 @@ class MainWindow(QMainWindow):
         self.act_platform_gpb_business_procurement = self.gpb_platform_menu.addAction("Закупки Бизнес")
         self.act_platform_gpn = self.gpb_platform_menu.addAction("Газпром нефть")
         self.act_platform_geh = self.gpb_platform_menu.addAction("Газпром энергохолд")
+        self.act_platform_transneft = self.gpb_platform_menu.addAction("Газпром Транснефть")
+        self.act_platform_gpb_inter_rao = self.gpb_platform_menu.addAction("Газпром Интер РАО")
         self.btn_platform_gpb.setMenu(self.gpb_platform_menu)
         self.btn_platform_roseltorg = QPushButton("Росэлторг")
         self.btn_platform_roseltorg.setObjectName("PlatformButton")
@@ -315,6 +327,8 @@ class MainWindow(QMainWindow):
         )
         self.act_platform_gpn.triggered.connect(lambda: self._select_platform("gpn"))
         self.act_platform_geh.triggered.connect(lambda: self._select_platform("geh"))
+        self.act_platform_transneft.triggered.connect(lambda: self._select_platform("transneft"))
+        self.act_platform_gpb_inter_rao.triggered.connect(lambda: self._select_platform("gpb_inter_rao"))
         self.btn_platform_roseltorg.clicked.connect(lambda: self._select_platform("roseltorg"))
         self.act_platform_tektorg_rosneft.triggered.connect(lambda: self._select_platform("tektorg_rosneft"))
         self.act_platform_tektorg_inter_rao.triggered.connect(lambda: self._select_platform("tektorg_inter_rao"))
@@ -847,6 +861,8 @@ class MainWindow(QMainWindow):
             "gpb_business_procurement",
             "gpn",
             "geh",
+            "transneft",
+            "gpb_inter_rao",
             "roseltorg",
             "tektorg_rosneft",
             "tektorg_inter_rao",
@@ -864,6 +880,10 @@ class MainWindow(QMainWindow):
             return "Газпром нефть"
         if self._platform_key == "geh":
             return "Газпром энергохолд"
+        if self._platform_key == "transneft":
+            return "Газпром Транснефть"
+        if self._platform_key == "gpb_inter_rao":
+            return "Газпром Интер РАО"
         if self._platform_key == "tektorg_rosneft":
             return 'ТЭК-Торг — НК "Роснефть"'
         if self._platform_key == "tektorg_inter_rao":
@@ -875,7 +895,16 @@ class MainWindow(QMainWindow):
         return "Секция Газпром"
 
     def _set_platform_buttons(self) -> None:
-        gpb_menu_platforms = {"gpb", "gpb_business", "gpb_trading_portal", "gpb_business_procurement", "gpn", "geh"}
+        gpb_menu_platforms = {
+            "gpb",
+            "gpb_business",
+            "gpb_trading_portal",
+            "gpb_business_procurement",
+            "gpn",
+            "geh",
+            "transneft",
+            "gpb_inter_rao",
+        }
         tektorg_menu_platforms = {"tektorg_rosneft", "tektorg_inter_rao", "tektorg_223"}
         self.btn_platform_gpb.setChecked(self._platform_key in gpb_menu_platforms)
         self.btn_platform_roseltorg.setChecked(self._platform_key == "roseltorg")
@@ -896,6 +925,8 @@ class MainWindow(QMainWindow):
         self.act_platform_gpb_business_procurement.setCheckable(True)
         self.act_platform_gpn.setCheckable(True)
         self.act_platform_geh.setCheckable(True)
+        self.act_platform_transneft.setCheckable(True)
+        self.act_platform_gpb_inter_rao.setCheckable(True)
         self.act_platform_tektorg_rosneft.setCheckable(True)
         self.act_platform_tektorg_inter_rao.setCheckable(True)
         self.act_platform_tektorg_223.setCheckable(True)
@@ -905,6 +936,8 @@ class MainWindow(QMainWindow):
         self.act_platform_gpb_business_procurement.setChecked(self._platform_key == "gpb_business_procurement")
         self.act_platform_gpn.setChecked(self._platform_key == "gpn")
         self.act_platform_geh.setChecked(self._platform_key == "geh")
+        self.act_platform_transneft.setChecked(self._platform_key == "transneft")
+        self.act_platform_gpb_inter_rao.setChecked(self._platform_key == "gpb_inter_rao")
         self.act_platform_tektorg_rosneft.setChecked(self._platform_key == "tektorg_rosneft")
         self.act_platform_tektorg_inter_rao.setChecked(self._platform_key == "tektorg_inter_rao")
         self.act_platform_tektorg_223.setChecked(self._platform_key == "tektorg_223")
@@ -989,6 +1022,32 @@ class MainWindow(QMainWindow):
                 self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
             self._set_badge("idle", "○  Браузер не запущен")
             self.status_msg.setText("Готов. Нажмите «Поиск».")
+        elif self._platform_key == "transneft":
+            self.sidebar.set_platform_filter_options(
+                TRANSNEFT_PROCEDURE_TYPE_OPTIONS,
+                TRANSNEFT_STATUS_OPTIONS,
+                None,
+                platform_key="transneft",
+            )
+            self.title_label.setText("Газпром Транснефть — Актуальные процедуры")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
+        elif self._platform_key == "gpb_inter_rao":
+            self.sidebar.set_platform_filter_options(
+                GPB_INTER_RAO_PROCEDURE_TYPE_OPTIONS,
+                GPB_INTER_RAO_STATUS_OPTIONS,
+                None,
+                platform_key="gpb_inter_rao",
+            )
+            self.title_label.setText("Газпром Интер РАО — Актуальные процедуры")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
         elif self._platform_key == "tektorg_rosneft":
             self.sidebar.set_platform_filter_options(
                 TEKTORG_ROSNEFT_TYPE_OPTIONS,
@@ -1050,6 +1109,8 @@ class MainWindow(QMainWindow):
             "gpb_business_procurement",
             "gpn",
             "geh",
+            "transneft",
+            "gpb_inter_rao",
             "roseltorg",
             "tektorg_rosneft",
             "tektorg_inter_rao",
@@ -1095,6 +1156,10 @@ class MainWindow(QMainWindow):
             self.client = GpnClient()
         elif key == "geh":
             self.client = GehClient()
+        elif key == "transneft":
+            self.client = TransneftClient()
+        elif key == "gpb_inter_rao":
+            self.client = GpbInterRaoClient()
         elif key == "gpb_business":
             self.client = GpbBusinessClient()
         else:
@@ -3131,6 +3196,8 @@ class MainWindow(QMainWindow):
             "gpb_business_procurement",
             "gpn",
             "geh",
+            "transneft",
+            "gpb_inter_rao",
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",

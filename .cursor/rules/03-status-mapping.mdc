@@ -49,11 +49,11 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 - Сервер: POST filters[], **первый** `step_ids[0]`
 - Display: `_STATUS_LABELS` в `_normalize_row`
 
-## GPB дочерние секции (gpn / geh)
+## GPB дочерние секции (gpn / geh / transneft / gpb_inter_rao)
 
 **Источник:** отдельные клиенты `GpnClient`, `GehClient`.
 
-- `gpn.etpgpb.ru` и `geh.etpgpb.ru` используют тот же Ext.Direct `Procedure.list`.
+- `gpn.etpgpb.ru`, `geh.etpgpb.ru`, `transneft.etpgpb.ru` и `inter-rao.etpgpb.ru` используют тот же Ext.Direct `Procedure.list`.
 - Статус передается в body RPC как числовое поле `status`.
 - Номер/ID ищется через общий `query`, а не `procedure_number_like`.
 - Документы карточки: `/file/get/t/LotDocuments/...`.
@@ -71,6 +71,9 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 | Архив | `8` |
 | Отменен | `10` |
 | Рассмотрение вторых частей заявок (GEH) | `26` |
+| Ожидает открытия доступа (Transneft) | `21` |
+| Торги (Transneft) | `5` |
+| Подача дополнительных ценовых предложений (Интер РАО) | `20` |
 
 ## Roseltorg
 
