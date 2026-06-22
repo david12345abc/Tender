@@ -40,6 +40,7 @@ MainWindow (main_window.py)
 | `transneft` | `TransneftClient` | transneft.etpgpb.ru |
 | `gpb_inter_rao` | `GpbInterRaoClient` | inter-rao.etpgpb.ru |
 | `roseltorg` | `RoseltorgClient` | business.roseltorg.ru |
+| `roseltorg_44` | `Roseltorg44Client` | gos.roseltorg.ru |
 | `tektorg_rosneft` | `TektorgRosneftClient` | tektorg.ru/rosneft |
 | `tektorg_inter_rao` | `TektorgInterRaoClient` | tektorg.ru/inter_rao |
 | `tektorg_223` | `Tektorg223Client` | tektorg.ru/223-fz |

@@ -75,7 +75,7 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 | Торги (Transneft) | `5` |
 | Подача дополнительных ценовых предложений (Интер РАО) | `20` |
 
-## Roseltorg
+## Roseltorg Business
 
 **Источник:** `ROSELTORG_STATUS_OPTIONS`
 
@@ -88,6 +88,26 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 - **Полностью серверная** фильтрация (multiple states supported)
 - Proxy: только keywords
 - `step_id` = raw state, `step_label` = `ROSELTORG_STATUS_LABELS[state]`
+
+## Roseltorg 44-ФЗ
+
+**Источник:** `ROSELTORG_44_STATUS_OPTIONS`, сайт `gos.roseltorg.ru`.
+
+| UI label | API `filters.state[]` |
+|----------|-----------------------|
+| Прием заявок | `LotAcceptApplications` |
+| Рассмотрение первых частей | `LotFirstPartsReview` |
+| Торги | `LotAuctionStart` |
+| Рассмотрение вторых частей | `LotSecondPartsReview` |
+| Подведение итогов | `LotSummingUp` |
+| Заключение контракта.* | `LotComposeContract*` |
+| Приостановлена.* | `FasStopedLot`, `LotStoppedAfter*` |
+
+- Endpoint поиска: `/api/v1/elastica/configurations/procedures/search`.
+- Авторизация: Bearer из `localStorage["app-state-authtoken"]`.
+- Фильтры передаются JSON-строкой в query param `filters`, например `{"state":["LotAcceptApplications"],"registrationNumber":"..."}`.
+- Карточка: `https://gos.roseltorg.ru/#lotinfo/{procedure_id}/{lot_id}`.
+- Документы: `/api/v1/procedure/{procedure_id}/info` → `DocumentsList.noticeAttachments`.
 
 ## Tek-Torg (все секции)
 
