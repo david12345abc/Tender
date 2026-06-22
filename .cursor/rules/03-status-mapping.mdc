@@ -1,0 +1,120 @@
+---
+description: Маппинг статусов процедур по платформам
+globs: etp_client.py,*_client.py,desktop_app/models.py,desktop_app/sidebar.py,desktop_app/worker.py
+alwaysApply: false
+---
+
+# Статусы процедур
+
+UI хранит выбранные статусы в `ClientFilters.step_ids`. Формат значения **разный per platform**.
+
+## GPB Gazprom + Business.223
+
+**Источник:** `etp_client.SERVER_STATUS_BY_LABEL`, UI: `STATUS_OPTIONS`
+
+| UI label | RPC `status` (int) |
+|----------|-------------------|
+| Активные | -2 |
+| Приём заявок | 2 |
+| Ожидает начала регистрации | 201 |
+| Приём ценовой информации | 30 |
+| Работа комиссии / Рассмотрение | 4 |
+| Подведение итогов | 6 |
+| … | см. `SERVER_STATUS_BY_LABEL` |
+
+- Отправка: `_server_status_value(step_ids)` → одно int в payload `Procedure.list`
+- Multi-select: worker fan-out (отдельный запрос на каждый status)
+- Отображение: `ProcedureTableModel._status_label()` — `step_id` + эвристики
+- «Активные» (-2): серверный фильтр, **не** применять как локальный step_id
+
+## GPB Trading Portal (ЦЗ)
+
+**Источник:** `GPB_TRADING_PORTAL_STATUS_OPTIONS` — свои коды 1–12
+
+- Сервер: **один** status per RPC (`step_ids[0]`)
+- Локально: полная фильтрация через proxy (свой словарь, не GPB Procedure.list)
+- Нормализация: `_normalize_status_text()`
+
+## GPB Business Procurement (com.etpgpb.ru)
+
+**Источник:** `GPB_BUSINESS_PROCUREMENT_STATUS_OPTIONS`
+
+| UI label | API `status` |
+|----------|-------------|
+| Опубликована | `published` |
+| Прием заявок | `applications_acceptance` |
+| Архив | `archive` |
+| … | string codes |
+
+- Сервер: POST filters[], **первый** `step_ids[0]`
+- Display: `_STATUS_LABELS` в `_normalize_row`
+
+## GPB дочерние секции (gpn / geh)
+
+**Источник:** отдельные клиенты `GpnClient`, `GehClient`.
+
+- `gpn.etpgpb.ru` и `geh.etpgpb.ru` используют тот же Ext.Direct `Procedure.list`.
+- Статус передается в body RPC как числовое поле `status`.
+- Номер/ID ищется через общий `query`, а не `procedure_number_like`.
+- Документы карточки: `/file/get/t/LotDocuments/...`.
+
+Ключевые статусы:
+
+| label | code |
+|-------|------|
+| Активные | `-2` |
+| Прием заявок | `2` |
+| Вскрытие заявок / Черновик | `3` |
+| Рассмотрение заявок | `4` |
+| Подведение итогов | `6` |
+| Заключение договора | `7` |
+| Архив | `8` |
+| Отменен | `10` |
+| Рассмотрение вторых частей заявок (GEH) | `26` |
+
+## Roseltorg
+
+**Источник:** `ROSELTORG_STATUS_OPTIONS`
+
+| UI label | API `procedureStates[]` |
+|----------|------------------------|
+| Приём предложений | `Published` |
+| В архиве | `procedureArchive` |
+| … | English enum strings |
+
+- **Полностью серверная** фильтрация (multiple states supported)
+- Proxy: только keywords
+- `step_id` = raw state, `step_label` = `ROSELTORG_STATUS_LABELS[state]`
+
+## Tek-Torg (все секции)
+
+**UI options:** `(label, label)` — русский текст = значение
+
+```
+Архив | Отменён | Приём заявок | Работа комиссии
+```
+
+| Секция | Серверный param | Локальный filter |
+|--------|----------------|------------------|
+| Rosneft | **нет** в URL | `_matches_selected_statuses()` по `statusName` |
+| Inter RAO | `status[]=...` (repeated) | + client-side match |
+| 223-FZ | наследует Inter RAO | + client-side match |
+
+**Важно:** `status=Приём заявок` (без []) → 0 результатов. Только `status[]`.
+
+Тип процедуры (`typeName`): URL param **не работает** → `_matches_selected_types()` client-side.
+
+Данные: `row.statusName`, `row.typeName` из Next.js listing.
+
+## Sidebar → ClientFilters
+
+`status_selector` заполняется из `*_STATUS_OPTIONS` при `set_platform_filter_options()`.
+Значения попадают в `step_ids` как tuple выбранных option values.
+
+## При добавлении статусов
+
+1. Снять слепок: какие labels реально на сайте
+2. Проверить param name и format (int / string / array)
+3. Добавить `*_STATUS_OPTIONS` в client
+4. Если сервер принимает один status — fan-out в worker или client-side filter
+5. Обновить `_normalize_row` / `_status_label` для отображения

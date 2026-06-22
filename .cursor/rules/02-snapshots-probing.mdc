@@ -1,0 +1,75 @@
+---
+description: Механизм слепков и reverse-engineering платформ
+globs: explore_*.py,_debug_*.py,*_client.py
+alwaysApply: false
+---
+
+# Слепки и разведка платформ
+
+## Два режима «слепков»
+
+### 1. Разведочные слепки (`explore_etp.py`)
+
+Полноценный toolkit **до** написания клиента. Результаты → `exploration_results/`.
+
+**Workflow:**
+1. Проверка окружения (CryptoPro, Chrome, расширения)
+2. Запуск Chrome с профилем пользователя + `--remote-debugging-port`
+3. `_save_state(driver, dir, suffix="initial")` — после загрузки SPA (~20s)
+4. Пользователь логинится, кликает фильтры, открывает карточки
+5. `_save_state(..., suffix="final")`
+6. `_probe_rpc_api()` — пробные Ext.Direct вызовы
+7. CDP network log → `network_log.json`, `api_candidates.json`
+8. `report.md`
+
+**Артефакты `_save_state`:**
+- `screenshot_{suffix}.png`
+- `page_source_{suffix}.html`
+- `cookies_{suffix}.json`
+- `buttons_and_links_{suffix}.json`
+- `dom_structure_{suffix}.json`
+- `storages_{suffix}.json` (localStorage — токены!)
+- `rpc_probe.json`, `network_log.json`
+
+`explore_roseltorg.py` — та же логика, другой `TARGET_URL`.
+
+### 2. Быстрые probe-скрипты (`_debug_*.py`)
+
+Используются при интеграции новых секций (Tek-Torg, Business Procurement):
+
+```python
+client = EtpClient()  # или конкретный client
+client.ensure_chrome(timeout=45)
+client.connect()
+driver.execute_script("return window.__NEXT_DATA__ ...")
+```
+
+Типичные probe:
+- `_debug_*_probe.py` — DOM + Next.js state + links + inputs
+- `_debug_*_query.py` — перебор URL query params (`status[]`, `registryNumber`, `name`)
+- `_debug_*_status_probe.py` — проверка какой param реально меняет `total`
+
+**Правила probe:**
+- Сначала Selenium (с cookies), не голый `urllib` — многие сайты дают 403
+- Для Tek-Torg: `status[]=Текст` работает, `status=Текст` часто даёт 0
+- Удалять `_debug_*` после интеграции — не коммитить
+
+## Runtime discovery в клиентах
+
+Когда API неизвестен заранее:
+- **Trading portal**: сканирует `Ext.app.REMOTING_API`, пробует RPC method names, fallback на DOM grid
+- **Business procurement**: ждёт SPA, достаёт Bearer/CSRF из storage
+- **Tek-Torg**: читает `listingProcedures` из SSR, документы — `api.tektorg.ru/open-api/documents/procedure/{id}`
+
+## Слепки при анализе (runtime)
+
+Worker сохраняет полный текст карточки для RAG — это не explore, а рабочий артеfact анализа.
+
+## Чеклист reverse-engineering новой платформы
+
+1. Открыть список + карточку-пример в Chrome (пользователь авторизуется)
+2. Снять `__NEXT_DATA__` / network / form field names
+3. Перебрать query/body params, особенно **статусы**
+4. Зафиксировать mapping label → API value
+5. Проверить скачивание документов (CORS, auth, fallback через Chrome CDP download)
+6. Реализовать client → UI → worker branch → удалить debug

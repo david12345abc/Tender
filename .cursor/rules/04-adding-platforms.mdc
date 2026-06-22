@@ -1,0 +1,91 @@
+---
+description: Чеклист добавления новой платформы/секции
+globs: desktop_app/main_window.py,desktop_app/sidebar.py,*_client.py,desktop_app/worker.py
+alwaysApply: false
+---
+
+# Добавление новой платформы
+
+## 1. Reverse-engineering (обязательно)
+
+- Слепки: `explore_*.py` или `_debug_*_probe.py`
+- Определить: list URL, card URL, filter params, status format, document links
+- Проверить auth: cookies, localStorage tokens, CSRF headers
+
+## 2. Client (`{name}_client.py`)
+
+```python
+class NewPlatformClient(EtpClient):
+    platform_key = "new_platform"
+
+    def __init__(self, port=9222):
+        super().__init__(port=port)
+        self.target_url = "https://..."
+        self.target_host = "host"
+
+    def fetch_page(self, start=0, limit=25, client_filters=None, ...):
+        # browser fetch → normalize rows
+        return {"success": True, "procedures": [...], "totalCount": N}
+
+    def _normalize_row(self, raw, index=0) -> dict:
+        return {
+            "id": ..., "registry_number": ..., "title": ...,
+            "step_label": status, "type_name": ...,
+            "url": ..., "card_url": ..., "source": self.platform_key,
+        }
+```
+
+Константы: `NEW_PLATFORM_STATUS_OPTIONS`, `NEW_PLATFORM_TYPE_OPTIONS` — `(label, value)`.
+
+## 3. MainWindow
+
+- import client + options
+- menu action (или submenu как ТЭК-Торг)
+- `_is_platform_ready()`, `_platform_title()`, `_set_platform_buttons()`
+- `_select_platform("new_key")` → `self.client = NewPlatformClient()`
+- `_apply_platform_ui()` → `sidebar.set_platform_filter_options(...)`
+- `_update_controls()` → включить download/analyze для gpb_like platforms
+
+## 4. Sidebar
+
+- `_expanded_min_height()` — высота панели
+- `_apply_platform_filter_visibility()` — видимые поля + labels
+- При необходимости override `client_filters()` mapping
+
+## 5. Worker (`make_search_task`)
+
+Решить:
+- `client_filters` передаётся в `fetch_page`?
+- Сервер vs локальная фильтрация (ветка как `is_roseltorg` / `is_trading_portal`)
+- Fan-out для multi-status?
+- `_display_filters_for_platform()` в main_window — что оставить в proxy
+
+## 6. Проверка
+
+```bash
+py -m py_compile new_client.py desktop_app/main_window.py
+py -c "from new_client import NewPlatformClient; c=NewPlatformClient(); ..."
+```
+
+- Поиск первой страницы + по registry number
+- Фильтр статуса (сверить total с сайтом)
+- Double-click → card URL
+- `extract_procedure_card_text` + `download_procedure_documents`
+- Удалить `_debug_*` файлы
+
+## Tek-Torg — шаблон наследования
+
+```
+TektorgRosneftClient       # база Next.js listing
+  └ TektorgInterRaoClient  # + status[] URL, name= quick search
+      └ Tektorg223Client     # + card_url org/{subsection}/procedures/{id}
+```
+
+Каждая секция — **отдельный** client/file, не смешивать URL и filters между секциями.
+
+## Антипаттерны
+
+- Не хардкодить registry/status для конкретных процедур
+- Не использовать `urllib` для Tek-Torg list без browser session
+- Не ломать GPB status codes при правках Trading Portal / Tek-Torg
+- Не коммитить probe JSON и `_debug_*` scripts

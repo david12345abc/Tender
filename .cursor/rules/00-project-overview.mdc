@@ -1,0 +1,66 @@
+---
+description: Обзор архитектуры тендерного desktop-приложения и точек входа
+alwaysApply: true
+---
+
+# Тендерный проект — обзор
+
+Desktop-приложение на **PySide6** для поиска, скачивания документов и LLM/RAG-анализа процедур на нескольких ЭТП.
+
+## Точки входа
+
+| Файл | Назначение |
+|------|------------|
+| `desktop_search.py` → `desktop_app/app.py` | Основное GUI-приложение |
+| `explore_etp.py` | Разведка/слепки GPB (etpgaz) |
+| `explore_roseltorg.py` | Разведка Roseltorg (обёртка explore) |
+| `parse_procedures.py` | CLI-парсер GPB без GUI |
+
+## Слои
+
+```
+MainWindow (main_window.py)
+  → Sidebar (sidebar.py) собирает ClientFilters
+  → TaskRunner / worker.py (QThread)
+  → Platform client (*_client.py, база etp_client.py)
+  → Chrome через Selenium (port 9222, cookies/токены пользователя)
+  → ProcedureTableModel + ProcedureFilterProxy (models.py)
+```
+
+## Платформы (`platform_key` → client)
+
+| key | client | host/URL |
+|-----|--------|----------|
+| `gpb` | `EtpClient` | etpgaz.gazprombank.ru |
+| `gpb_business` | `GpbBusinessClient` | etp.gpb.ru (223) |
+| `gpb_trading_portal` | `GpbTradingPortalClient` | etp.gpb.ru (ЦЗ) |
+| `gpb_business_procurement` | `GpbBusinessProcurementClient` | com.etpgpb.ru |
+| `gpn` | `GpnClient` | gpn.etpgpb.ru |
+| `geh` | `GehClient` | geh.etpgpb.ru |
+| `roseltorg` | `RoseltorgClient` | business.roseltorg.ru |
+| `tektorg_rosneft` | `TektorgRosneftClient` | tektorg.ru/rosneft |
+| `tektorg_inter_rao` | `TektorgInterRaoClient` | tektorg.ru/inter_rao |
+| `tektorg_223` | `Tektorg223Client` | tektorg.ru/223-fz |
+
+Переключение: `main_window._select_platform()` — новый client, сброс таблицы, `sidebar.set_platform_filter_options()`.
+
+## Общий паттерн клиента
+
+1. Наследование от `EtpClient`
+2. `target_url`, `target_host`, `platform_key`
+3. `fetch_page()` — данные через браузер (fetch/XHR/Next.js `__NEXT_DATA__`)
+4. Нормализация строк в общую схему: `id`, `registry_number`, `title`, `step_label`, `url`/`card_url`, `source`
+5. `extract_procedure_card_text()`, `download_procedure_documents()`
+
+## Конфиг и данные
+
+- `desktop_app/constants.py` — пути, версия, LM Studio, equipment API
+- Кэш GPB: `cache/desktop_search_cache.json` (только без активных фильтров)
+- Документы: `output/documents`, анализ: `output/analysis`
+- Chrome: `start_chrome.ps1`, DevTools port **9222**
+
+## Принципы изменений
+
+- Каждая платформа **независима** — не ломать GPB при правках Tek-Torg
+- Минимальный diff, переиспользовать `ClientFilters` и существующие абстракции
+- Перед новой платформой — слепки и reverse-engineering, затем client + UI + worker-ветка
