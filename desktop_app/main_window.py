@@ -86,6 +86,16 @@ from roseltorg_44_client import (
     ROSELTORG_44_STATUS_OPTIONS,
     Roseltorg44Client,
 )
+from roseltorg_223_client import (
+    ROSELTORG_223_PROCEDURE_TYPE_OPTIONS,
+    ROSELTORG_223_STATUS_OPTIONS,
+    Roseltorg223Client,
+)
+from roseltorg_interrao_client import (
+    ROSELTORG_INTERRAO_PROCEDURE_TYPE_OPTIONS,
+    ROSELTORG_INTERRAO_STATUS_OPTIONS,
+    RoseltorgInterRaoClient,
+)
 from tektorg_223_client import (
     TEKTORG_223_STATUS_OPTIONS,
     TEKTORG_223_TYPE_OPTIONS,
@@ -309,6 +319,8 @@ class MainWindow(QMainWindow):
         self.roseltorg_platform_menu = QMenu(self.btn_platform_roseltorg)
         self.act_platform_roseltorg_commercial = self.roseltorg_platform_menu.addAction("Коммерческие закупки")
         self.act_platform_roseltorg_44 = self.roseltorg_platform_menu.addAction("44-ФЗ")
+        self.act_platform_roseltorg_223 = self.roseltorg_platform_menu.addAction("223-ФЗ")
+        self.act_platform_roseltorg_interrao = self.roseltorg_platform_menu.addAction("Корпоративные закупки")
         self.btn_platform_roseltorg.setMenu(self.roseltorg_platform_menu)
         self.btn_platform_tektorg = QPushButton("ТЭК-Торг")
         self.btn_platform_tektorg.setObjectName("PlatformButton")
@@ -341,6 +353,8 @@ class MainWindow(QMainWindow):
         self.btn_platform_roseltorg.clicked.connect(lambda: self._select_platform("roseltorg"))
         self.act_platform_roseltorg_commercial.triggered.connect(lambda: self._select_platform("roseltorg"))
         self.act_platform_roseltorg_44.triggered.connect(lambda: self._select_platform("roseltorg_44"))
+        self.act_platform_roseltorg_223.triggered.connect(lambda: self._select_platform("roseltorg_223"))
+        self.act_platform_roseltorg_interrao.triggered.connect(lambda: self._select_platform("roseltorg_interrao"))
         self.act_platform_tektorg_rosneft.triggered.connect(lambda: self._select_platform("tektorg_rosneft"))
         self.act_platform_tektorg_inter_rao.triggered.connect(lambda: self._select_platform("tektorg_inter_rao"))
         self.act_platform_tektorg_223.triggered.connect(lambda: self._select_platform("tektorg_223"))
@@ -876,10 +890,11 @@ class MainWindow(QMainWindow):
             "gpb_inter_rao",
             "roseltorg",
             "roseltorg_44",
+            "roseltorg_223",
+            "roseltorg_interrao",
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
-            "roseltorg_44",
         }
 
     def _platform_title(self) -> str:
@@ -887,6 +902,10 @@ class MainWindow(QMainWindow):
             return "Росэлторг"
         if self._platform_key == "roseltorg_44":
             return "Росэлторг 44-ФЗ"
+        if self._platform_key == "roseltorg_223":
+            return "Росэлторг 223-ФЗ"
+        if self._platform_key == "roseltorg_interrao":
+            return "Росэлторг — Корпоративные закупки"
         if self._platform_key == "gpb_trading_portal":
             return "Торговый портал"
         if self._platform_key == "gpb_business_procurement":
@@ -921,7 +940,7 @@ class MainWindow(QMainWindow):
             "gpb_inter_rao",
         }
         tektorg_menu_platforms = {"tektorg_rosneft", "tektorg_inter_rao", "tektorg_223"}
-        roseltorg_menu_platforms = {"roseltorg", "roseltorg_44"}
+        roseltorg_menu_platforms = {"roseltorg", "roseltorg_44", "roseltorg_223", "roseltorg_interrao"}
         self.btn_platform_gpb.setChecked(self._platform_key in gpb_menu_platforms)
         self.btn_platform_roseltorg.setChecked(self._platform_key in roseltorg_menu_platforms)
         self.btn_platform_tektorg.setChecked(self._platform_key in tektorg_menu_platforms)
@@ -953,6 +972,8 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_223.setCheckable(True)
         self.act_platform_roseltorg_commercial.setCheckable(True)
         self.act_platform_roseltorg_44.setCheckable(True)
+        self.act_platform_roseltorg_223.setCheckable(True)
+        self.act_platform_roseltorg_interrao.setCheckable(True)
         self.act_platform_etp_gpb.setChecked(self._platform_key == "gpb")
         self.act_platform_gpb_business.setChecked(self._platform_key == "gpb_business")
         self.act_platform_gpb_trading_portal.setChecked(self._platform_key == "gpb_trading_portal")
@@ -966,6 +987,8 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_223.setChecked(self._platform_key == "tektorg_223")
         self.act_platform_roseltorg_commercial.setChecked(self._platform_key == "roseltorg")
         self.act_platform_roseltorg_44.setChecked(self._platform_key == "roseltorg_44")
+        self.act_platform_roseltorg_223.setChecked(self._platform_key == "roseltorg_223")
+        self.act_platform_roseltorg_interrao.setChecked(self._platform_key == "roseltorg_interrao")
 
     def _apply_platform_ui(self) -> None:
         self._set_platform_buttons()
@@ -994,6 +1017,32 @@ class MainWindow(QMainWindow):
             self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
             self.user_label.setText("Пользователь: —")
             self._set_badge("idle", "○  Росэлторг 44-ФЗ")
+            self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
+        elif self._platform_key == "roseltorg_223":
+            self.sidebar.set_platform_filter_options(
+                ROSELTORG_223_PROCEDURE_TYPE_OPTIONS,
+                ROSELTORG_223_STATUS_OPTIONS,
+                None,
+                platform_key="roseltorg_223",
+            )
+            self.title_label.setText("Росэлторг 223-ФЗ — Актуальные процедуры")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
+            self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
+            self.user_label.setText("Пользователь: —")
+            self._set_badge("idle", "○  Росэлторг 223-ФЗ")
+            self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
+        elif self._platform_key == "roseltorg_interrao":
+            self.sidebar.set_platform_filter_options(
+                ROSELTORG_INTERRAO_PROCEDURE_TYPE_OPTIONS,
+                ROSELTORG_INTERRAO_STATUS_OPTIONS,
+                None,
+                platform_key="roseltorg_interrao",
+            )
+            self.title_label.setText("Росэлторг — Корпоративные закупки")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
+            self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
+            self.user_label.setText("Пользователь: —")
+            self._set_badge("idle", "○  Росэлторг Корпоративные закупки")
             self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
         elif self._platform_key == "gpb_business":
             self.sidebar.set_platform_filter_options(
@@ -1151,6 +1200,8 @@ class MainWindow(QMainWindow):
             "gpb_inter_rao",
             "roseltorg",
             "roseltorg_44",
+            "roseltorg_223",
+            "roseltorg_interrao",
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
@@ -1183,6 +1234,10 @@ class MainWindow(QMainWindow):
             self.client = RoseltorgClient()
         elif key == "roseltorg_44":
             self.client = Roseltorg44Client()
+        elif key == "roseltorg_223":
+            self.client = Roseltorg223Client()
+        elif key == "roseltorg_interrao":
+            self.client = RoseltorgInterRaoClient()
         elif key == "tektorg_rosneft":
             self.client = TektorgRosneftClient()
         elif key == "tektorg_inter_rao":
@@ -2812,7 +2867,7 @@ class MainWindow(QMainWindow):
 
     # --------------- клиентские фильтры
     def _display_filters_for_platform(self, filters: ClientFilters) -> ClientFilters:
-        if self._platform_key != "roseltorg":
+        if self._platform_key not in {"roseltorg", "roseltorg_44", "roseltorg_223", "roseltorg_interrao"}:
             return filters
         # Росэлторг фильтруется серверным API. В таблице оставляем только
         # ключевые слова, иначе локальный GPB-фильтр скрывает уже найденные строки.
@@ -3242,6 +3297,9 @@ class MainWindow(QMainWindow):
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
+            "roseltorg_44",
+            "roseltorg_223",
+            "roseltorg_interrao",
         }
         self.btn_download_docs.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)
         self.btn_analyze.setEnabled(platform_ready and gpb_like and not running and has_visible_rows)

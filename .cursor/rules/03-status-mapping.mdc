@@ -109,6 +109,38 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 - Карточка: `https://gos.roseltorg.ru/#lotinfo/{procedure_id}/{lot_id}`.
 - Документы: `/api/v1/procedure/{procedure_id}/info` → `DocumentsList.noticeAttachments`.
 
+## Roseltorg 223-ФЗ
+
+**Источник:** `ROSELTORG_223_STATUS_OPTIONS`, сайт `corp.roseltorg.ru`.
+
+| UI label | API `filters.lotState[]` |
+|----------|--------------------------|
+| Прием заявок | `LotAcceptApplications` |
+| Отбор предложений | `LotApplicationsSelection` |
+| Переторжка | `LotRebidding` |
+| Подведение итогов | `LotSummingUp` |
+| Рассмотрение заявок | `LotSecondPartsReviewApplication` |
+| Рассмотрение первых частей | `LotFirstPartsReview` |
+| Торги | `LotAuction` |
+| Уторговывание | `LotBargaining` |
+
+- Endpoint поиска: `/api/v1/elastica/configurations/corp-procedures/search`.
+- Параметры поиска: `visibility=all`, `subVisibility=active`, `filters` JSON.
+- Статус и тип процедуры передаются массивами: `{"lotState":["LotAcceptApplications"],"templateDescriptionBrief":["2"]}`.
+- Карточка: `https://corp.roseltorg.ru/#msp_lotinfo/{procedure_id}/{lot_id}`.
+- `corp-procedures/search` не отдает `lotId`; для карточки брать первый лот через `/api/v1/elastica/configurations/corp-lots/search?filters={"procedureId":...}`.
+- Документы: `/api/v1/procedures/{procedure_id}` → `DocumentsList[]` с `url=/api/v1/documents/...`.
+
+## Roseltorg Корпоративные закупки (Интер РАО)
+
+**Источник:** `ROSELTORG_INTERRAO_STATUS_OPTIONS`, сайт `interrao.roseltorg.ru`.
+
+- UI и статусы совпадают с корпоративной 223-ФЗ схемой (`lotState[]`, `templateDescriptionBrief[]`).
+- Endpoint поиска отличается: `/api/v1/elastica/configurations/interrao-procedures/search`.
+- Лоты для карточки: `/api/v1/elastica/configurations/interrao-lots/search?filters={"procedureId":...}`.
+- Карточка: `https://interrao.roseltorg.ru/#msp_lotinfo/{procedure_id}/{lot_id}`.
+- Документы: `/api/v1/procedures/{procedure_id}` → `DocumentsList[]`.
+
 ## Tek-Torg (все секции)
 
 **UI options:** `(label, label)` — русский текст = значение

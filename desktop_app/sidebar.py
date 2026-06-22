@@ -1060,7 +1060,7 @@ class Sidebar(QWidget):
         self.active_filters_row.addStretch(1)
 
     def _expanded_min_height(self) -> int:
-        if self._platform_key in {"roseltorg", "roseltorg_44"}:
+        if self._platform_key in {"roseltorg", "roseltorg_44", "roseltorg_223", "roseltorg_interrao"}:
             return 360
         if self._platform_key in {
             "gpb_trading_portal",
@@ -1236,6 +1236,49 @@ class Sidebar(QWidget):
             ):
                 self._place_row(key, row, col, key in visible_keys)
             self.extra_filters.setMinimumHeight(1180)
+            self.extra_scroll.setMinimumHeight(0)
+            self.extra_scroll.setMaximumHeight(16777215)
+        elif self._platform_key in {"roseltorg_223", "roseltorg_interrao"}:
+            visible_keys = {
+                "registry",
+                "trend",
+                "status",
+                "customer",
+                "customer_agent",
+                "organizer",
+                "responsible",
+                "published",
+                "end",
+                "price",
+            }
+            self._set_row_label("registry", "Номер:")
+            self._set_row_label("trend", "Тип процедуры ЭТП:")
+            self._set_row_label("status", "Статус лота:")
+            self._set_row_label("customer", "Заказчик:")
+            self._set_row_label("customer_agent", "ИНН заказчика:")
+            self._set_row_label("organizer", "Организатор:")
+            self._set_row_label("responsible", "Контактное лицо:")
+            self._set_row_label("price", "Сумма НМЦ по лотам:")
+            self._set_row_label("published", "Публикация:")
+            self._set_row_label("end", "Приём заявок до:")
+            for row in range(40):
+                self._filter_grid.setRowMinimumHeight(row, 0)
+            for key in self._filter_rows:
+                self._set_row_visible(key, False)
+            for key, row, col in (
+                ("registry", 0, 0),
+                ("trend", 0, 1),
+                ("status", 1, 0),
+                ("customer", 1, 1),
+                ("customer_agent", 2, 0),
+                ("organizer", 2, 1),
+                ("responsible", 3, 0),
+                ("published", 3, 1),
+                ("end", 4, 0),
+                ("price", 4, 1),
+            ):
+                self._place_row(key, row, col, key in visible_keys)
+            self.extra_filters.setMinimumHeight(1080)
             self.extra_scroll.setMinimumHeight(0)
             self.extra_scroll.setMaximumHeight(16777215)
         elif self._platform_key in {"gpb_business", "gpn", "geh", "transneft", "gpb_inter_rao"}:
