@@ -106,6 +106,11 @@ from tektorg_inter_rao_client import (
     TEKTORG_INTER_RAO_TYPE_OPTIONS,
     TektorgInterRaoClient,
 )
+from tektorg_market_client import (
+    TEKTORG_MARKET_STATUS_OPTIONS,
+    TEKTORG_MARKET_TYPE_OPTIONS,
+    TektorgMarketClient,
+)
 from tektorg_rosneft_client import (
     TEKTORG_ROSNEFT_STATUS_OPTIONS,
     TEKTORG_ROSNEFT_TYPE_OPTIONS,
@@ -331,8 +336,6 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_inter_rao = self.tektorg_platform_menu.addAction('ПАО "Интер РАО"')
         self.act_platform_tektorg_223 = self.tektorg_platform_menu.addAction("223-ФЗ")
         self.act_platform_tektorg_market = self.tektorg_platform_menu.addAction("Интернет-магазин")
-        for action in (self.act_platform_tektorg_market,):
-            action.setEnabled(False)
         self.btn_platform_tektorg.setMenu(self.tektorg_platform_menu)
         self.platform_group.addButton(self.btn_platform_gpb)
         self.platform_group.addButton(self.btn_platform_roseltorg)
@@ -358,6 +361,7 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_rosneft.triggered.connect(lambda: self._select_platform("tektorg_rosneft"))
         self.act_platform_tektorg_inter_rao.triggered.connect(lambda: self._select_platform("tektorg_inter_rao"))
         self.act_platform_tektorg_223.triggered.connect(lambda: self._select_platform("tektorg_223"))
+        self.act_platform_tektorg_market.triggered.connect(lambda: self._select_platform("tektorg_market"))
         top_layout.addWidget(platform_switcher, 0, Qt.AlignVCenter)
 
         t_title_box = QVBoxLayout()
@@ -895,6 +899,7 @@ class MainWindow(QMainWindow):
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
+            "tektorg_market",
         }
 
     def _platform_title(self) -> str:
@@ -924,6 +929,8 @@ class MainWindow(QMainWindow):
             return 'ТЭК-Торг — ПАО "Интер РАО"'
         if self._platform_key == "tektorg_223":
             return "ТЭК-Торг — 223-ФЗ"
+        if self._platform_key == "tektorg_market":
+            return "ТЭК-Торг — Интернет-магазин"
         if self._platform_key == "gpb_business":
             return "Секция Бизнес.223"
         return "Секция Газпром"
@@ -939,7 +946,7 @@ class MainWindow(QMainWindow):
             "transneft",
             "gpb_inter_rao",
         }
-        tektorg_menu_platforms = {"tektorg_rosneft", "tektorg_inter_rao", "tektorg_223"}
+        tektorg_menu_platforms = {"tektorg_rosneft", "tektorg_inter_rao", "tektorg_223", "tektorg_market"}
         roseltorg_menu_platforms = {"roseltorg", "roseltorg_44", "roseltorg_223", "roseltorg_interrao"}
         self.btn_platform_gpb.setChecked(self._platform_key in gpb_menu_platforms)
         self.btn_platform_roseltorg.setChecked(self._platform_key in roseltorg_menu_platforms)
@@ -970,6 +977,7 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_rosneft.setCheckable(True)
         self.act_platform_tektorg_inter_rao.setCheckable(True)
         self.act_platform_tektorg_223.setCheckable(True)
+        self.act_platform_tektorg_market.setCheckable(True)
         self.act_platform_roseltorg_commercial.setCheckable(True)
         self.act_platform_roseltorg_44.setCheckable(True)
         self.act_platform_roseltorg_223.setCheckable(True)
@@ -985,6 +993,7 @@ class MainWindow(QMainWindow):
         self.act_platform_tektorg_rosneft.setChecked(self._platform_key == "tektorg_rosneft")
         self.act_platform_tektorg_inter_rao.setChecked(self._platform_key == "tektorg_inter_rao")
         self.act_platform_tektorg_223.setChecked(self._platform_key == "tektorg_223")
+        self.act_platform_tektorg_market.setChecked(self._platform_key == "tektorg_market")
         self.act_platform_roseltorg_commercial.setChecked(self._platform_key == "roseltorg")
         self.act_platform_roseltorg_44.setChecked(self._platform_key == "roseltorg_44")
         self.act_platform_roseltorg_223.setChecked(self._platform_key == "roseltorg_223")
@@ -1174,6 +1183,19 @@ class MainWindow(QMainWindow):
                 self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
             self._set_badge("idle", "○  Браузер не запущен")
             self.status_msg.setText("Готов. Нажмите «Поиск».")
+        elif self._platform_key == "tektorg_market":
+            self.sidebar.set_platform_filter_options(
+                TEKTORG_MARKET_TYPE_OPTIONS,
+                TEKTORG_MARKET_STATUS_OPTIONS,
+                None,
+                platform_key="tektorg_market",
+            )
+            self.title_label.setText("ТЭК-Торг — Интернет-магазин")
+            self.subtitle_label.setText("Поиск, карточки, анализ и документы")
+            if not self.model.rowCount():
+                self.lbl_counter.setText("Данных нет. Нажмите «Поиск».")
+            self._set_badge("idle", "○  Браузер не запущен")
+            self.status_msg.setText("Готов. Нажмите «Поиск».")
         else:
             self.sidebar.set_platform_filter_options(
                 PROCEDURE_TYPE_OPTIONS,
@@ -1205,6 +1227,7 @@ class MainWindow(QMainWindow):
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
+            "tektorg_market",
         }:
             return
         if self.runner.is_running():
@@ -1244,6 +1267,8 @@ class MainWindow(QMainWindow):
             self.client = TektorgInterRaoClient()
         elif key == "tektorg_223":
             self.client = Tektorg223Client()
+        elif key == "tektorg_market":
+            self.client = TektorgMarketClient()
         elif key == "gpb_trading_portal":
             self.client = GpbTradingPortalClient()
         elif key == "gpb_business_procurement":
@@ -3297,6 +3322,7 @@ class MainWindow(QMainWindow):
             "tektorg_rosneft",
             "tektorg_inter_rao",
             "tektorg_223",
+            "tektorg_market",
             "roseltorg_44",
             "roseltorg_223",
             "roseltorg_interrao",

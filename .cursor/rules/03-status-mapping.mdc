@@ -154,12 +154,15 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 | Rosneft | **нет** в URL | `_matches_selected_statuses()` по `statusName` |
 | Inter RAO | `status[]=...` (repeated) | + client-side match |
 | 223-FZ | наследует Inter RAO | + client-side match |
+| Market | наследует Inter RAO (`status[]=...`) | + client-side match |
 
 **Важно:** `status=Приём заявок` (без []) → 0 результатов. Только `status[]`.
 
 Тип процедуры (`typeName`): URL param **не работает** → `_matches_selected_types()` client-side.
 
 Данные: `row.statusName`, `row.typeName` из Next.js listing.
+
+Market: реестровые номера числовые (`registryNumber=921648`), а карточки используют длинный id (`/market/procedures/19219692`), поэтому прямое открытие карточки включать только для id из 8+ цифр.
 
 ## Sidebar → ClientFilters
 
