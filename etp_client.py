@@ -633,12 +633,55 @@ class EtpClient:
             port=port,
         )
 
-    def is_chrome_running(self) -> bool:
+    def _is_devtools_port_open(self) -> bool:
         try:
             with socket.create_connection(("127.0.0.1", self.port), timeout=1.5):
                 return True
         except Exception:
             return False
+
+    def is_chrome_running(self) -> bool:
+        if not self._is_devtools_port_open():
+            return False
+        return self._devtools_port_matches_selected_browser()
+
+    def _process_exe_path(self, pid: int) -> Optional[Path]:
+        if os.name != "nt":
+            return None
+        ps = (
+            f"(Get-CimInstance Win32_Process -Filter \"ProcessId={pid}\")."
+            "ExecutablePath"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            return None
+        text = (result.stdout or "").strip()
+        return Path(text) if text else None
+
+    def _devtools_port_matches_selected_browser(self) -> bool:
+        if os.name != "nt":
+            return True
+        pids = self._devtools_port_pids()
+        if not pids:
+            return False
+        expected = os.path.normcase(str(self.browser.exe_path))
+        known_paths = [
+            os.path.normcase(str(path))
+            for pid in pids
+            if (path := self._process_exe_path(pid)) is not None
+        ]
+        if not known_paths:
+            return True
+        return any(path == expected for path in known_paths)
 
     def _devtools_json(self, endpoint: str) -> Any:
         with urlopen(f"http://127.0.0.1:{self.port}{endpoint}", timeout=2) as resp:
@@ -720,10 +763,10 @@ class EtpClient:
                 pass
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if not self.is_chrome_running():
+            if not self._is_devtools_port_open():
                 return True
             time.sleep(0.5)
-        return not self.is_chrome_running()
+        return not self._is_devtools_port_open()
 
     def _ensure_devtools_page(self, timeout: int = 8) -> None:
         deadline = time.time() + timeout
@@ -790,8 +833,16 @@ class EtpClient:
     def ensure_chrome(self, timeout: int = 40) -> None:
         """Стартует выбранный Chromium-браузер, если он ещё не слушает DevTools."""
         if self.is_chrome_running():
-            if self._has_devtools_page() or self._open_devtools_page(self.target_url):
+            if self._has_devtools_page():
                 return
+            if self._open_devtools_page(self.target_url) or self._open_devtools_page("about:blank"):
+                try:
+                    self._ensure_devtools_page(timeout=5)
+                    return
+                except RuntimeError:
+                    pass
+            self._release_devtools_port()
+        elif self._is_devtools_port_open():
             self._release_devtools_port()
         browser = self.browser
         if not browser.exe_path.exists():

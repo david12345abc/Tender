@@ -397,6 +397,7 @@ class MainWindow(QMainWindow):
         self.sidebar.clientFiltersChanged.connect(self._on_filters_changed)
         self.sidebar.editKeywordsRequested.connect(self._on_edit_keywords)
         self.sidebar.editBlacklistKeywordsRequested.connect(self._on_edit_blacklist_keywords)
+        self.sidebar.cb_browser.currentIndexChanged.connect(lambda *_: self._on_browser_changed())
 
         main_area = QWidget()
         main_area.setMinimumHeight(360)
@@ -1285,6 +1286,7 @@ class MainWindow(QMainWindow):
             self.client = GpbBusinessClient()
         else:
             self.client = EtpClient()
+        self._apply_selected_browser()
         self._set_platform_buttons()
         self.model.clear()
         self._last_total = 0
@@ -1315,6 +1317,12 @@ class MainWindow(QMainWindow):
             profile_dir=browser.profile_dir,
             port=browser.port,
         )
+
+    def _on_browser_changed(self) -> None:
+        if self.runner.is_running():
+            return
+        self._apply_selected_browser()
+        self._set_badge("idle", f"○  Выбран браузер: {self.client.browser.label}")
 
     def _on_search(self) -> None:
         if self.runner.is_running():

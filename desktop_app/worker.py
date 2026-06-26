@@ -41,6 +41,25 @@ def _safe_folder_name(name: str, default: str = "procedure") -> str:
     return clean[:120] or default
 
 
+def _ensure_browser_ready(client: EtpClient, w: Worker) -> bool:
+    """Open or refresh the DevTools page before Selenium attaches.
+
+    A browser can keep the DevTools port open after all page targets were closed.
+    Calling ensure_chrome every time is cheap when healthy, and lets the client
+    recreate a page or restart the managed profile when the target list is stale.
+    """
+    if not client.is_chrome_running():
+        w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
+    else:
+        w.progress.emit(f"Проверяю {client.browser.label} DevTools…")
+    try:
+        client.ensure_chrome(timeout=45)
+    except Exception as e:
+        w.error.emit(f"Не удалось подготовить браузер: {e}")
+        return False
+    return True
+
+
 def _trim_for_llm(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -1847,13 +1866,8 @@ def make_search_task(
         if w.is_stop_requested():
             return
 
-        if not client.is_chrome_running():
-            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
-            try:
-                client.ensure_chrome(timeout=45)
-            except Exception as e:
-                w.error.emit(f"Не удалось запустить Chrome: {e}")
-                return
+        if not _ensure_browser_ready(client, w):
+            return
         if w.is_stop_requested():
             return
 
@@ -2214,13 +2228,8 @@ def make_download_documents_task(
             w.error.emit("Не выбраны процедуры для скачивания документов.")
             return
 
-        if not client.is_chrome_running():
-            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
-            try:
-                client.ensure_chrome(timeout=45)
-            except Exception as e:
-                w.error.emit(f"Не удалось запустить Chrome: {e}")
-                return
+        if not _ensure_browser_ready(client, w):
+            return
 
         if client.driver is None:
             w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
@@ -2303,13 +2312,8 @@ def make_analyze_procedure_task(
             w.error.emit("Не выбраны процедуры для анализа.")
             return
 
-        if not client.is_chrome_running():
-            w.progress.emit(f"Запускаю {client.browser.label} с DevTools…")
-            try:
-                client.ensure_chrome(timeout=45)
-            except Exception as e:
-                w.error.emit(f"Не удалось запустить Chrome: {e}")
-                return
+        if not _ensure_browser_ready(client, w):
+            return
 
         if client.driver is None:
             w.progress.emit(f"Подключаюсь к {client.browser.label} DevTools…")
