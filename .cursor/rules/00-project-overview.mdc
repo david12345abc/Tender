@@ -47,6 +47,7 @@ MainWindow (main_window.py)
 | `tektorg_inter_rao` | `TektorgInterRaoClient` | tektorg.ru/inter_rao |
 | `tektorg_223` | `Tektorg223Client` | tektorg.ru/223-fz |
 | `tektorg_market` | `TektorgMarketClient` | tektorg.ru/market |
+| `rts_tender` | `RtsTenderClient` | 223.rts-tender.ru |
 
 Переключение: `main_window._select_platform()` — новый client, сброс таблицы, `sidebar.set_platform_filter_options()`.
 

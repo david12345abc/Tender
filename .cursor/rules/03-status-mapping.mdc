@@ -164,6 +164,27 @@ UI хранит выбранные статусы в `ClientFilters.step_ids`. �
 
 Market: реестровые номера числовые (`registryNumber=921648`), а карточки используют длинный id (`/market/procedures/19219692`), поэтому прямое открытие карточки включать только для id из 8+ цифр.
 
+## RTS Tender 223-ФЗ
+
+**Источник:** `RTS_TENDER_STATUS_OPTIONS`, сайт `223.rts-tender.ru`.
+
+| UI label | jqGrid `auto_TradeLotState` |
+|----------|-----------------------------|
+| Публикация извещения | `1` |
+| Прием заявок | `2` |
+| Рассмотрение заявок | `3` |
+| Подведение итогов | `8` |
+| Заключение договоров | `9` |
+| Завершена | `10` |
+| … | см. `RTS_TENDER_STATUS_OPTIONS` |
+
+- Endpoint поиска: `/supplier/auction/Trade/Search.aspx?jqGridID=BaseMainContent_MainContent_jqgTrade`.
+- Метод jqGrid: `GET`, параметры из `postData`: `auto_Number`, `auto_Name`, `auto_LotName`, `auto_TradeLotState`, `manual_GrdToken`, даты и цена.
+- Авторизация обязательна: токен `manual_GrdToken` берется из авторизованного Chrome/DevTools.
+- В строках таблицы код `2` может отображаться как `Прием коммерческих предложений`; в клиенте это синоним `Прием заявок`.
+- Карточка: `https://223.rts-tender.ru/supplier/auction/Trade/View.aspx?Id=<TradeId>&Logging=TradeByNumber`.
+- Документы: ссылки карточки `FileDownloadHandler.ashx?...`, скачиваются через browser `fetch` с cookies пользователя.
+
 ## Sidebar → ClientFilters
 
 `status_selector` заполняется из `*_STATUS_OPTIONS` при `set_platform_filter_options()`.

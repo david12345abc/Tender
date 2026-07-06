@@ -1905,10 +1905,11 @@ def make_search_task(
         probe_filters = client_filters
         server_filter_variants = [client_filters]
         is_roseltorg = "roseltorg" in str(getattr(client, "target_host", ""))
+        is_rts_tender = str(getattr(client, "platform_key", "")) == "rts_tender"
         is_trading_portal = str(getattr(client, "platform_key", "")) == "gpb_trading_portal"
         if client_filters is not None:
-            if is_roseltorg:
-                # Росэлторг уже фильтрует форму на сервере. Локально оставляем
+            if is_roseltorg or is_rts_tender:
+                # Эти площадки уже фильтруют форму на сервере. Локально оставляем
                 # только ключевые слова: это наш дополнительный отбор по названию.
                 probe_filters = replace(
                     client_filters,
