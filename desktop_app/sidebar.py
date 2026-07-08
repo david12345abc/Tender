@@ -1165,27 +1165,28 @@ class Sidebar(QWidget):
 
     def _apply_platform_filter_visibility(self) -> None:
         if self._platform_key == "roseltorg":
-            visible_keys = {"trend", "purchase_form", "status", "organizer", "price", "published", "end", "results"}
-            self._set_row_label("trend", "Процедуры по:")
-            self._set_row_label("purchase_form", "Отображать по:")
+            visible_keys = {"registry", "title", "trend", "status", "organizer", "price", "published", "end", "results"}
+            self._set_row_label("trend", "Тип процедуры:")
+            self._set_row_label("status", "Статус лота:")
             self._set_row_label("organizer", "Организатор:")
             self._set_row_label("price", "Цена:")
             self._set_row_label("published", "Дата публикации:")
-            self._set_row_label("end", "Дата окончания приема предложений:")
-            self._set_row_label("results", "Дата выбора победителя:")
+            self._set_row_label("end", "Дата окончания приема заявок:")
+            self._set_row_label("results", "Дата подведения итогов:")
             for row in range(40):
                 self._filter_grid.setRowMinimumHeight(row, 0)
             for key in self._filter_rows:
                 self._set_row_visible(key, False)
             for key, row, col in (
-                ("trend", 0, 0),
-                ("purchase_form", 0, 1),
-                ("status", 1, 0),
-                ("organizer", 1, 1),
-                ("published", 2, 0),
-                ("results", 2, 1),
+                ("registry", 0, 0),
+                ("title", 0, 1),
+                ("trend", 1, 0),
+                ("status", 1, 1),
+                ("organizer", 2, 0),
+                ("published", 2, 1),
                 ("end", 3, 0),
-                ("price", 3, 1),
+                ("results", 3, 1),
+                ("price", 4, 0),
             ):
                 self._place_row(key, row, col, key in visible_keys)
             self.extra_filters.setMinimumHeight(980)
@@ -1533,6 +1534,8 @@ class Sidebar(QWidget):
                 blacklist_keyword_search_enabled=self.cb_blacklist_keyword_search.isChecked(),
                 blacklist_keyword_lemma_enabled=self.btn_blacklist_keyword_lemma.isChecked(),
                 blacklist_keywords=blacklist_keywords,
+                registry_contains=self.ed_registry.text().strip(),
+                title_contains=self.ed_title_local.text().strip(),
                 organizer_contains=self.ed_organizer.text().strip(),
                 trend_pur=quick_trends[0] if len(quick_trends) == 1 else (self.cb_trend.currentData() or ""),
                 trend_pur_values=quick_trends,

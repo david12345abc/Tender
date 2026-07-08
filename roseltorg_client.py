@@ -1,88 +1,188 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Optional
-from urllib.parse import urlencode
+import base64
+import re
+import time
+from pathlib import Path
+from typing import Any, Callable, Optional
+from urllib.parse import unquote, urljoin
 
-from etp_client import EtpClient, HARD_SERVER_LIMIT
 from desktop_app.params import ClientFilters
+from etp_client import EtpClient, HARD_SERVER_LIMIT
 
 
-ROSELTORG_URL = (
-    "https://business.roseltorg.ru/lk/orders/all?"
-    "%22searchBy%22=%22procedures%22&%22searchByOrderType%22=%22buy%22&"
-    "%22page%22=1&%22limit%22=30&%22sortProperty%22=%22datePublication%22&"
-    "%22sortDirection%22=%22DESC%22"
-)
+ROSELTORG_URL = "https://com.roseltorg.ru/#com/procedure/index"
+ROSELTORG_HOST = "com.roseltorg.ru"
 
 ROSELTORG_PROCEDURE_TYPE_OPTIONS = [
-    ("Закупка", "buy"),
-    ("Продажа", "sale"),
+    ("Аукцион на повышение", "1"),
+    ("Аукцион", "2"),
+    ("Аукцион на понижение", "3"),
+    ("Запрос предложений", "4"),
+    ("Запрос котировок", "5"),
+    ("Конкурс", "6"),
+    ("Запрос цен", "7"),
+    ("Продажа посредством публичного предложения", "21"),
 ]
 
-ROSELTORG_SEARCH_BY_OPTIONS = [
-    ("Процедуры", "procedures"),
-    ("Лоты / позиции", "lots"),
-]
+ROSELTORG_SEARCH_BY_OPTIONS: list[tuple[str, str]] = []
 
 ROSELTORG_STATUS_OPTIONS = [
-    ("Прием заявок на допуск", "ProcedureAcceptanceAdmissionRequests"),
-    ("Проверка заявок на допуск", "ProcedureVerificationAdmissionRequests"),
-    ("Приём предложений", "Published"),
-    ("Подведение итогов", "ReviewOffers"),
-    ("В архиве", "procedureArchive"),
-    ("Процедура отменена", "procedureCancelled"),
+    ("Не подписан", "0"),
+    ("Не опубликован", "1"),
+    ("Прием заявок", "2"),
+    ("Вскрытие конвертов", "3"),
+    ("Рассмотрение заявок", "4"),
+    ("Торги", "5"),
+    ("Подведение итогов", "6"),
+    ("Заключение договора", "7"),
+    ("Архив", "8"),
+    ("Приостановлен", "9"),
+    ("Отменен", "10"),
+    ("Преддоговорные переговоры", "12"),
+    ("Подача окончательных ценовых предложений", "14"),
+    ("Рассмотрение вторых частей заявок", "15"),
+    ("Заключение дополнительного соглашения", "17"),
+    ("Ожидает приема заявок", "18"),
 ]
 
-ROSELTORG_STATUS_LABELS = {
-    "Published": "Приём предложений",
-    "ReviewOffers": "Подведение итогов",
-    "procedureArchive": "В архиве",
-    "ProcedureArchive": "В архиве",
-    "Archived": "В архиве",
-    "procedureCancelled": "Процедура отменена",
-    "ProcedureCancelled": "Процедура отменена",
-    "Canceled": "Процедура отменена",
-    "Cancelled": "Процедура отменена",
-    "ProcedureAcceptanceAdmissionRequests": "Прием заявок на допуск",
-    "ProcedureVerificationAdmissionRequests": "Проверка заявок на допуск",
-}
+ROSELTORG_STATUS_LABELS = {value: label for label, value in ROSELTORG_STATUS_OPTIONS}
+ROSELTORG_STATUS_LABELS.update({"20": "Ожидает приема заявок", "21": "В ожидании подтверждения отмены в ЕИС"})
 
 
-_FETCH_PROCEDURES_JS = r"""
+_DIRECT_RPC_JS = r"""
 const callback = arguments[arguments.length - 1];
-const endpoint = arguments[0];
+const action = arguments[0];
+const method = arguments[1];
+const payload = arguments[2] || {};
 (async () => {
-  let token = '';
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 30000);
   try {
-    const raw = localStorage.getItem('elk_token') || '';
-    token = raw ? JSON.parse(raw) : '';
-  } catch (e) {
-    token = localStorage.getItem('elk_token') || '';
-  }
-  if (!token) {
-    callback({ no_session: true, message: 'Нет активной сессии Росэлторга.' });
-    return;
-  }
-  try {
-    const resp = await fetch(endpoint, {
-      method: 'GET',
+    const token = (window.Main && (window.Main.requestToken || window.Main.token)) || '';
+    if (!token) {
+      callback({ success: false, no_session: true, message: 'Нет активной сессии Росэлторга.' });
+      return;
+    }
+    const body = {
+      action,
+      method,
+      data: [payload],
+      type: 'rpc',
+      tid: payload.__tid || 1,
+      token,
+    };
+    delete body.data[0].__tid;
+    const resp = await fetch(`/index.php?rpctype=direct&module=default&action=${action}.${method}`, {
+      method: 'POST',
       credentials: 'include',
+      signal: ctrl.signal,
       headers: {
-        'Accept': 'application/json, text/plain, */*',
-        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
       },
+      body: JSON.stringify(body),
     });
+    clearTimeout(to);
+    const contentType = (resp.headers.get('content-type') || '').toLowerCase();
     const text = await resp.text();
-    let data = null;
-    try { data = text ? JSON.parse(text) : null; } catch (e) {}
+    const preview = text.slice(0, 200).trim();
+    if (!contentType.includes('application/json') || preview.startsWith('<')) {
+      callback({
+        success: false,
+        no_session: resp.status === 401 || resp.status === 403 || preview.startsWith('<'),
+        status: resp.status,
+        contentType,
+        preview,
+      });
+      return;
+    }
+    const decoded = JSON.parse(text);
+    const event = Array.isArray(decoded) ? decoded[0] : decoded;
+    const result = (event && event.result) || {};
     callback({
+      success: result.success !== false,
+      result,
+      status: resp.status,
+      usedToken: token ? `${token.slice(0, 10)}...` : '',
+    });
+  } catch (e) {
+    clearTimeout(to);
+    callback({ success: false, error: String(e) });
+  }
+})();
+"""
+
+_CURRENT_USER_JS = r"""
+try {
+  const raw = localStorage.getItem('ssw') || '{}';
+  const data = JSON.parse(raw);
+  if (data.role && data.role !== 'user') return null;
+  const user = (window.Main && window.Main.user) || {};
+  const names = [user.lastname || user.surname, user.firstname || user.name, user.patronymic].filter(Boolean);
+  return names.join(' ') || data.login || null;
+} catch (e) {
+  return null;
+}
+"""
+
+_SESSION_ALIVE_JS = r"""
+try {
+  const token = (window.Main && (window.Main.requestToken || window.Main.token)) || '';
+  const raw = localStorage.getItem('ssw') || '{}';
+  const role = JSON.parse(raw).role || '';
+  return Boolean(token && role !== 'guest');
+} catch (e) {
+  return false;
+}
+"""
+
+_CARD_TEXT_JS = r"""
+const callback = arguments[arguments.length - 1];
+(async () => {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let i = 0; i < 60; i++) {
+    const text = String(document.body && document.body.innerText || '');
+    if ((text.includes('Сведения о процедуре') || text.includes('Извещение о проведении')) && text.length > 500) break;
+    await wait(250);
+  }
+  const links = [];
+  const seen = new Set();
+  for (const a of Array.from(document.querySelectorAll('a[href]'))) {
+    const href = a.href || '';
+    const text = String(a.innerText || a.textContent || '').trim();
+    if (!href || seen.has(href)) continue;
+    if (href.includes('/file/get/') || /\.(docx?|xlsx?|xlsm|pdf|zip|rar|7z|rtf|txt|xml)(?:[?#]|$)/i.test(href)) {
+      seen.add(href);
+      links.push({ href, text });
+    }
+  }
+  callback({
+    ok: true,
+    url: location.href,
+    pageText: String(document.body && document.body.innerText || '').trim(),
+    docLinks: links,
+  });
+})();
+"""
+
+_DOWNLOAD_URL_JS = r"""
+const callback = arguments[arguments.length - 1];
+const href = arguments[0];
+(async () => {
+  try {
+    const resp = await fetch(href, { credentials: 'include' });
+    const blob = await resp.blob();
+    const reader = new FileReader();
+    reader.onloadend = () => callback({
       ok: resp.ok,
       status: resp.status,
-      data,
-      text: data ? '' : text.slice(0, 2000),
-      no_session: resp.status === 401 || resp.status === 403,
+      dataUrl: reader.result,
+      contentType: resp.headers.get('content-type') || '',
+      disposition: resp.headers.get('content-disposition') || '',
     });
+    reader.onerror = () => callback({ ok: false, error: 'Не удалось прочитать файл.' });
+    reader.readAsDataURL(blob);
   } catch (e) {
     callback({ ok: false, error: String(e) });
   }
@@ -90,33 +190,39 @@ const endpoint = arguments[0];
 """
 
 
-_CURRENT_USER_JS = r"""
-try {
-  const raw = localStorage.getItem('elk_token') || '';
-  const token = raw ? JSON.parse(raw) : '';
-  const payload = JSON.parse(decodeURIComponent(escape(atob(token.split('.')[1] || ''))));
-  const user = payload.user || {};
-  return [user.surname, user.name, user.patronymic].filter(Boolean).join(' ') || null;
-} catch (e) {
-  return null;
-}
-"""
+def _safe_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _safe_filename(name: str, default: str = "file") -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", _safe_text(name)).strip(" ._")
+    return (cleaned or default)[:180]
+
+
+def _date_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return _safe_text(value.get("date") or value.get("value") or value.get("formatted"))
+    return _safe_text(value)
 
 
 class RoseltorgClient(EtpClient):
-    """Клиент Росэлторг.Бизнес через авторизованную вкладку браузера."""
+    """Клиент секции Росэлторг — Коммерческие закупки (`com.roseltorg.ru`)."""
+
+    platform_key = "roseltorg"
 
     def __init__(self, port: int = 9222) -> None:
         super().__init__(port=port)
         self.target_url = ROSELTORG_URL
-        self.target_host = "business.roseltorg.ru"
+        self.target_host = ROSELTORG_HOST
         self._filters = ClientFilters()
 
     def set_client_filters(self, filters: ClientFilters) -> None:
         self._filters = filters
 
     def _detail_url(self, proc_id: Any) -> str:
-        return f"https://business.roseltorg.ru/lk/orders/all/{proc_id}"
+        return f"https://{ROSELTORG_HOST}/#com/procedure/view/procedure/{proc_id}"
 
     def current_user_login(self) -> Optional[str]:
         if not self.driver:
@@ -127,121 +233,126 @@ class RoseltorgClient(EtpClient):
         except Exception:
             return None
 
-    def pull_token(self) -> str:
-        if not self.driver:
-            return ""
-        try:
-            token = self.driver.execute_script(
-                """
-                try {
-                  const raw = localStorage.getItem('elk_token') || '';
-                  return raw ? JSON.parse(raw) : '';
-                } catch (e) {
-                  return localStorage.getItem('elk_token') || '';
-                }
-                """
-            ) or ""
-        except Exception:
-            token = ""
-        self._token = str(token or "")
-        return self._token
-
     def is_session_alive(self) -> bool:
-        return bool(self.pull_token())
+        if not self.driver:
+            return False
+        try:
+            return bool(self.driver.execute_script(_SESSION_ALIVE_JS))
+        except Exception:
+            return False
 
-    def _api_endpoint(self, start: int, limit: int, query: Optional[str]) -> str:
+    def _status_values(self) -> list[int]:
+        values: list[int] = []
+        for raw in getattr(self._filters, "step_ids", ()) or ():
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            try:
+                values.append(int(text))
+            except ValueError:
+                for value, label in ROSELTORG_STATUS_LABELS.items():
+                    if label.casefold() == text.casefold():
+                        values.append(int(value))
+                        break
+        return values
+
+    def _build_payload(
+        self,
+        start: int,
+        limit: int,
+        query: Optional[str],
+        status: Optional[int] = None,
+    ) -> dict[str, Any]:
         f = self._filters
-        page = max(1, start // max(1, limit) + 1)
-        search_by = f.purchase_form if f.purchase_form in {"procedures", "lots"} else "procedures"
-        order_type = f.trend_pur if f.trend_pur in {"buy", "sale"} else "buy"
-        template_briefs = ("10", "12") if order_type == "sale" else ("8", "9", "11")
-        params: list[tuple[str, Any]] = [
-            ("searchBy", search_by),
-            ("searchByOrderType", order_type),
-            ("page", page),
-            ("limit", limit),
-            ("visibility", "show-all"),
-            ("offset", start),
-            ("sort", json.dumps([{"property": "datePublication", "direction": "DESC"}], ensure_ascii=False)),
-        ]
-        for idx, template in enumerate(template_briefs):
-            params.append((f"templateBrief[{idx}]", template))
-        search_text = query or f.quick_search or f.registry_contains or f.title_contains
-        if search_text:
-            params.append(("query", str(search_text).strip()))
-        if f.organizer_contains:
-            params.append(("organizer", str(f.organizer_contains).strip()))
-        status_param = "procedureStates" if search_by == "procedures" else "states"
-        for idx, state in enumerate(str(item).strip() for item in f.step_ids if str(item).strip()):
-            params.append((f"{status_param}[{idx}]", state))
-        if f.published_from:
-            params.append(("datePublicationFrom", f.published_from.strftime("%Y-%m-%d")))
-        if f.published_to:
-            params.append(("datePublicationTo", f.published_to.strftime("%Y-%m-%d")))
-        if f.end_from:
-            params.append(("dateAcceptanceApplicationsEndFrom", f.end_from.strftime("%Y-%m-%d")))
-        if f.end_to:
-            params.append(("dateAcceptanceApplicationsEndTo", f.end_to.strftime("%Y-%m-%d")))
-        if f.results_from:
-            params.append(("dateSummingUpFrom", f.results_from.strftime("%Y-%m-%d")))
-        if f.results_to:
-            params.append(("dateSummingUpTo", f.results_to.strftime("%Y-%m-%d")))
+        payload: dict[str, Any] = {
+            "start": max(0, int(start or 0)),
+            "limit": max(1, min(int(limit or HARD_SERVER_LIMIT), HARD_SERVER_LIMIT)),
+            "sort": "id",
+            "dir": "DESC",
+        }
+        search_text = _safe_text(
+            query
+            or f.quick_search
+            or f.title_contains
+            or f.organizer_contains
+        )
+        registry = _safe_text(f.registry_contains or f.unique_number_contains)
+        if registry:
+            payload["registry_number"] = registry
+        elif search_text:
+            payload["query"] = search_text
+        if f.organizer_contains and not search_text:
+            payload["full_name"] = _safe_text(f.organizer_contains)
+        if f.trend_pur:
+            try:
+                payload["procedure_type"] = int(str(f.trend_pur).strip())
+            except ValueError:
+                payload["procedure_type"] = str(f.trend_pur).strip()
+        if status is not None:
+            payload["status"] = status
         if f.price_min is not None:
-            params.append(("sumFrom", f.price_min))
+            payload["price_from"] = f.price_min
         if f.price_max is not None:
-            params.append(("sumTo", f.price_max))
-        if f.applics_min is not None:
-            params.append(("appCountFrom", f.applics_min))
-        if f.applics_max is not None:
-            params.append(("appCountTo", f.applics_max))
-        return "/api/v1/procedures?" + urlencode(params)
+            payload["price_to"] = f.price_max
+        if f.published_from:
+            payload["date_published_from"] = f.published_from.strftime("%d.%m.%Y")
+        if f.published_to:
+            payload["date_published_to"] = f.published_to.strftime("%d.%m.%Y")
+        if f.end_from:
+            payload["date_end_registration_from"] = f.end_from.strftime("%d.%m.%Y")
+        if f.end_to:
+            payload["date_end_registration_to"] = f.end_to.strftime("%d.%m.%Y")
+        if f.results_from:
+            payload["date_fulfilled_from"] = f.results_from.strftime("%d.%m.%Y")
+        if f.results_to:
+            payload["date_fulfilled_to"] = f.results_to.strftime("%d.%m.%Y")
+        return payload
+
+    def _call_rpc(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        assert self.driver is not None, "Сначала вызовите connect()"
+        result = self.driver.execute_async_script(_DIRECT_RPC_JS, "Procedure", method, payload)
+        return result if isinstance(result, dict) else {"success": False, "error": "no_response", "raw": result}
 
     def _normalize_item(self, item: dict[str, Any]) -> dict[str, Any]:
-        org = item.get("organization") if isinstance(item.get("organization"), dict) else {}
-        lots = item.get("LotsList") if isinstance(item.get("LotsList"), list) else []
-        regions = item.get("region") if isinstance(item.get("region"), list) else []
-        region_names = [str(r.get("name")) for r in regions if isinstance(r, dict) and r.get("name")]
-        lot_items: list[str] = []
-        for lot in lots:
-            if not isinstance(lot, dict):
-                continue
-            for pos in lot.get("items") or []:
-                if isinstance(pos, dict) and pos.get("name"):
-                    lot_items.append(str(pos["name"]))
-        state = str(item.get("state") or "")
-        status_label = ROSELTORG_STATUS_LABELS.get(state, state)
+        lots = item.get("lots") if isinstance(item.get("lots"), list) else []
+        lot0 = lots[0] if lots and isinstance(lots[0], dict) else {}
+        proc_id = item.get("id") or lot0.get("procedure_id")
+        status_code = str(lot0.get("status") or item.get("stage") or "")
+        status_label = ROSELTORG_STATUS_LABELS.get(status_code, status_code)
+        type_label = _safe_text(item.get("procedure_type_custom_name") or item.get("procedure_type") or lot0.get("procedure_type"))
+        title = _safe_text(item.get("title") or lot0.get("subject"))
+        customers = lot0.get("customers") if isinstance(lot0.get("customers"), list) else []
         return {
             **item,
-            "source": "roseltorg",
-            "registry_number": item.get("number") or "",
-            "procedure_number": item.get("number") or "",
-            "title": item.get("name") or item.get("description") or "",
-            "trend_pur_label": "Закупка",
-            "trend_pur_name": "Закупка",
-            "step_id": state,
+            "source": self.platform_key,
+            "id": proc_id,
+            "procedure_id": proc_id,
+            "lot_id": lot0.get("id") or lot0.get("lot_id"),
+            "registry_number": item.get("registry_number") or item.get("remote_id") or "",
+            "procedure_number": item.get("registry_number") or "",
+            "title": title,
+            "trend_pur": item.get("procedure_type"),
+            "trend_pur_label": type_label,
+            "trend_pur_name": type_label,
+            "step_id": status_code,
             "step_label": status_label,
             "status_label": status_label,
-            "short_name": org.get("shortName") or org.get("fullName") or "",
-            "full_name": org.get("fullName") or org.get("shortName") or "",
-            "org_inn": org.get("inn") or "",
-            "org_kpp": org.get("kpp") or "",
-            "date_published": item.get("createdAt"),
-            "date_start_registration": item.get("createdAt"),
-            "date_end_registration": item.get("replyUntil"),
-            "date_results": item.get("acceptAt"),
-            "total_price": item.get("initialSum"),
-            "currency_name": "RUB" if str(item.get("currency") or "") == "643" else str(item.get("currency") or ""),
-            "lots_count": item.get("countActualLotItems") or len(lots) or 1,
-            "positions_count": sum(len(lot.get("items") or []) for lot in lots if isinstance(lot, dict)),
-            "applics_count": item.get("countActualApplications") or item.get("countSubmittedApplications"),
-            "region_name": ", ".join(region_names),
-            "position_name": ", ".join(lot_items),
-            "url": self._detail_url(item.get("id")),
-            "tags": [
-                "Закупка",
-                status_label,
-                "Открытая процедура" if not item.get("isClosed") else "Закрытая процедура",
-            ],
+            "short_name": item.get("full_name") or "",
+            "full_name": item.get("full_name") or "",
+            "customer_name": ", ".join(_safe_text(x) for x in customers if _safe_text(x)),
+            "date_published": _date_value(item.get("date_published")),
+            "date_start_registration": _date_value(lot0.get("date_start_registration")),
+            "date_end_registration": _date_value(lot0.get("date_end_registration") or item.get("min_date_end_reg")),
+            "date_results": _date_value(lot0.get("date_fulfilled") or lot0.get("date_end_second_parts_review")),
+            "total_price": item.get("total_price") or lot0.get("start_price"),
+            "currency_name": item.get("currency_name") or "RUB",
+            "lots_count": len(lots) or 1,
+            "positions_count": len(lot0.get("units") or lot0.get("positions") or []),
+            "applics_count": lot0.get("applics_count") or item.get("applics_count"),
+            "position_name": _safe_text(lot0.get("subject")),
+            "url": self._detail_url(proc_id),
+            "card_url": self._detail_url(proc_id),
+            "tags": [type_label, status_label],
         }
 
     def fetch_page(
@@ -257,92 +368,128 @@ class RoseltorgClient(EtpClient):
         _recover_attempt: int = 0,
     ) -> dict[str, Any]:
         assert self.driver is not None, "Сначала вызовите connect()"
-        token = self._token or self.pull_token()
-        endpoint = self._api_endpoint(start=start, limit=limit, query=query)
-        request_debug = {
-            "platform": "roseltorg",
-            "method": "GET",
-            "url": endpoint,
-            "headers": {
-                "Accept": "application/json, text/plain, */*",
-                "Authorization": f"Bearer {token}",
-            },
-            "body": None,
-            "token": token,
-            "endpoint": endpoint,
-        }
-        try:
-            result = self.driver.execute_async_script(_FETCH_PROCEDURES_JS, endpoint)
-        except Exception as e:
-            if self._is_window_lost(e) and _recover_attempt < 2:
-                if self._recover_tab():
-                    self._token = ""
-                    self.pull_token()
-                    return self.fetch_page(
-                        start=start,
-                        limit=limit,
-                        date_from=date_from,
-                        date_to=date_to,
-                        query=query,
-                        tag_id=tag_id,
-                        sort=sort,
-                        direction=direction,
-                        _recover_attempt=_recover_attempt + 1,
-                    )
-            return {
-                "success": False,
-                "error": str(e),
-                "procedures": [],
-                "totalCount": None,
-                "_debug": {
-                    **request_debug,
-                    "selenium_error": str(e),
-                },
-            }
-        if not isinstance(result, dict):
-            return {
-                "success": False,
-                "error": "no_response",
-                "procedures": [],
-                "totalCount": None,
-                "_debug": {
-                    **request_debug,
-                    "raw_response": result,
-                },
-            }
-        if result.get("no_session"):
-            return {
-                "success": False,
-                "no_session": True,
-                "message": "Нет активной сессии Росэлторга.",
-                "procedures": [],
-                "totalCount": None,
-                "_debug": {
-                    **request_debug,
-                    "raw_response": result,
-                },
-            }
-        if not result.get("ok"):
-            return {
-                "success": False,
-                "error": result.get("error") or result.get("text") or f"HTTP {result.get('status')}",
-                "procedures": [],
-                "totalCount": None,
-                "_debug": {
-                    **request_debug,
-                    "raw_response": result,
-                },
-            }
-        data = result.get("data") or {}
-        items = data.get("items") if isinstance(data, dict) else []
-        if not isinstance(items, list):
-            items = []
+        statuses = self._status_values()
+        selected_statuses: list[Optional[int]] = statuses or [None]
+        rows: list[dict[str, Any]] = []
+        total = 0
+        debug_calls: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for status in selected_statuses:
+            payload = self._build_payload(start=start if len(selected_statuses) == 1 else 0, limit=limit, query=query, status=status)
+            debug_calls.append(payload)
+            try:
+                result = self._call_rpc("list", payload)
+            except Exception as e:
+                if self._is_window_lost(e) and _recover_attempt < 2 and self._recover_tab():
+                    return self.fetch_page(start, limit, date_from, date_to, query, tag_id, sort, direction, _recover_attempt + 1)
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "procedures": [],
+                    "totalCount": None,
+                    "_debug": {"platform": self.platform_key, "body": payload, "selenium_error": str(e)},
+                }
+            if not result.get("success"):
+                return {
+                    "success": False,
+                    "no_session": bool(result.get("no_session")),
+                    "message": result.get("message") or "Нет активной сессии Росэлторга. Авторизуйтесь на com.roseltorg.ru.",
+                    "error": result.get("error") or result.get("preview"),
+                    "procedures": [],
+                    "totalCount": None,
+                    "_debug": {"platform": self.platform_key, "body": payload, "raw_response": result},
+                }
+            data = result.get("result") or {}
+            items = data.get("procedures") if isinstance(data, dict) else []
+            if not isinstance(items, list):
+                items = []
+            total += int(data.get("totalCount") or len(items)) if isinstance(data, dict) else len(items)
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                norm = self._normalize_item(item)
+                key = str(norm.get("id") or norm.get("registry_number") or len(rows))
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(norm)
         return {
             "success": True,
-            "procedures": [self._normalize_item(item) for item in items if isinstance(item, dict)],
-            "totalCount": int(data.get("totalCount") or len(items)) if isinstance(data, dict) else len(items),
-            "_debug": {
-                **request_debug,
-                "raw_response": result,
-            },
+            "procedures": rows,
+            "totalCount": total,
+            "_debug": {"platform": self.platform_key, "method": "Procedure.list", "body": debug_calls},
         }
+
+    def extract_procedure_card_text(
+        self,
+        proc: dict[str, Any],
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        assert self.driver is not None, "Сначала вызовите connect()"
+        proc_id = proc.get("id") or proc.get("procedure_id")
+        if not proc_id:
+            raise RuntimeError("У процедуры нет id для открытия карточки Росэлторга.")
+        url = _safe_text(proc.get("card_url") or proc.get("url")) or self._detail_url(proc_id)
+        if progress:
+            progress(f"Открываю карточку Росэлторг {proc.get('registry_number') or proc_id}: {url}")
+        self.driver.get(url)
+        time.sleep(1.5)
+        result = self.driver.execute_async_script(_CARD_TEXT_JS)
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError("Не удалось прочитать карточку Росэлторга.")
+        return {
+            "page_text": result.get("pageText") or "",
+            "doc_links": result.get("docLinks") or [],
+            "url": result.get("url") or url,
+        }
+
+    def _filename_from_link(self, link: dict[str, Any], index: int) -> str:
+        href = _safe_text(link.get("href"))
+        text = _safe_text(link.get("text"))
+        tail = unquote(href.rstrip("/").split("/")[-1]) if href else ""
+        name = tail if "." in tail else text
+        return _safe_filename(name, f"document_{index}")
+
+    def download_document_link(self, link: dict[str, Any], output_dir: Path, index: int = 1) -> Path:
+        assert self.driver is not None, "Сначала вызовите connect()"
+        href = _safe_text(link.get("href"))
+        if not href:
+            raise RuntimeError("У документа нет ссылки.")
+        href = urljoin(f"https://{ROSELTORG_HOST}/", href)
+        result = self.driver.execute_async_script(_DOWNLOAD_URL_JS, href)
+        if not isinstance(result, dict) or not result.get("ok"):
+            raise RuntimeError(result.get("error") if isinstance(result, dict) else "Не удалось скачать документ.")
+        data_url = str(result.get("dataUrl") or "")
+        if "," not in data_url:
+            raise RuntimeError("Браузер не вернул содержимое документа.")
+        raw = base64.b64decode(data_url.split(",", 1)[1])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        target = output_dir / self._filename_from_link(link, index)
+        if not target.suffix:
+            target = target.with_suffix(".bin")
+        target.write_bytes(raw)
+        return target
+
+    def download_procedure_documents(
+        self,
+        proc: dict[str, Any],
+        output_root: Path,
+        progress: Optional[Callable[[str], None]] = None,
+    ) -> dict[str, Any]:
+        registry = _safe_text(proc.get("registry_number") or proc.get("id") or "procedure")
+        title = _safe_text(proc.get("title"))
+        folder = output_root / _safe_filename(f"{registry}_{title[:80]}", registry)
+        card = self.extract_procedure_card_text(proc, progress=progress)
+        links = [link for link in card.get("doc_links") or [] if isinstance(link, dict)]
+        if not links:
+            return {"success": False, "downloaded": [], "errors": ["Документы в карточке не найдены."], "folder": str(folder)}
+        saved: list[str] = []
+        errors: list[str] = []
+        for index, link in enumerate(links, start=1):
+            try:
+                if progress:
+                    progress(f"Скачиваю документ {index}/{len(links)}")
+                saved.append(str(self.download_document_link(link, folder, index=index)))
+            except Exception as exc:
+                errors.append(f"{link.get('text') or link.get('href') or index}: {exc}")
+        return {"success": bool(saved), "downloaded": saved, "errors": errors, "folder": str(folder)}

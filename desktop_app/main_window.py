@@ -918,7 +918,7 @@ class MainWindow(QMainWindow):
 
     def _platform_title(self) -> str:
         if self._platform_key == "roseltorg":
-            return "Росэлторг"
+            return "Росэлторг — Коммерческие закупки"
         if self._platform_key == "roseltorg_44":
             return "Росэлторг 44-ФЗ"
         if self._platform_key == "roseltorg_223":
@@ -1030,12 +1030,12 @@ class MainWindow(QMainWindow):
                 ROSELTORG_SEARCH_BY_OPTIONS,
                 platform_key="roseltorg",
             )
-            self.title_label.setText("Росэлторг — Актуальные процедуры")
-            self.subtitle_label.setText("Поиск, фильтры и ключевые слова")
+            self.title_label.setText("Росэлторг — Коммерческие закупки")
+            self.subtitle_label.setText("Поиск, фильтры, карточки и документы")
             self.lbl_counter.setText("Данных нет. Нажмите «Поиск». Если сессии нет, войдите через ЭЦП.")
             self.user_label.setText("Пользователь: —")
-            self._set_badge("idle", "○  Росэлторг")
-            self.status_msg.setText("Готов. Нажмите «Поиск» и войдите через ЭЦП при необходимости.")
+            self._set_badge("idle", "○  Росэлторг Коммерческие закупки")
+            self.status_msg.setText("Готов. Нажмите «Поиск» и авторизуйтесь на com.roseltorg.ru при необходимости.")
         elif self._platform_key == "roseltorg_44":
             self.sidebar.set_platform_filter_options(
                 ROSELTORG_44_PROCEDURE_TYPE_OPTIONS,
